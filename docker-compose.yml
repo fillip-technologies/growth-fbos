@@ -1,0 +1,199 @@
+services:
+
+  # ---------------------------------------------------------------------------
+  # Infrastructure
+  # ---------------------------------------------------------------------------
+  db:
+    image: mysql:8.0
+    restart: always
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD}
+      MYSQL_DATABASE: ${MYSQL_DATABASE}
+      MYSQL_USER: ${MYSQL_USER}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD}
+    ports:
+      - "3306:3306"
+    volumes:
+      - db_data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "root", "-p${MYSQL_ROOT_PASSWORD}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ---------------------------------------------------------------------------
+  # 01 — Identity Service  →  http://localhost:8000
+  # ---------------------------------------------------------------------------
+  identity:
+    build:
+      context: ./src/v1/01_identity
+    ports:
+      - "8000:8000"
+    env_file: ./src/v1/01_identity/.env
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: on-failure
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+  # ---------------------------------------------------------------------------
+  # 02 — Commercial Service  →  http://localhost:8001
+  # ---------------------------------------------------------------------------
+  commercial:
+    build:
+      context: ./src/v1/02_commercial
+    ports:
+      - "8001:8000"
+    env_file: ./src/v1/02_commercial/.env
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: on-failure
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+  # ---------------------------------------------------------------------------
+  # 03 — Billing Service  →  http://localhost:8002
+  # ---------------------------------------------------------------------------
+  billing:
+    build:
+      context: ./src/v1/03_billing
+    ports:
+      - "8002:8000"
+    env_file: ./src/v1/03_billing/.env
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: on-failure
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+  # ---------------------------------------------------------------------------
+  # 04 — Work Service  →  http://localhost:8003
+  # ---------------------------------------------------------------------------
+  work:
+    build:
+      context: ./src/v1/04_work
+    ports:
+      - "8003:8000"
+    env_file: ./src/v1/04_work/.env
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: on-failure
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+  # ---------------------------------------------------------------------------
+  # 05 — Workflow Service  →  http://localhost:8004
+  # ---------------------------------------------------------------------------
+  workflow:
+    build:
+      context: ./src/v1/05_workflow
+    ports:
+      - "8004:8000"
+    env_file: ./src/v1/05_workflow/.env
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: on-failure
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+  # ---------------------------------------------------------------------------
+  # 06 — Task Service  →  http://localhost:8005
+  # ---------------------------------------------------------------------------
+  task:
+    build:
+      context: ./src/v1/06_task
+    ports:
+      - "8005:8000"
+    env_file: ./src/v1/06_task/.env
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: on-failure
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+  # ---------------------------------------------------------------------------
+  # 07 — Approval Service  →  http://localhost:8006
+  # ---------------------------------------------------------------------------
+  approval:
+    build:
+      context: ./src/v1/07_approval
+    ports:
+      - "8006:8000"
+    env_file: ./src/v1/07_approval/.env
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: on-failure
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+  # ---------------------------------------------------------------------------
+  # 08 — Document / Notification / Audit Service  →  http://localhost:8007
+  # ---------------------------------------------------------------------------
+  doc-notify-audit:
+    build:
+      context: ./src/v1/08_doc_notify_audit
+    ports:
+      - "8007:8000"
+    env_file: ./src/v1/08_doc_notify_audit/.env
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: on-failure
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+  # ---------------------------------------------------------------------------
+  # 09 — Resource / Planning / Performance Service  →  http://localhost:8008
+  # ---------------------------------------------------------------------------
+  res-plan-perf:
+    build:
+      context: ./src/v1/09_res_plan_perf
+    ports:
+      - "8008:8000"
+    env_file: ./src/v1/09_res_plan_perf/.env
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: on-failure
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+# ---------------------------------------------------------------------------
+# Volumes
+# ---------------------------------------------------------------------------
+volumes:
+  db_data:
