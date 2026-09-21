@@ -66,6 +66,9 @@ Before analyzing, writing, modifying, or reviewing any code in this repository, 
 
   # Resource, Planning & Performance service (port 8008)
   uvicorn main:app --app-dir src/v1/09_res_plan_perf --reload --host 0.0.0.0 --port 8008
+
+  # Asset, Analytics & Platform service (port 8009)
+  uvicorn main:app --app-dir src/v1/10_asset_analytic --reload --host 0.0.0.0 --port 8009
   ```
 - **Run Tests** (per service — tests must be run from within the service directory):
   ```bash
@@ -100,9 +103,11 @@ src/v1/
 ├── 06_task/              # Task & effort service (port 8005, same structure)
 ├── 07_approval/          # Approval & delegation service (port 8006, same structure)
 ├── 08_doc_notify_audit/  # Document, notification & audit service (port 8007, same structure)
-└── 09_res_plan_perf/     # Resource, planning & performance service (port 8008, same structure)
+├── 09_res_plan_perf/     # Resource, planning & performance service (port 8008, same structure)
+└── 10_asset_analytic/    # Asset, analytics & platform service (port 8009, same structure)
 ```
 
 - `.agents/` — Core architecture, Python, and REST guidelines
+
 
 
