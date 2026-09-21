@@ -31,29 +31,48 @@ Before analyzing, writing, modifying, or reviewing any code in this repository, 
 
 - **Environment Setup**:
   ```bash
-  source .venv/bin/activate
+  python -m venv .venv
+  source .venv/bin/activate  # Windows: .venv\Scripts\activate
   ```
-- **Install Dependencies**:
+- **Install Dependencies** (per service):
   ```bash
-  pip install -r requirements.txt
+  pip install -r src/v1/01_identity/requirements.txt
   ```
-- **Run Local Server**:
+- **Run a Service**:
   ```bash
-  uvicorn src.main:app --reload --host 0.0.0.0 --port 8000
+  # Identity service (port 8000)
+  uvicorn main:app --app-dir src/v1/01_identity --reload --host 0.0.0.0 --port 8000
+
+  # Commercial service (port 8001)
+  uvicorn main:app --app-dir src/v1/02_commercial --reload --host 0.0.0.0 --port 8001
   ```
-- **Run Tests**:
+- **Run Tests** (per service — tests must be run from within the service directory):
   ```bash
-  pytest
+  cd src/v1/01_identity && pytest
   ```
 
 ---
 
 ## 📂 Project Architecture
 
-- `src/` — Main application package
-  - `src/api/` — API routes and routers
-  - `src/core/` — Application configuration and settings
-  - `src/models/` — Schemas (Pydantic) and data models
-  - `src/services/` — Business logic layers
-  - `src/main.py` — FastAPI initialization
+Each service under `src/v1/` is independently runnable. All imports within a service are
+top-level (non-relative) because `--app-dir` adds the service root to `sys.path`.
+
+```
+src/v1/
+├── 01_identity/          # Identity & authentication service
+│   ├── main.py           # FastAPI app entrypoint
+│   ├── config.py         # Pydantic settings (reads .env)
+│   ├── router.py         # Aggregates all route modules
+│   ├── dependencies.py   # FastAPI injectable dependencies
+│   ├── exceptions.py     # Service-specific HTTP exceptions
+│   ├── models/           # Domain models (dataclasses / ORM)
+│   ├── schemas/          # Pydantic request & response schemas
+│   ├── services/         # Business logic layer
+│   ├── routes/           # Route handlers
+│   ├── utils/            # Utility functions (hashing, tokens, etc.)
+│   └── requirements.txt  # Service-specific dependencies
+└── 02_commercial/        # Commercial service (same structure)
+```
+
 - `.agents/` — Core architecture, Python, and REST guidelines
