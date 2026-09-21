@@ -192,8 +192,28 @@ services:
       timeout: 5s
       retries: 3
 
+  # ---------------------------------------------------------------------------
+  # 10 — Asset / Analytics / Platform Service  →  http://localhost:8009
+  # ---------------------------------------------------------------------------
+  asset-analytic:
+    build:
+      context: ./src/v1/10_asset_analytic
+    ports:
+      - "8009:8000"
+    env_file: ./src/v1/10_asset_analytic/.env
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: on-failure
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
 # ---------------------------------------------------------------------------
 # Volumes
 # ---------------------------------------------------------------------------
 volumes:
   db_data:
+
