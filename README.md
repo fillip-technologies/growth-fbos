@@ -33,7 +33,8 @@ source .venv/bin/activate  # On Windows: .venv\Scripts\activate
 ### 2. Install dependencies
 
 ```bash
-pip install -r requirements.txt
+# Install dependencies for a specific service (e.g., Identity)
+pip install -r src/v1/01_identity/requirements.txt
 ```
 
 ### 3. Environment configuration
