@@ -54,6 +54,9 @@ Before analyzing, writing, modifying, or reviewing any code in this repository, 
 
   # Workflow service (port 8004)
   uvicorn main:app --app-dir src/v1/05_workflow --reload --host 0.0.0.0 --port 8004
+
+  # Task service (port 8005)
+  uvicorn main:app --app-dir src/v1/06_task --reload --host 0.0.0.0 --port 8005
   ```
 - **Run Tests** (per service — tests must be run from within the service directory):
   ```bash
@@ -84,7 +87,8 @@ src/v1/
 ├── 02_commercial/        # Commercial service (port 8001, same structure)
 ├── 03_billing/           # Billing & invoicing service (port 8002, same structure)
 ├── 04_work/              # Work & delivery service (port 8003, same structure)
-└── 05_workflow/          # Workflow & automation service (port 8004, same structure)
+├── 05_workflow/          # Workflow & automation service (port 8004, same structure)
+└── 06_task/              # Task & effort service (port 8005, same structure)
 ```
 
 - `.agents/` — Core architecture, Python, and REST guidelines
