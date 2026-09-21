@@ -57,6 +57,15 @@ Before analyzing, writing, modifying, or reviewing any code in this repository, 
 
   # Task service (port 8005)
   uvicorn main:app --app-dir src/v1/06_task --reload --host 0.0.0.0 --port 8005
+
+  # Approval service (port 8006)
+  uvicorn main:app --app-dir src/v1/07_approval --reload --host 0.0.0.0 --port 8006
+
+  # Document, Notification & Audit service (port 8007)
+  uvicorn main:app --app-dir src/v1/08_doc_notify_audit --reload --host 0.0.0.0 --port 8007
+
+  # Resource, Planning & Performance service (port 8008)
+  uvicorn main:app --app-dir src/v1/09_res_plan_perf --reload --host 0.0.0.0 --port 8008
   ```
 - **Run Tests** (per service — tests must be run from within the service directory):
   ```bash
@@ -88,7 +97,12 @@ src/v1/
 ├── 03_billing/           # Billing & invoicing service (port 8002, same structure)
 ├── 04_work/              # Work & delivery service (port 8003, same structure)
 ├── 05_workflow/          # Workflow & automation service (port 8004, same structure)
-└── 06_task/              # Task & effort service (port 8005, same structure)
+├── 06_task/              # Task & effort service (port 8005, same structure)
+├── 07_approval/          # Approval & delegation service (port 8006, same structure)
+├── 08_doc_notify_audit/  # Document, notification & audit service (port 8007, same structure)
+└── 09_res_plan_perf/     # Resource, planning & performance service (port 8008, same structure)
 ```
 
 - `.agents/` — Core architecture, Python, and REST guidelines
+
+
