@@ -38,7 +38,12 @@ def _run_migrations_on_connection(connection) -> None:
 
 
 async def run_migrations_online() -> None:
-    engine = create_async_engine(_get_database_url())
+    from config import settings
+    from database.session import _build_connect_args
+    engine = create_async_engine(
+        settings.database_url,
+        connect_args=_build_connect_args(),
+    )
     async with engine.connect() as connection:
         await connection.run_sync(_run_migrations_on_connection)
     await engine.dispose()

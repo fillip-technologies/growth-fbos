@@ -1,8 +1,20 @@
+import ssl
 from collections.abc import AsyncGenerator
 
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker, create_async_engine
 
 from config import settings
+
+
+def _build_connect_args() -> dict:
+    if not settings.db_ssl:
+        return {}
+    # ssl-mode=REQUIRED: encrypt the connection but skip CA verification
+    # (cloud providers often don't supply a CA cert)
+    ssl_ctx = ssl.create_default_context()
+    ssl_ctx.check_hostname = False
+    ssl_ctx.verify_mode = ssl.CERT_NONE
+    return {"ssl": ssl_ctx}
 
 
 def _build_engine() -> AsyncEngine:
@@ -14,6 +26,7 @@ def _build_engine() -> AsyncEngine:
         pool_pre_ping=True,       # drops stale connections before checkout
         pool_recycle=settings.db_pool_recycle,
         echo=settings.debug,
+        connect_args=_build_connect_args(),
     )
 
 

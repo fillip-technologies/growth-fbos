@@ -14,10 +14,11 @@ class Settings(BaseSettings):
     access_token_expire_minutes: int = 60
 
     database_url: str = ""
+    db_ssl: bool = False
     db_pool_size: int = 10
     db_max_overflow: int = 20
     db_pool_timeout: int = 30
-    db_pool_recycle: int = 3600
+    db_pool_recycle: int = 1800
 
 
 settings = Settings()
