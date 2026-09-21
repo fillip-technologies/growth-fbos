@@ -1,2 +1,3 @@
-# Define FastAPI injectable dependencies here.
-# Common patterns: auth token validation, database sessions, service instances.
+from database.session import get_db_session
+
+__all__ = ["get_db_session"]
