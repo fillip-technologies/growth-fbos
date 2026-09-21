@@ -1,5 +1,10 @@
+from collections.abc import AsyncGenerator
+
 from fastapi import Depends, HTTPException, status
 from fastapi.security import OAuth2PasswordBearer
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from database.session import get_db_session
 from schemas.token import TokenPayload
 
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/v1/auth/login")
