@@ -7,6 +7,7 @@ from models.auth import UserCredential, RefreshToken, ApiClient
 from models.membership import UnitMembership
 from models.rbac import Permission, Role, RolePermission, RoleAssignment
 from models.legal import LegalEntity, TaxRegistration
+from models.audit import SecurityAuditLog
 
 __all__ = [
     "Organization",
@@ -29,4 +30,5 @@ __all__ = [
     "RoleAssignment",
     "LegalEntity",
     "TaxRegistration",
+    "SecurityAuditLog",
 ]
