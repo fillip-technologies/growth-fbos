@@ -8,7 +8,6 @@ from schemas.auth import (
 )
 from schemas.common import PageInfo, PaginatedResponse
 from schemas.error import ErrorBody, ErrorDetail, ErrorResponse
-from schemas.token import Token, TokenPayload
 from schemas.org_unit import (
     HeadUserRef,
     OrgUnitCreate,
@@ -30,6 +29,7 @@ from schemas.rbac import (
     UserRef,
     VerticalRef,
 )
+from schemas.token import Token, TokenPayload
 from schemas.user import (
     HomeUnitRef,
     ManagerRef,
@@ -77,5 +77,3 @@ __all__ = [
     "GrantItem",
     "GrantsResponse",
 ]
-
-

@@ -28,4 +28,3 @@ class TokenPayload(BaseModel):
     @property
     def organization_id(self) -> uuid.UUID:
         return uuid.UUID(self.org_id) if self.org_id else uuid.UUID("00000000-0000-0000-0000-000000000000")
-

@@ -33,7 +33,6 @@ class IdentityServiceError(HTTPException):
         )
 
 
-
 class InvalidCredentialsError(IdentityServiceError):
     """401: Unknown email or wrong password (deliberately indistinguishable)."""
 
@@ -103,11 +102,11 @@ class MfaTokenExpiredError(IdentityServiceError):
 class RefreshTokenInvalidError(IdentityServiceError):
     """401: Refresh token missing, expired (30 days) or revoked."""
 
-    def __init__(self) -> None:
+    def __init__(self, message: str = "Refresh token missing, expired or revoked") -> None:
         super().__init__(
             status_code=status.HTTP_401_UNAUTHORIZED,
             code="REFRESH_TOKEN_INVALID",
-            message="Refresh token missing, expired or revoked",
+            message=message,
         )
 
 
@@ -364,8 +363,3 @@ class ClientCredentialsInvalidError(IdentityServiceError):
             code="CLIENT_CREDENTIALS_INVALID",
             message=message,
         )
-
-
-
-
-

@@ -36,7 +36,6 @@ from utils.security import (
 router = APIRouter()
 
 
-
 @router.post(
     "/login",
     response_model=LoginResponse,

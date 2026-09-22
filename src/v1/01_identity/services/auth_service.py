@@ -6,7 +6,6 @@ import uuid
 from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
-
 import secrets
 import jwt
 import pyotp
@@ -64,7 +63,6 @@ from utils.security import (
     verify_password,
     verify_totp_code,
 )
-
 
 logger = logging.getLogger("identity.auth")
 
