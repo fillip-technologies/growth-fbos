@@ -1,5 +1,6 @@
 import uuid
 from datetime import datetime
+from typing import Optional
 
 from sqlalchemy import DateTime, String, func
 from sqlalchemy.orm import Mapped, mapped_column
@@ -13,6 +14,7 @@ class Organization(Base):
 
     id: Mapped[uuid.UUID] = mapped_column(UUIDType, primary_key=True, default=uuid.uuid4)
     name: Mapped[str] = mapped_column(String(255), nullable=False)
+    code: Mapped[Optional[str]] = mapped_column(String(100), unique=True, nullable=True, index=True)
     base_currency: Mapped[str] = mapped_column(String(10), nullable=False)
     fiscal_year_start: Mapped[str] = mapped_column(String(5), nullable=False)  # e.g. "01-01"
     timezone: Mapped[str] = mapped_column(String(100), nullable=False)

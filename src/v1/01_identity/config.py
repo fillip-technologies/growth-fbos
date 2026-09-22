@@ -9,10 +9,27 @@ class Settings(BaseSettings):
     port: int = 8000
     debug: bool = False
 
+    # JWT Authentication
     jwt_secret: str = "changeme"
     jwt_algorithm: str = "HS256"
     access_token_expire_minutes: int = 60
+    refresh_token_expire_days: int = 30
+    mfa_token_expire_minutes: int = 5  # short-lived 5-minute MFA token
 
+    # Password Hashing (Argon2id)
+    argon2_time_cost: int = 2
+    argon2_memory_cost: int = 19456  # 19 MiB
+    argon2_parallelism: int = 1
+
+    # Security & Lockout Policy
+    lockout_threshold: int = 5  # 5 failed attempts
+    lockout_window_minutes: int = 15  # within 15 minutes
+    lockout_duration_minutes: int = 15  # locks account for 15 minutes
+
+    # Rate Limiting
+    auth_rate_limit_per_minute: int = 60
+
+    # Database
     database_url: str = ""
     db_ssl: bool = False
     db_pool_size: int = 10
