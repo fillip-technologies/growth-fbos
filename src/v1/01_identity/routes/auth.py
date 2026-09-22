@@ -7,10 +7,19 @@ from database.session import get_db_session
 from dependencies import get_client_ip, get_current_user, get_user_agent
 from exceptions import CsrfTokenInvalidError
 from schemas.auth import (
+    ApiClientTokenRequest,
+    ClientTokenResponse,
+    InvitationAcceptRequest,
+    JwksResponse,
     LoginRequest,
     LoginResponse,
     Me,
+    MfaEnrollConfirmRequest,
+    MfaEnrollmentResponse,
     MfaVerifyRequest,
+    PasswordForgotRequest,
+    PasswordResetRequest,
+    RecoveryCodesResponse,
     RefreshRequest,
     TokenResponse,
 )
@@ -25,6 +34,7 @@ from utils.security import (
 )
 
 router = APIRouter()
+
 
 
 @router.post(
@@ -184,3 +194,110 @@ async def get_me(
         current_user=current_user,
         client_ip=client_ip,
     )
+
+
+# Alias /refresh to /token/refresh for full spec compatibility
+@router.post(
+    "/refresh",
+    response_model=TokenResponse,
+    status_code=status.HTTP_200_OK,
+    summary="Rotate refresh token and get a new access token",
+)
+async def refresh_token_alias(
+    request: Request,
+    response: Response,
+    request_body: Optional[RefreshRequest] = None,
+    x_csrf_token: Optional[str] = Header(None, alias="X-CSRF-Token"),
+    session: AsyncSession = Depends(get_db_session),
+) -> TokenResponse:
+    return await refresh_token(request, response, request_body, x_csrf_token, session)
+
+
+@router.post(
+    "/password/forgot",
+    status_code=status.HTTP_202_ACCEPTED,
+    summary="Request a password reset email",
+)
+async def forgot_password(
+    request_data: PasswordForgotRequest,
+    session: AsyncSession = Depends(get_db_session),
+) -> Response:
+    await auth_service.forgot_password(session, request_data)
+    return Response(status_code=status.HTTP_202_ACCEPTED)
+
+
+@router.post(
+    "/password/reset",
+    status_code=status.HTTP_204_NO_CONTENT,
+    summary="Set a new password with a reset token",
+)
+async def reset_password(
+    request_data: PasswordResetRequest,
+    session: AsyncSession = Depends(get_db_session),
+) -> Response:
+    await auth_service.reset_password(session, request_data)
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+@router.post(
+    "/invitations/accept",
+    status_code=status.HTTP_204_NO_CONTENT,
+    summary="Accept an invitation and set a password",
+)
+async def accept_invitation(
+    request_data: InvitationAcceptRequest,
+    session: AsyncSession = Depends(get_db_session),
+) -> Response:
+    await auth_service.accept_invitation(session, request_data)
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+@router.post(
+    "/mfa/enroll",
+    response_model=MfaEnrollmentResponse,
+    status_code=status.HTTP_200_OK,
+    summary="Start TOTP enrollment",
+)
+async def start_mfa_enrollment(
+    current_user: TokenPayload = Depends(get_current_user),
+    session: AsyncSession = Depends(get_db_session),
+) -> MfaEnrollmentResponse:
+    return await auth_service.start_mfa_enrollment(session, current_user.user_id)
+
+
+@router.post(
+    "/mfa/enroll/confirm",
+    response_model=RecoveryCodesResponse,
+    status_code=status.HTTP_200_OK,
+    summary="Confirm TOTP enrollment",
+)
+async def confirm_mfa_enrollment(
+    request_data: MfaEnrollConfirmRequest,
+    current_user: TokenPayload = Depends(get_current_user),
+    session: AsyncSession = Depends(get_db_session),
+) -> RecoveryCodesResponse:
+    return await auth_service.confirm_mfa_enrollment(session, current_user.user_id, request_data.code)
+
+
+@router.post(
+    "/oauth/token",
+    response_model=ClientTokenResponse,
+    status_code=status.HTTP_200_OK,
+    summary="Get an access token for an integration (client credentials)",
+)
+async def oauth_token(
+    request_data: ApiClientTokenRequest,
+    session: AsyncSession = Depends(get_db_session),
+) -> ClientTokenResponse:
+    return await auth_service.oauth_token(session, request_data)
+
+
+@router.get(
+    "/.well-known/jwks.json",
+    response_model=JwksResponse,
+    status_code=status.HTTP_200_OK,
+    summary="Public keys for verifying access tokens",
+)
+async def get_jwks() -> JwksResponse:
+    return auth_service.get_jwks()
+

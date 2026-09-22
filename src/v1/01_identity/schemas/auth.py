@@ -74,3 +74,80 @@ class Me(BaseModel):
     roles: list[str]
     permissions: list[str]
     last_login_at: Optional[str] = None
+
+
+class PasswordForgotRequest(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
+    email: EmailStr
+    organization_code: Optional[str] = None
+
+
+class PasswordResetRequest(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
+    token: str
+    new_password: str
+
+
+class InvitationAcceptRequest(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
+    token: str
+    password: str
+
+
+class MfaEnrollmentResponse(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
+    otpauth_uri: str
+    qr_png_data_url: str
+    expires_at: str
+
+
+class MfaEnrollConfirmRequest(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
+    code: str
+
+
+class RecoveryCodesResponse(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
+    codes: list[str]
+
+
+class ApiClientTokenRequest(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
+    grant_type: str = "client_credentials"
+    client_id: str
+    client_secret: str
+    scope: Optional[str] = None
+
+
+class ClientTokenResponse(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
+    access_token: str
+    token_type: str = "Bearer"
+    expires_in: int = 900
+    scope: Optional[str] = None
+
+
+class JwkKey(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
+    kty: str = "RSA"
+    kid: str
+    use: str = "sig"
+    alg: str = "RS256"
+    n: str
+    e: str
+
+
+class JwksResponse(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
+    keys: list[JwkKey]
+

@@ -18,9 +18,14 @@ class UserCredential(Base):
     password_hash: Mapped[str] = mapped_column(String(255), nullable=False)
     otp_secret_enc: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     otp_enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    recovery_codes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     failed_attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     locked_until: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
     password_changed_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    reset_token: Mapped[Optional[str]] = mapped_column(String(255), nullable=True, index=True)
+    reset_token_expires_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    invitation_token: Mapped[Optional[str]] = mapped_column(String(255), nullable=True, index=True)
+    invitation_token_expires_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
 
 
 class RefreshToken(Base):
@@ -44,7 +49,10 @@ class ApiClient(Base):
     organization_id: Mapped[uuid.UUID] = mapped_column(
         UUIDType, ForeignKey("organizations.id", ondelete="CASCADE"), nullable=False, index=True
     )
+    client_id: Mapped[str] = mapped_column(String(100), unique=True, index=True, default=lambda: f"cli_{uuid.uuid4().hex[:12]}")
+    client_secret_hash: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     allowed_owner_hash: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     allowed_scopes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)  # space-separated
     status: Mapped[str] = mapped_column(String(50), nullable=False, default="active")
+

@@ -1,8 +1,16 @@
+import os
+from pathlib import Path
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+_CURRENT_DIR = Path(__file__).resolve().parent
 
 class Settings(BaseSettings):
-    model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
+    model_config = SettingsConfigDict(
+        env_file=(_CURRENT_DIR / ".env", ".env"),
+        env_file_encoding="utf-8",
+        extra="ignore",
+    )
+
 
     app_env: str = "development"
     host: str = "0.0.0.0"
