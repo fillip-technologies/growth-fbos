@@ -12,9 +12,10 @@ services:
       MYSQL_USER: ${MYSQL_USER}
       MYSQL_PASSWORD: ${MYSQL_PASSWORD}
     ports:
-      - "3306:3306"
+      - "3307:3306"
     volumes:
       - db_data:/var/lib/mysql
+      - ./docker/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
     healthcheck:
       test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "root", "-p${MYSQL_ROOT_PASSWORD}"]
       interval: 10s
@@ -41,14 +42,14 @@ services:
       retries: 3
 
   # ---------------------------------------------------------------------------
-  # 02 — Commercial Service  →  http://localhost:8001
+  # 02 — Revenue Service  →  http://localhost:8001
   # ---------------------------------------------------------------------------
-  commercial:
+  revenue:
     build:
-      context: ./src/v1/02_commercial
+      context: ./src/v1/02_revenue
     ports:
       - "8001:8000"
-    env_file: ./src/v1/02_commercial/.env
+    env_file: ./src/v1/02_revenue/.env
     depends_on:
       db:
         condition: service_healthy
@@ -58,6 +59,7 @@ services:
       interval: 30s
       timeout: 5s
       retries: 3
+
 
   # ---------------------------------------------------------------------------
   # 03 — Billing Service  →  http://localhost:8002
@@ -192,8 +194,28 @@ services:
       timeout: 5s
       retries: 3
 
+  # ---------------------------------------------------------------------------
+  # 10 — Asset / Analytics / Platform Service  →  http://localhost:8009
+  # ---------------------------------------------------------------------------
+  asset-analytic:
+    build:
+      context: ./src/v1/10_asset_analytic
+    ports:
+      - "8009:8000"
+    env_file: ./src/v1/10_asset_analytic/.env
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: on-failure
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
 # ---------------------------------------------------------------------------
 # Volumes
 # ---------------------------------------------------------------------------
 volumes:
   db_data:
+
