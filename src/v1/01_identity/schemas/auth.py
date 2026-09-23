@@ -4,6 +4,54 @@ import uuid
 
 from pydantic import BaseModel, ConfigDict, EmailStr, field_validator
 
+from schemas.user import HomeUnitRef
+
+
+class OrganizationRef(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
+    id: uuid.UUID
+    code: str
+    name: str
+
+
+class ScopeUnitRef(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
+    id: uuid.UUID
+    name: str
+
+
+class ScopeVerticalRef(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
+    id: uuid.UUID
+    name: str
+
+
+class MeRoleItem(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
+    role_code: str
+    scope_unit: Optional[ScopeUnitRef] = None
+    scope_vertical: Optional[ScopeVerticalRef] = None
+    self_only: bool = False
+
+
+class Me(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
+    id: uuid.UUID
+    name: str
+    email: str
+    organization: OrganizationRef
+    home_unit: Optional[HomeUnitRef] = None
+    roles: list[MeRoleItem]
+    permissions: list[str]
+    mfa_enabled: bool
+    timezone: Optional[str] = None
+    locale: Optional[str] = None
+
 
 class LoginRequest(BaseModel):
     model_config = ConfigDict(extra="ignore")
@@ -23,12 +71,14 @@ class LoginRequest(BaseModel):
 class LoginResponse(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
-    mfa_required: bool
-    access_token: Optional[str] = None
-    refresh_token: Optional[str] = None
+    status: str  # "ok" or "mfa_required"
     mfa_token: Optional[str] = None
-    token_type: str = "bearer"
+    mfa_methods: Optional[list[str]] = None
+    access_token: Optional[str] = None
+    token_type: Optional[str] = None
     expires_in: Optional[int] = None
+    refresh_token: Optional[str] = None
+    user: Optional[Me] = None
 
 
 class MfaVerifyRequest(BaseModel):
@@ -54,26 +104,13 @@ class TokenResponse(BaseModel):
     token_type: str = "bearer"
     expires_in: int
     refresh_token: Optional[str] = None
+    user: Optional[Me] = None
 
 
 class RefreshRequest(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
     refresh_token: Optional[str] = None
-
-
-class Me(BaseModel):
-    model_config = ConfigDict(extra="ignore")
-
-    id: uuid.UUID
-    email: str
-    name: str
-    phone: Optional[str] = None
-    user_type: str
-    organization_id: uuid.UUID
-    roles: list[str]
-    permissions: list[str]
-    last_login_at: Optional[str] = None
 
 
 class PasswordForgotRequest(BaseModel):
@@ -150,4 +187,3 @@ class JwksResponse(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
     keys: list[JwkKey]
-

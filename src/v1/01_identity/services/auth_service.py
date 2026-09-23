@@ -3,7 +3,7 @@ import logging
 from typing import Optional, Tuple
 import uuid
 
-from sqlalchemy import func, select, update
+from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 import secrets
@@ -27,9 +27,11 @@ from exceptions import (
     UserNotFoundError,
 )
 from models.auth import ApiClient, RefreshToken, UserCredential
+from models.org_unit import OrgUnit
 from models.organization import Organization
 from models.rbac import Role, RoleAssignment, RolePermission
 from models.user import User
+from models.vertical import Vertical
 from schemas.auth import (
     ApiClientTokenRequest,
     ClientTokenResponse,
@@ -39,15 +41,20 @@ from schemas.auth import (
     LoginRequest,
     LoginResponse,
     Me,
+    MeRoleItem,
     MfaEnrollConfirmRequest,
     MfaEnrollmentResponse,
     MfaVerifyRequest,
+    OrganizationRef,
     PasswordForgotRequest,
     PasswordResetRequest,
     RecoveryCodesResponse,
+    ScopeUnitRef,
+    ScopeVerticalRef,
     TokenResponse,
 )
 from schemas.token import TokenPayload
+from schemas.user import HomeUnitRef
 from services.alert_service import alert_service
 from services.audit_service import audit_service
 from services.event_publisher import event_publisher
@@ -68,9 +75,83 @@ logger = logging.getLogger("identity.auth")
 
 
 class AuthService:
-    """
-    Core identity authentication and session management service.
-    """
+    async def _build_me(self, session: AsyncSession, user: User) -> Me:
+        org = await session.get(Organization, user.organization_id)
+        org_ref = OrganizationRef(
+            id=user.organization_id,
+            code=org.code or "" if org else "",
+            name=org.name if org else "",
+        )
+
+        home_unit_ref: Optional[HomeUnitRef] = None
+        if user.home_unit_id:
+            unit = await session.get(OrgUnit, user.home_unit_id)
+            if unit:
+                home_unit_ref = HomeUnitRef(id=unit.id, name=unit.name, unit_type=unit.unit_type)
+
+        now = datetime.now(timezone.utc)
+        assignments_res = await session.execute(
+            select(RoleAssignment).where(RoleAssignment.user_id == user.id)
+        )
+        assignments = list(assignments_res.scalars().all())
+
+        role_items: list[MeRoleItem] = []
+        permission_codes: set[str] = set()
+
+        for assignment in assignments:
+            if assignment.valid_to is not None:
+                valid_to = assignment.valid_to
+                if valid_to.tzinfo is None:
+                    valid_to = valid_to.replace(tzinfo=timezone.utc)
+                if valid_to <= now:
+                    continue
+
+            role = await session.get(Role, assignment.role_id)
+            if not role:
+                continue
+
+            scope_unit: Optional[ScopeUnitRef] = None
+            if assignment.scope_unit_id:
+                su = await session.get(OrgUnit, assignment.scope_unit_id)
+                if su:
+                    scope_unit = ScopeUnitRef(id=su.id, name=su.name)
+
+            scope_vertical: Optional[ScopeVerticalRef] = None
+            if assignment.scope_vertical_id:
+                sv = await session.get(Vertical, assignment.scope_vertical_id)
+                if sv:
+                    scope_vertical = ScopeVerticalRef(id=sv.id, name=sv.name)
+
+            role_items.append(MeRoleItem(
+                role_code=role.code,
+                scope_unit=scope_unit,
+                scope_vertical=scope_vertical,
+                self_only=assignment.self_only,
+            ))
+
+            rp_res = await session.execute(
+                select(RolePermission).where(RolePermission.role_id == role.id)
+            )
+            for rp in rp_res.scalars().all():
+                permission_codes.add(rp.permission_code)
+
+        cred = await session.get(UserCredential, user.id)
+        mfa_enabled = bool(cred and cred.otp_enabled)
+
+        tz = org.timezone if org else None
+
+        return Me(
+            id=user.id,
+            name=user.name,
+            email=user.email,
+            organization=org_ref,
+            home_unit=home_unit_ref,
+            roles=role_items,
+            permissions=sorted(permission_codes),
+            mfa_enabled=mfa_enabled,
+            timezone=tz,
+            locale=None,
+        )
 
     async def login(
         self,
@@ -116,7 +197,6 @@ class AuthService:
         # Branch 2: Email exists in more than one organization
         if len(users) > 1:
             if not request_data.organization_code:
-                # Ambiguous organization: cannot decide without organization_code
                 await audit_service.record_attempt(
                     session=session,
                     event_type="identity.session.login_failed.v1",
@@ -138,7 +218,6 @@ class AuthService:
                 await session.commit()
                 raise OrganizationAmbiguousError()
 
-            # Disambiguate user using organization_code
             target_user: Optional[User] = None
             for u in users:
                 org = await session.get(Organization, u.organization_id)
@@ -171,7 +250,6 @@ class AuthService:
                 raise InvalidCredentialsError()
             user = target_user
         else:
-            # Exactly one user found
             user = users[0]
             if request_data.organization_code:
                 org = await session.get(Organization, user.organization_id)
@@ -260,7 +338,6 @@ class AuthService:
 
         # 5. Check account lockout status (423 ACCOUNT_LOCKED)
         if credential.locked_until is not None:
-            # Handle timezone awareness safely
             lock_time = credential.locked_until
             if lock_time.tzinfo is None:
                 lock_time = lock_time.replace(tzinfo=timezone.utc)
@@ -291,7 +368,6 @@ class AuthService:
                 await session.commit()
                 raise AccountLockedError()
             else:
-                # Lockout period has elapsed: clear lock
                 credential.locked_until = None
                 credential.failed_attempts = 0
 
@@ -299,7 +375,6 @@ class AuthService:
         is_password_valid = verify_password(request_data.password, credential.password_hash)
 
         if not is_password_valid:
-            # Calculate failure window (5 failures within 15 minutes)
             last_failed = getattr(credential, "last_failed_at", None)
             if last_failed is not None and last_failed.tzinfo is None:
                 last_failed = last_failed.replace(tzinfo=timezone.utc)
@@ -313,10 +388,8 @@ class AuthService:
                 setattr(credential, "last_failed_at", now)
 
             if credential.failed_attempts >= 5:
-                # Account is now locked for 15 minutes!
                 credential.locked_until = now + timedelta(minutes=15)
 
-                # Send security alert email
                 await alert_service.send_security_alert_email(
                     email=user.email,
                     reason="Five failed sign-in attempts within 15 minutes.",
@@ -374,7 +447,7 @@ class AuthService:
                 await session.commit()
                 raise InvalidCredentialsError()
 
-        # 7. Password verified successfully: reset failure counters
+        # 7. Password verified: reset failure counters
         credential.failed_attempts = 0
         credential.locked_until = None
         if hasattr(credential, "last_failed_at"):
@@ -383,7 +456,6 @@ class AuthService:
 
         # 8. Check if MFA is enabled
         if credential.otp_enabled:
-            # Issue short-lived 5-minute MFA token for step 2
             mfa_token = create_mfa_token(
                 user_id=user.id,
                 organization_id=user.organization_id,
@@ -401,7 +473,11 @@ class AuthService:
                 details={"email": user.email, "mfa_required": True},
             )
             await session.commit()
-            return LoginResponse(mfa_required=True, mfa_token=mfa_token, token_type="mfa"), None
+            return LoginResponse(
+                status="mfa_required",
+                mfa_token=mfa_token,
+                mfa_methods=["totp"],
+            ), None
 
         # 9. MFA not enabled: complete sign-in immediately
         family_id = uuid.uuid4()
@@ -450,15 +526,16 @@ class AuthService:
             },
         )
 
+        me = await self._build_me(session, user)
         await session.commit()
 
-        # Mobile apps receive refresh token in body; browsers receive it in HttpOnly cookie
         response_body = LoginResponse(
-            mfa_required=False,
+            status="ok",
             access_token=access_token_str,
             refresh_token=None if client_is_browser else refresh_token_str,
             token_type="bearer",
             expires_in=900,
+            user=me,
         )
         return response_body, refresh_token_str
 
@@ -470,14 +547,11 @@ class AuthService:
         user_agent: Optional[str] = None,
         client_is_browser: bool = False,
     ) -> Tuple[TokenResponse, str]:
-        # 1. Rate limiting check (rate limit class: auth)
         rate_limiter.check(f"{client_ip or 'unknown'}:mfa", rate_class="auth")
 
-        # 2. Decode and validate mfa_token (5-minute expiry)
         payload = decode_mfa_token(request_data.mfa_token)
         user_id = uuid.UUID(payload["sub"])
 
-        # 3. Look up user and credentials
         user = await session.get(User, user_id)
         if not user:
             raise InvalidCredentialsError()
@@ -490,7 +564,6 @@ class AuthService:
         if not credential or not credential.otp_secret_enc:
             raise MfaCodeInvalidError()
 
-        # 4. Verify 6-digit TOTP code
         is_code_valid = verify_totp_code(credential.otp_secret_enc, request_data.code)
         if not is_code_valid:
             await audit_service.record_attempt(
@@ -518,7 +591,7 @@ class AuthService:
             await session.commit()
             raise MfaCodeInvalidError()
 
-        # 5. Anti-replay check: prevent reusing the same TOTP code
+        # Anti-replay: prevent reusing the same TOTP code
         last_code = getattr(credential, "last_totp_code", None)
         if last_code == request_data.code:
             await audit_service.record_attempt(
@@ -549,7 +622,6 @@ class AuthService:
         if hasattr(credential, "last_totp_code"):
             setattr(credential, "last_totp_code", request_data.code)
 
-        # 6. Success: create tokens and session
         now = datetime.now(timezone.utc)
         credential.failed_attempts = 0
         credential.locked_until = None
@@ -601,6 +673,7 @@ class AuthService:
             },
         )
 
+        me = await self._build_me(session, user)
         await session.commit()
 
         response_body = TokenResponse(
@@ -608,6 +681,7 @@ class AuthService:
             token_type="bearer",
             expires_in=900,
             refresh_token=None if client_is_browser else refresh_token_str,
+            user=me,
         )
         return response_body, refresh_token_str
 
@@ -619,16 +693,14 @@ class AuthService:
         user_agent: Optional[str] = None,
         client_is_browser: bool = False,
     ) -> Tuple[TokenResponse, str]:
-        # 1. Rate limiting check (rate limit class: auth)
         rate_limiter.check(f"{client_ip or 'unknown'}:refresh", rate_class="auth")
 
         if not refresh_token_str:
             raise RefreshTokenInvalidError()
 
-        # 2. Decode and validate refresh token JWT
         try:
             payload = decode_jwt_token(refresh_token_str)
-        except Exception:
+        except jwt.PyJWTError:
             raise RefreshTokenInvalidError()
 
         if payload.get("type") != "refresh":
@@ -643,16 +715,14 @@ class AuthService:
         except (ValueError, TypeError):
             raise RefreshTokenInvalidError()
 
-        # 3. Look up token in database
         token_record = await session.get(RefreshToken, token_id)
         if not token_record:
             raise RefreshTokenInvalidError()
 
         now = datetime.now(timezone.utc)
 
-        # 4. Theft Detection: token was already rotated!
+        # Theft detection: already-rotated token presented
         if token_record.revoked_at is not None:
-            # Revoke entire token family to protect user session against theft
             stmt = (
                 update(RefreshToken)
                 .where(
@@ -684,7 +754,6 @@ class AuthService:
             await session.commit()
             raise RefreshTokenReusedError()
 
-        # 5. Token is valid: rotate token (invalidate old token)
         token_record.revoked_at = now
 
         user = await session.get(User, token_record.user_id)
@@ -695,7 +764,6 @@ class AuthService:
         if user_status != "active" or user.user_type in ("invited", "suspended", "deactivated"):
             raise AccountNotActiveError()
 
-        # 6. Issue new tokens under the same family
         new_token_id = uuid.uuid4()
         new_refresh_token_str = create_refresh_token(
             token_id=new_token_id,
@@ -739,6 +807,7 @@ class AuthService:
             },
         )
 
+        me = await self._build_me(session, user)
         await session.commit()
 
         response_body = TokenResponse(
@@ -746,6 +815,7 @@ class AuthService:
             token_type="bearer",
             expires_in=900,
             refresh_token=None if client_is_browser else new_refresh_token_str,
+            user=me,
         )
         return response_body, new_refresh_token_str
 
@@ -756,13 +826,11 @@ class AuthService:
         client_ip: Optional[str] = None,
         user_agent: Optional[str] = None,
     ) -> None:
-        # Rate limit class: standard
         rate_limiter.check(f"{current_user.sub}:logout", rate_class="standard")
 
         user_id = uuid.UUID(current_user.sub)
         now = datetime.now(timezone.utc)
 
-        # Revoke the refresh-token family for the current session
         if current_user.family_id:
             family_id = uuid.UUID(current_user.family_id)
             stmt = (
@@ -775,7 +843,6 @@ class AuthService:
             )
             await session.execute(stmt)
         else:
-            # Revoke all active refresh tokens for this user
             stmt = (
                 update(RefreshToken)
                 .where(
@@ -814,7 +881,6 @@ class AuthService:
         current_user: TokenPayload,
         client_ip: Optional[str] = None,
     ) -> Me:
-        # Rate limit class: standard
         rate_limiter.check(f"{current_user.sub}:me", rate_class="standard")
 
         user_id = uuid.UUID(current_user.sub)
@@ -822,54 +888,14 @@ class AuthService:
         if not user:
             raise UserNotFoundError()
 
-        # Compute effective roles and permissions
-        now = datetime.now(timezone.utc)
-        assignments_stmt = select(RoleAssignment).where(RoleAssignment.user_id == user_id)
-        assignments_res = await session.execute(assignments_stmt)
-        assignments = list(assignments_res.scalars().all())
-
-        role_codes: set[str] = set()
-        permission_codes: set[str] = set()
-
-        for assignment in assignments:
-            if assignment.valid_to is not None:
-                valid_to = assignment.valid_to
-                if valid_to.tzinfo is None:
-                    valid_to = valid_to.replace(tzinfo=timezone.utc)
-                if valid_to <= now:
-                    continue
-
-            role = await session.get(Role, assignment.role_id)
-            if role:
-                role_codes.add(role.code)
-                # Fetch role permissions
-                rp_stmt = select(RolePermission).where(RolePermission.role_id == role.id)
-                rp_res = await session.execute(rp_stmt)
-                for rp in rp_res.scalars().all():
-                    permission_codes.add(rp.permission_code)
-
-        last_login_iso = user.last_login_at.isoformat() if user.last_login_at else None
-
-        return Me(
-            id=user.id,
-            email=user.email,
-            name=user.name,
-            phone=user.phone,
-            user_type=user.user_type,
-            organization_id=user.organization_id,
-            roles=sorted(list(role_codes)),
-            permissions=sorted(list(permission_codes)),
-            last_login_at=last_login_iso,
-        )
+        return await self._build_me(session, user)
 
     async def forgot_password(
         self,
         session: AsyncSession,
         request_data: PasswordForgotRequest,
     ) -> None:
-        """
-        Request a password reset email. Always returns 202 to prevent account enumeration.
-        """
+        from sqlalchemy import func
         stmt = select(User).where(func.lower(User.email) == request_data.email.lower())
         result = await session.execute(stmt)
         users = list(result.scalars().all())
@@ -905,9 +931,6 @@ class AuthService:
         session: AsyncSession,
         request_data: PasswordResetRequest,
     ) -> None:
-        """
-        Set a new password with a reset token.
-        """
         if len(request_data.new_password) < 12:
             raise PasswordTooWeakError("Password must be at least 12 characters long")
 
@@ -934,7 +957,6 @@ class AuthService:
         cred.failed_attempts = 0
         cred.locked_until = None
 
-        # Revoke existing refresh tokens
         await session.execute(
             update(RefreshToken)
             .where(RefreshToken.user_id == cred.user_id, RefreshToken.revoked_at.is_(None))
@@ -952,9 +974,6 @@ class AuthService:
         session: AsyncSession,
         request_data: InvitationAcceptRequest,
     ) -> None:
-        """
-        Accept an invitation and set a password.
-        """
         if len(request_data.password) < 12:
             raise PasswordTooWeakError("Password must be at least 12 characters long")
 
@@ -995,9 +1014,6 @@ class AuthService:
         session: AsyncSession,
         user_id: uuid.UUID,
     ) -> MfaEnrollmentResponse:
-        """
-        Start TOTP enrollment.
-        """
         user = await session.get(User, user_id)
         if not user:
             raise UserNotFoundError()
@@ -1035,15 +1051,12 @@ class AuthService:
         user_id: uuid.UUID,
         code: str,
     ) -> RecoveryCodesResponse:
-        """
-        Confirm TOTP enrollment.
-        """
         cred = await session.get(UserCredential, user_id)
         if not cred or not cred.otp_secret_enc:
             raise MfaCodeInvalidError()
 
         totp = pyotp.TOTP(cred.otp_secret_enc)
-        if not totp.verify(code, valid_window=1) and code != "123456" and code != "482913":
+        if not totp.verify(code, valid_window=1):
             raise MfaCodeInvalidError()
 
         cred.otp_enabled = True
@@ -1063,9 +1076,6 @@ class AuthService:
         session: AsyncSession,
         data: ApiClientTokenRequest,
     ) -> ClientTokenResponse:
-        """
-        OAuth2 client_credentials token grant.
-        """
         stmt = select(ApiClient).where(ApiClient.client_id == data.client_id)
         result = await session.execute(stmt)
         client = result.scalar_one_or_none()
@@ -1096,9 +1106,6 @@ class AuthService:
         )
 
     def get_jwks(self) -> JwksResponse:
-        """
-        Public keys for verifying access tokens.
-        """
         return JwksResponse(
             keys=[
                 JwkKey(
@@ -1114,4 +1121,3 @@ class AuthService:
 
 
 auth_service = AuthService()
-
