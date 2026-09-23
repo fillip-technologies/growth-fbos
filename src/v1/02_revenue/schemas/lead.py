@@ -1,10 +1,11 @@
 import uuid
-from datetime import date
+from datetime import date, datetime
 from typing import Literal, Optional
 from pydantic import BaseModel, ConfigDict, Field
 
 from schemas.client import ClientCreate, ClientResponse
 from schemas.common import Consent, Money
+from schemas.opportunity import OpportunityDetailResponse, UserRef, VerticalRef
 
 
 class LeadCreate(BaseModel):
@@ -34,8 +35,8 @@ class LeadDisqualify(BaseModel):
 
 class OpportunityInput(BaseModel):
     name: str = Field(..., min_length=1, max_length=255)
-    estimated_value: Money
-    estimated_close_date: Optional[date] = None
+    expected_value: Money
+    expected_close_date: date
 
 
 class LeadConvertRequest(BaseModel):
@@ -50,35 +51,24 @@ class LeadResponse(BaseModel):
     id: uuid.UUID
     code: str
     deal_id: Optional[uuid.UUID] = None
-    vertical_id: Optional[uuid.UUID] = None
+    vertical: VerticalRef
     status: str
     source: Optional[str] = None
+    campaign_ref: Optional[str] = None
     contact_name: Optional[str] = None
     contact_email: Optional[str] = None
     contact_phone: Optional[str] = None
     company_name: Optional[str] = None
-    owner_user_id: uuid.UUID
-    score: int = 50
+    owner: UserRef
+    score: Optional[int] = None
+    client_id: Optional[uuid.UUID] = None
+    attributes: dict = Field(default_factory=dict)
     version: int
-
-
-class OpportunityResponse(BaseModel):
-    model_config = ConfigDict(from_attributes=True)
-
-    id: uuid.UUID
-    client_id: uuid.UUID
-    deal_id: Optional[uuid.UUID] = None
-    lead_id: Optional[uuid.UUID] = None
-    name: str
-    status: str
-    expected_value: Optional[float] = None
-    currency: str = "INR"
-    expected_close_date: Optional[date] = None
-    owner_user_id: uuid.UUID
-    version: int
+    created_at: datetime
 
 
 class LeadConvertResult(BaseModel):
     lead: LeadResponse
     client: ClientResponse
-    opportunity: OpportunityResponse
+    opportunity: OpportunityDetailResponse
+    client_created: bool

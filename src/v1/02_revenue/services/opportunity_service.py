@@ -7,6 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from exceptions import (
     InvalidStateTransitionError,
     OpportunityNotFoundError,
+    PreconditionRequiredError,
     VersionConflictError,
 )
 from models.client import Client
@@ -127,10 +128,11 @@ class OpportunityService:
 
         opp, client_name = row
 
-        if if_match is not None:
-            expected_version = int(if_match.strip('"').replace("W/", ""))
-            if opp.version != expected_version:
-                raise VersionConflictError(opp.version)
+        if if_match is None:
+            raise PreconditionRequiredError()
+        expected_version = int(if_match.strip('"').replace("W/", ""))
+        if opp.version != expected_version:
+            raise VersionConflictError(opp.version)
 
         if opp.status in ("won", "lost"):
             raise InvalidStateTransitionError(opp.status, "update")
@@ -172,10 +174,11 @@ class OpportunityService:
 
         opp, client_name = row
 
-        if if_match is not None:
-            expected_version = int(if_match.strip('"').replace("W/", ""))
-            if opp.version != expected_version:
-                raise VersionConflictError(opp.version)
+        if if_match is None:
+            raise PreconditionRequiredError()
+        expected_version = int(if_match.strip('"').replace("W/", ""))
+        if opp.version != expected_version:
+            raise VersionConflictError(opp.version)
 
         if opp.status in ("won", "lost"):
             raise InvalidStateTransitionError(opp.status, "mark_lost")

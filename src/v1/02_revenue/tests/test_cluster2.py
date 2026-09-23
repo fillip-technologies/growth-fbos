@@ -30,6 +30,7 @@ async def _setup_client_and_offering(async_client: httpx.AsyncClient) -> tuple[s
     offering_payload = {
         "code": f"OFF-{str(uuid.uuid4())[:8].upper()}",
         "name": "Cloud Infrastructure Migration",
+        "vertical_id": str(uuid.uuid4()),
         "sac_code": "998313",
         "gst_rate": 18.0,
         "unit": "project",
@@ -49,7 +50,7 @@ async def test_opportunity_lifecycle(async_client: httpx.AsyncClient):
         "vertical_id": str(uuid.uuid4()),
         "source": "website",
         "contact_name": "Deepak Sharma",
-        "consent": {"granted": True, "source": "web"},
+        "consent": {"given": True, "text": "I agree to be contacted about my enquiry.", "channel": "web"},
     }
     ld_res = await async_client.post("/api/revenue/v1/leads", json=lead_payload)
     assert ld_res.status_code == 201
@@ -76,8 +77,8 @@ async def test_opportunity_lifecycle(async_client: httpx.AsyncClient):
             },
             "opportunity": {
                 "name": "Reliance Retail POS Upgrade",
-                "estimated_value": {"amount": 2500000.0, "currency": "INR"},
-                "estimated_close_date": "2026-11-30",
+                "expected_value": {"amount": 2500000.0, "currency": "INR"},
+                "expected_close_date": "2026-11-30",
             },
         },
         headers={"If-Match": etag},
@@ -105,7 +106,7 @@ async def test_opportunity_lifecycle(async_client: httpx.AsyncClient):
     assert update_res.status_code == 200
     assert update_res.json()["stage"] == "negotiation"
     assert update_res.json()["probability"] == 80
-    assert update_res.json()["expected_value"]["amount"] == 2600000.0
+    assert update_res.json()["expected_value"]["amount"] == "2600000.00"
 
     # 3. Mark lost on another opportunity
     # Create another lead to mark lost
@@ -117,7 +118,8 @@ async def test_opportunity_lifecycle(async_client: httpx.AsyncClient):
             "existing_client_id": convert_res.json()["client"]["id"],
             "opportunity": {
                 "name": "Reliance Analytics",
-                "estimated_value": {"amount": 500000.0, "currency": "INR"},
+                "expected_value": {"amount": 500000.0, "currency": "INR"},
+                "expected_close_date": "2026-11-30",
             },
         },
         headers={"If-Match": ld2_res.headers["ETag"]},
@@ -143,7 +145,7 @@ async def test_quotation_and_contract_workflow(async_client: httpx.AsyncClient):
         "vertical_id": str(uuid.uuid4()),
         "source": "website",
         "contact_name": "Anil Ambani",
-        "consent": {"granted": True, "source": "web"},
+        "consent": {"given": True, "text": "I agree to be contacted about my enquiry.", "channel": "web"},
     }
     ld_res = await async_client.post("/api/revenue/v1/leads", json=lead_payload)
     lead_id = ld_res.json()["id"]
@@ -154,7 +156,8 @@ async def test_quotation_and_contract_workflow(async_client: httpx.AsyncClient):
             "existing_client_id": client_id,
             "opportunity": {
                 "name": "Tata Tech Cloud",
-                "estimated_value": {"amount": 500000.0, "currency": "INR"},
+                "expected_value": {"amount": 500000.0, "currency": "INR"},
+                "expected_close_date": "2026-11-30",
             },
         },
         headers={"If-Match": ld_res.headers["ETag"]},
@@ -181,11 +184,11 @@ async def test_quotation_and_contract_workflow(async_client: httpx.AsyncClient):
     quote_data = q_res.json()
     assert quote_data["revision_no"] == 1
     assert quote_data["status"] == "draft"
-    assert quote_data["totals"]["subtotal"]["amount"] == 500000.0
-    assert quote_data["totals"]["discount_total"]["amount"] == 50000.0
-    assert quote_data["totals"]["taxable_total"]["amount"] == 450000.0
+    assert quote_data["totals"]["subtotal"]["amount"] == "500000.00"
+    assert quote_data["totals"]["discount_total"]["amount"] == "50000.00"
+    assert quote_data["totals"]["taxable_total"]["amount"] == "450000.00"
     # Intra-state GST (state 27 vs org state 29 -> inter-state 18% IGST = 81000)
-    assert quote_data["totals"]["grand_total"]["amount"] == 531000.0
+    assert quote_data["totals"]["grand_total"]["amount"] == "531000.00"
     quote_id = quote_data["id"]
     q_etag = q_res.headers["ETag"]
 
@@ -207,8 +210,8 @@ async def test_quotation_and_contract_workflow(async_client: httpx.AsyncClient):
         headers={"If-Match": q_etag},
     )
     assert rep_res.status_code == 200
-    assert rep_res.json()["totals"]["subtotal"]["amount"] == 1000000.0
-    assert rep_res.json()["totals"]["discount_total"]["amount"] == 200000.0
+    assert rep_res.json()["totals"]["subtotal"]["amount"] == "1000000.00"
+    assert rep_res.json()["totals"]["discount_total"]["amount"] == "200000.00"
     q_etag = rep_res.headers["ETag"]
 
     # 4. Submit quotation

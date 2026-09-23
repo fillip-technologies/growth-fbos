@@ -28,6 +28,7 @@ async def _setup_client_and_offering(async_client: httpx.AsyncClient) -> tuple[s
     o_payload = {
         "code": f"OFF-{str(uuid.uuid4())[:8].upper()}",
         "name": "Application Modernization",
+        "vertical_id": str(uuid.uuid4()),
         "sac_code": "998314",
         "gst_rate": 18.0,
         "unit": "project",
@@ -65,20 +66,20 @@ async def test_invoice_lifecycle_and_credit_note(async_client: httpx.AsyncClient
     inv = create_res.json()
     assert inv["status"] == "draft"
     assert inv["invoice_no"] is None
-    assert inv["totals"]["taxable_total"]["amount"] == 100000.0
+    assert inv["totals"]["taxable_total"]["amount"] == "100000.00"
     # Intra-state: CGST 9000, SGST 9000, IGST 0 -> Grand Total 118000
-    assert inv["totals"]["cgst_total"]["amount"] == 9000.0
-    assert inv["totals"]["sgst_total"]["amount"] == 9000.0
-    assert inv["totals"]["igst_total"]["amount"] == 0.0
-    assert inv["totals"]["grand_total"]["amount"] == 118000.0
-    assert inv["balance_due"]["amount"] == 118000.0
+    assert inv["totals"]["cgst_total"]["amount"] == "9000.00"
+    assert inv["totals"]["sgst_total"]["amount"] == "9000.00"
+    assert inv["totals"]["igst_total"]["amount"] == "0.00"
+    assert inv["totals"]["grand_total"]["amount"] == "118000.00"
+    assert inv["balance_due"]["amount"] == "118000.00"
     invoice_id = inv["id"]
     etag = create_res.headers["ETag"]
 
     # 2. Issue Invoice (assigns gapless number)
     issue_res = await async_client.post(
         f"/api/revenue/v1/invoices/{invoice_id}/issue",
-        headers={"If-Match": etag},
+        headers={"If-Match": etag, "Idempotency-Key": str(uuid.uuid4())},
     )
     assert issue_res.status_code == 200
     issued_inv = issue_res.json()
@@ -98,17 +99,18 @@ async def test_invoice_lifecycle_and_credit_note(async_client: httpx.AsyncClient
     cn_res = await async_client.post(
         f"/api/revenue/v1/invoices/{invoice_id}/credit-notes",
         json={"reason": "cancellation", "note": "Order cancelled by client"},
+        headers={"Idempotency-Key": str(uuid.uuid4())},
     )
     assert cn_res.status_code == 201
     cn_data = cn_res.json()
     assert cn_data["doc_type"] == "credit_note"
     assert cn_data["invoice_no"].startswith("CN/26-27/")
     assert cn_data["original_invoice_id"] == invoice_id
-    assert cn_data["totals"]["grand_total"]["amount"] == 118000.0
+    assert cn_data["totals"]["grand_total"]["amount"] == "118000.00"
 
     # Original invoice balance should now be settled
     orig_inv = await async_client.get(f"/api/revenue/v1/invoices/{invoice_id}")
-    assert orig_inv.json()["balance_due"]["amount"] == 0.0
+    assert orig_inv.json()["balance_due"]["amount"] == "0.00"
     assert orig_inv.json()["status"] == "paid"
 
 
@@ -134,7 +136,7 @@ async def test_payment_and_allocation(async_client: httpx.AsyncClient):
     invoice_id = inv_res.json()["id"]
     issue_res = await async_client.post(
         f"/api/revenue/v1/invoices/{invoice_id}/issue",
-        headers={"If-Match": inv_res.headers["ETag"]},
+        headers={"If-Match": inv_res.headers["ETag"], "Idempotency-Key": str(uuid.uuid4())},
     )
     assert issue_res.status_code == 200
 
@@ -152,19 +154,23 @@ async def test_payment_and_allocation(async_client: httpx.AsyncClient):
             }
         ],
     }
-    pay_res = await async_client.post("/api/revenue/v1/payments", json=payment_payload)
+    pay_res = await async_client.post(
+        "/api/revenue/v1/payments",
+        json=payment_payload,
+        headers={"Idempotency-Key": str(uuid.uuid4())},
+    )
     assert pay_res.status_code == 201
     pay_data = pay_res.json()
     assert pay_data["code"].startswith("RC-")
-    assert pay_data["unallocated_amount"]["amount"] == 68000.0
+    assert pay_data["unallocated_amount"]["amount"] == "68000.00"
     assert len(pay_data["allocations"]) == 1
     payment_id = pay_data["id"]
 
     # Check invoice partially paid
     inv_check = await async_client.get(f"/api/revenue/v1/invoices/{invoice_id}")
     assert inv_check.json()["status"] == "partially_paid"
-    assert inv_check.json()["balance_due"]["amount"] == 68000.0
-    assert inv_check.json()["amount_settled"]["amount"] == 50000.0
+    assert inv_check.json()["balance_due"]["amount"] == "68000.00"
+    assert inv_check.json()["amount_settled"]["amount"] == "50000.00"
 
     # 3. Allocate the remaining 68,000 INR
     alloc_batch = {
@@ -178,14 +184,15 @@ async def test_payment_and_allocation(async_client: httpx.AsyncClient):
     alloc_res = await async_client.post(
         f"/api/revenue/v1/payments/{payment_id}/allocations",
         json=alloc_batch,
+        headers={"If-Match": pay_res.headers["ETag"], "Idempotency-Key": str(uuid.uuid4())},
     )
     assert alloc_res.status_code == 200
-    assert alloc_res.json()["unallocated_amount"]["amount"] == 0.0
+    assert alloc_res.json()["unallocated_amount"]["amount"] == "0.00"
 
     # Check invoice fully settled
     inv_settled = await async_client.get(f"/api/revenue/v1/invoices/{invoice_id}")
     assert inv_settled.json()["status"] == "paid"
-    assert inv_settled.json()["balance_due"]["amount"] == 0.0
+    assert inv_settled.json()["balance_due"]["amount"] == "0.00"
 
 
 async def test_collections_and_razorpay_webhook(async_client: httpx.AsyncClient):

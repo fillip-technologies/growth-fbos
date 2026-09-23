@@ -6,10 +6,13 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from exceptions import (
+    AllocationExceedsPaymentError,
     ClientNotFoundError,
     InvoiceNotFoundError,
     InvoiceOverallocatedError,
     PaymentNotFoundError,
+    PreconditionRequiredError,
+    VersionConflictError,
 )
 from models.client import Client
 from models.invoice import Invoice
@@ -53,6 +56,7 @@ def format_payment_response(
         unallocated_amount=Money(amount=float(payment.unapplied_amount), currency=payment.currency),
         status=payment.status if payment.status in ("pending", "confirmed", "failed", "refunded", "partially_refunded") else "confirmed",
         allocations=alloc_responses,
+        version=payment.version,
     )
 
 
@@ -164,6 +168,8 @@ class PaymentService:
                 alloc_amt = alloc_in.amount.amount
                 if alloc_amt > float(inv.balance_due):
                     raise InvoiceOverallocatedError(float(inv.balance_due), alloc_amt)
+                if alloc_amt > float(payment.unapplied_amount):
+                    raise AllocationExceedsPaymentError(float(payment.unapplied_amount), alloc_amt)
 
                 inv.balance_due = max(0.0, float(inv.balance_due) - alloc_amt)
                 inv.amount_settled = min(float(inv.grand_total), float(inv.amount_settled) + alloc_amt)
@@ -180,7 +186,7 @@ class PaymentService:
                 )
                 session.add(pa)
                 persisted_allocations.append((pa, inv.invoice_no))
-                payment.unapplied_amount = max(0.0, float(payment.unapplied_amount) - alloc_amt)
+                payment.unapplied_amount = float(payment.unapplied_amount) - alloc_amt
 
         await session.flush()
         return format_payment_response(payment, client, persisted_allocations)
@@ -191,10 +197,17 @@ class PaymentService:
         payment_id: uuid.UUID,
         org_id: uuid.UUID,
         payload: AllocationBatch,
+        if_match: Optional[str] = None,
     ) -> PaymentResponse:
         payment = await session.get(Payment, payment_id)
         if not payment or payment.organization_id != org_id:
             raise PaymentNotFoundError(str(payment_id))
+
+        if if_match is None:
+            raise PreconditionRequiredError()
+        expected_version = int(if_match.strip('"').replace("W/", ""))
+        if payment.version != expected_version:
+            raise VersionConflictError(payment.version)
 
         client = await session.get(Client, payment.client_id)
 
@@ -214,6 +227,8 @@ class PaymentService:
             alloc_amt = alloc_in.amount.amount
             if alloc_amt > float(inv.balance_due):
                 raise InvoiceOverallocatedError(float(inv.balance_due), alloc_amt)
+            if alloc_amt > float(payment.unapplied_amount):
+                raise AllocationExceedsPaymentError(float(payment.unapplied_amount), alloc_amt)
 
             inv.balance_due = max(0.0, float(inv.balance_due) - alloc_amt)
             inv.amount_settled = min(float(inv.grand_total), float(inv.amount_settled) + alloc_amt)
@@ -230,7 +245,8 @@ class PaymentService:
             )
             session.add(pa)
             existing_allocs.append((pa, inv.invoice_no))
-            payment.unapplied_amount = max(0.0, float(payment.unapplied_amount) - alloc_amt)
+            payment.unapplied_amount = float(payment.unapplied_amount) - alloc_amt
 
+        payment.version += 1
         await session.flush()
         return format_payment_response(payment, client, existing_allocs)

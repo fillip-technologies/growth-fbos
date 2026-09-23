@@ -23,13 +23,29 @@ services:
       retries: 5
 
   # ---------------------------------------------------------------------------
-  # 01 — Identity Service  →  http://localhost:8000
+  # 00 — Gateway Service  →  http://localhost:8000
+  # ---------------------------------------------------------------------------
+  gateway:
+    build:
+      context: ./src/v1/00_gateway
+    ports:
+      - "8000:8000"
+    env_file: ./src/v1/00_gateway/.env
+    restart: on-failure
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+  # ---------------------------------------------------------------------------
+  # 01 — Identity Service  →  http://localhost:8001
   # ---------------------------------------------------------------------------
   identity:
     build:
       context: ./src/v1/01_identity
     ports:
-      - "8000:8000"
+      - "8001:8000"
     env_file: ./src/v1/01_identity/.env
     depends_on:
       db:
@@ -42,13 +58,13 @@ services:
       retries: 3
 
   # ---------------------------------------------------------------------------
-  # 02 — Revenue Service  →  http://localhost:8001
+  # 02 — Revenue Service (Commercial/CRM + Billing)  →  http://localhost:8002
   # ---------------------------------------------------------------------------
   revenue:
     build:
       context: ./src/v1/02_revenue
     ports:
-      - "8001:8000"
+      - "8002:8000"
     env_file: ./src/v1/02_revenue/.env
     depends_on:
       db:
@@ -60,35 +76,15 @@ services:
       timeout: 5s
       retries: 3
 
-
   # ---------------------------------------------------------------------------
-  # 03 — Billing Service  →  http://localhost:8002
+  # 03 — Delivery Service (Work units, Workflow, Tasks)  →  http://localhost:8003
   # ---------------------------------------------------------------------------
-  billing:
+  delivery:
     build:
-      context: ./src/v1/03_billing
-    ports:
-      - "8002:8000"
-    env_file: ./src/v1/03_billing/.env
-    depends_on:
-      db:
-        condition: service_healthy
-    restart: on-failure
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
-      interval: 30s
-      timeout: 5s
-      retries: 3
-
-  # ---------------------------------------------------------------------------
-  # 04 — Work Service  →  http://localhost:8003
-  # ---------------------------------------------------------------------------
-  work:
-    build:
-      context: ./src/v1/04_work
+      context: ./src/v1/03_delivery
     ports:
       - "8003:8000"
-    env_file: ./src/v1/04_work/.env
+    env_file: ./src/v1/03_delivery/.env
     depends_on:
       db:
         condition: service_healthy
@@ -100,14 +96,14 @@ services:
       retries: 3
 
   # ---------------------------------------------------------------------------
-  # 05 — Workflow Service  →  http://localhost:8004
+  # 04 — Control Service (Approvals, SLA)  →  http://localhost:8004
   # ---------------------------------------------------------------------------
-  workflow:
+  control:
     build:
-      context: ./src/v1/05_workflow
+      context: ./src/v1/04_control
     ports:
       - "8004:8000"
-    env_file: ./src/v1/05_workflow/.env
+    env_file: ./src/v1/04_control/.env
     depends_on:
       db:
         condition: service_healthy
@@ -119,14 +115,14 @@ services:
       retries: 3
 
   # ---------------------------------------------------------------------------
-  # 06 — Task Service  →  http://localhost:8005
+  # 05 — Documents Service  →  http://localhost:8005
   # ---------------------------------------------------------------------------
-  task:
+  documents:
     build:
-      context: ./src/v1/06_task
+      context: ./src/v1/05_documents
     ports:
       - "8005:8000"
-    env_file: ./src/v1/06_task/.env
+    env_file: ./src/v1/05_documents/.env
     depends_on:
       db:
         condition: service_healthy
@@ -138,14 +134,14 @@ services:
       retries: 3
 
   # ---------------------------------------------------------------------------
-  # 07 — Approval Service  →  http://localhost:8006
+  # 06 — Communication Service (Notifications, inbox, webhooks)  →  http://localhost:8006
   # ---------------------------------------------------------------------------
-  approval:
+  communication:
     build:
-      context: ./src/v1/07_approval
+      context: ./src/v1/06_communication
     ports:
       - "8006:8000"
-    env_file: ./src/v1/07_approval/.env
+    env_file: ./src/v1/06_communication/.env
     depends_on:
       db:
         condition: service_healthy
@@ -157,14 +153,14 @@ services:
       retries: 3
 
   # ---------------------------------------------------------------------------
-  # 08 — Document / Notification / Audit Service  →  http://localhost:8007
+  # 07 — Management Service (Planning, Performance/KPIs, Resources)  →  http://localhost:8007
   # ---------------------------------------------------------------------------
-  doc-notify-audit:
+  management:
     build:
-      context: ./src/v1/08_doc_notify_audit
+      context: ./src/v1/07_management
     ports:
       - "8007:8000"
-    env_file: ./src/v1/08_doc_notify_audit/.env
+    env_file: ./src/v1/07_management/.env
     depends_on:
       db:
         condition: service_healthy
@@ -176,14 +172,14 @@ services:
       retries: 3
 
   # ---------------------------------------------------------------------------
-  # 09 — Resource / Planning / Performance Service  →  http://localhost:8008
+  # 08 — Insight Service (Audit, Analytics)  →  http://localhost:8008
   # ---------------------------------------------------------------------------
-  res-plan-perf:
+  insight:
     build:
-      context: ./src/v1/09_res_plan_perf
+      context: ./src/v1/08_insight
     ports:
       - "8008:8000"
-    env_file: ./src/v1/09_res_plan_perf/.env
+    env_file: ./src/v1/08_insight/.env
     depends_on:
       db:
         condition: service_healthy
@@ -195,14 +191,14 @@ services:
       retries: 3
 
   # ---------------------------------------------------------------------------
-  # 10 — Asset / Analytics / Platform Service  →  http://localhost:8009
+  # 09 — Assets Service  →  http://localhost:8009
   # ---------------------------------------------------------------------------
-  asset-analytic:
+  assets:
     build:
-      context: ./src/v1/10_asset_analytic
+      context: ./src/v1/09_assets
     ports:
       - "8009:8000"
-    env_file: ./src/v1/10_asset_analytic/.env
+    env_file: ./src/v1/09_assets/.env
     depends_on:
       db:
         condition: service_healthy
@@ -218,4 +214,3 @@ services:
 # ---------------------------------------------------------------------------
 volumes:
   db_data:
-

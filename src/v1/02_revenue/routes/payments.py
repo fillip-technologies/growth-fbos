@@ -4,7 +4,7 @@ from typing import Optional
 
 from fastapi import APIRouter, Header, Query, Response, status
 
-from dependencies import DatabaseSession, OrgId, UserId
+from dependencies import DatabaseSession, OrgId, UserId, require_idempotency_key
 from schemas.common import PageResponse
 from schemas.payment import (
     AllocationBatch,
@@ -50,6 +50,8 @@ async def record_payment(
     idempotency_key: Optional[str] = Header(None, alias="Idempotency-Key"),
 ) -> PaymentResponse:
     """Record a received payment and optionally allocate funds immediately."""
+    require_idempotency_key(idempotency_key)
+
     payment = await PaymentService.record_payment(
         session=session,
         org_id=org_id,
@@ -57,6 +59,7 @@ async def record_payment(
         payload=payload,
     )
     await session.commit()
+    response.headers["ETag"] = f'"{payment.version}"'
     response.headers["Location"] = f"/api/revenue/v1/payments/{payment.id}"
     return payment
 
@@ -67,15 +70,20 @@ async def allocate_payment(
     payload: AllocationBatch,
     session: DatabaseSession,
     org_id: OrgId,
+    response: Response,
     if_match: Optional[str] = Header(None, alias="If-Match"),
     idempotency_key: Optional[str] = Header(None, alias="Idempotency-Key"),
 ) -> PaymentResponse:
     """Allocate unapplied payment amounts to outstanding invoices."""
+    require_idempotency_key(idempotency_key)
+
     payment = await PaymentService.allocate_payment(
         session=session,
         payment_id=payment_id,
         org_id=org_id,
         payload=payload,
+        if_match=if_match,
     )
     await session.commit()
+    response.headers["ETag"] = f'"{payment.version}"'
     return payment

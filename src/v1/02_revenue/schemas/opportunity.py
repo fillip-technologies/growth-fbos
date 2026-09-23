@@ -20,6 +20,13 @@ class UserRef(BaseModel):
     name: str
 
 
+class VerticalRef(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
+    name: str
+
+
 class OpportunityUpdate(BaseModel):
     stage: Optional[Literal["qualification", "proposal", "negotiation"]] = None
     probability: Optional[int] = Field(None, ge=0, le=100)

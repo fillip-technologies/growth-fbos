@@ -10,11 +10,13 @@ from exceptions import (
     ClientNotFoundError,
     DuplicateClientError,
     GSTINInvalidError,
+    PreconditionRequiredError,
     VersionConflictError,
 )
 from models.client import Client, ClientContact
 from schemas.client import ClientCreate, ClientResponse, ClientUpdate, ContactCreate, ContactResponse
 from schemas.common import Address, PageMeta, PageResponse, decode_cursor, encode_cursor
+from schemas.opportunity import UserRef
 
 GSTIN_REGEX = re.compile(r"^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z]{1}[1-9A-Z]{1}Z[0-9A-Z]{1}$")
 
@@ -36,7 +38,7 @@ def format_client_response(client: Client, contacts: list[ClientContact]) -> Cli
         try:
             addr_dict = json.loads(client.billing_address) if isinstance(client.billing_address, str) else client.billing_address
             billing_addr = Address(**addr_dict)
-        except Exception:
+        except (json.JSONDecodeError, TypeError, ValueError):
             billing_addr = None
 
     return ClientResponse(
@@ -47,10 +49,14 @@ def format_client_response(client: Client, contacts: list[ClientContact]) -> Cli
         client_type=client.client_type,
         pan=client.pan,
         gstin=client.gstin,
-        status=client.status,
+        state_code=billing_addr.state_code if billing_addr else None,
         billing_address=billing_addr,
-        owner_user_id=client.owner_user_id,
+        owner=UserRef(id=client.owner_user_id, name="Assigned Owner"),
+        status=client.status,
+        source=client.source,
+        attributes=client.attributes or {},
         version=client.version,
+        created_at=client.created_at,
         contacts=[ContactResponse.model_validate(c) for c in contacts],
     )
 
@@ -139,6 +145,7 @@ class ClientService:
             status="active",
             billing_address=payload.billing_address.model_dump_json(),
             owner_user_id=payload.owner_user_id,
+            source=payload.source,
             version=1,
         )
         session.add(client)
@@ -179,10 +186,11 @@ class ClientService:
         if not client:
             raise ClientNotFoundError(str(client_id))
 
-        if if_match is not None:
-            expected_version = int(if_match.strip('"').replace("W/", ""))
-            if client.version != expected_version:
-                raise VersionConflictError(client.version)
+        if if_match is None:
+            raise PreconditionRequiredError()
+        expected_version = int(if_match.strip('"').replace("W/", ""))
+        if client.version != expected_version:
+            raise VersionConflictError(client.version)
 
         if payload.gstin:
             state_code = "10"
@@ -191,7 +199,7 @@ class ClientService:
             elif client.billing_address:
                 try:
                     state_code = json.loads(client.billing_address).get("state_code", "10")
-                except Exception:
+                except (json.JSONDecodeError, AttributeError, TypeError):
                     state_code = "10"
             validate_gstin(payload.gstin, state_code)
             client.gstin = payload.gstin.strip().upper()

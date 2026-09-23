@@ -39,10 +39,22 @@ pip install -r src/v1/01_identity/requirements.txt
 
 ### 3. Environment configuration
 
-Create a `.env` file from `.env.example`:
+Every service under `src/v1/` reads its own `.env` file (gitignored). Each one ships a tracked
+`.env.example` with working docker-compose defaults, so setup is copy-paste — no values need
+editing to run locally against Docker:
 
 ```bash
-cp .env.example .env
+# All 10 services at once
+for d in src/v1/*/; do cp "$d.env.example" "$d.env"; done
+
+# Root .env, used by the `db` container in docker-compose
+cp .env.docker.example .env
+```
+
+Then bring everything up:
+
+```bash
+docker compose up --build
 ```
 
 | Variable | Description | Default |

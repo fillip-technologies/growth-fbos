@@ -143,8 +143,9 @@ async def test_lead_lifecycle_and_conversion(async_client: httpx.AsyncClient):
         "contact_phone": "+919999888877",
         "company_name": "Patel Industries",
         "consent": {
-            "granted": True,
-            "source": "web_form",
+            "given": True,
+            "text": "I agree to be contacted about my enquiry.",
+            "channel": "web_form",
         },
     }
 
@@ -188,8 +189,8 @@ async def test_lead_lifecycle_and_conversion(async_client: httpx.AsyncClient):
         },
         "opportunity": {
             "name": "Patel ERP Implementation",
-            "estimated_value": {"amount": 1500000.0, "currency": "INR"},
-            "estimated_close_date": "2026-12-31",
+            "expected_value": {"amount": 1500000.0, "currency": "INR"},
+            "expected_close_date": "2026-12-31",
         },
     }
 
@@ -212,7 +213,7 @@ async def test_lead_disqualify(async_client: httpx.AsyncClient):
         "vertical_id": vertical_id,
         "source": "referral",
         "contact_name": "Ramesh Kumar",
-        "consent": {"granted": True, "source": "phone_call"},
+        "consent": {"given": True, "text": "I agree to be contacted about my enquiry.", "channel": "phone_call"},
     }
     create_res = await async_client.post("/api/revenue/v1/leads", json=lead_payload)
     assert create_res.status_code == 201

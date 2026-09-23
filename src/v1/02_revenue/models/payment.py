@@ -34,6 +34,10 @@ class Payment(Base):
     status: Mapped[str] = mapped_column(String(50), nullable=False, default="pending", index=True)
     recorded_by: Mapped[uuid.UUID] = mapped_column(UUIDType, nullable=False)
     received_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), nullable=False)
+    # Not part of the documented Payment response body, but allocatePayment
+    # requires If-Match per the spec, so the record still needs a version to
+    # back the ETag.
+    version: Mapped[int] = mapped_column(nullable=False, default=1)
 
 
 class PaymentAllocation(Base):

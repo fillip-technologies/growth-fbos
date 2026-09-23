@@ -48,7 +48,6 @@ from schemas.lead import (
     LeadResponse,
     LeadUpdate,
     OpportunityInput,
-    OpportunityResponse,
 )
 from schemas.offering import OfferingCreate, OfferingResponse
 from schemas.opportunity import (
@@ -57,6 +56,7 @@ from schemas.opportunity import (
     OpportunityLost,
     OpportunityUpdate,
     UserRef,
+    VerticalRef,
 )
 from schemas.payment import (
     AllocationBatch,
@@ -98,9 +98,9 @@ __all__ = [
     "LeadConvertResult",
     "LeadResponse",
     "OpportunityInput",
-    "OpportunityResponse",
     "ClientRef",
     "UserRef",
+    "VerticalRef",
     "OpportunityDetailResponse",
     "OpportunityUpdate",
     "OpportunityLost",

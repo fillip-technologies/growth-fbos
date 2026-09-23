@@ -9,6 +9,7 @@ from exceptions import (
     ClientNotFoundError,
     InvalidStateTransitionError,
     LeadNotFoundError,
+    PreconditionRequiredError,
     VersionConflictError,
 )
 from models.client import Client
@@ -23,15 +24,16 @@ from schemas.lead import (
     LeadDisqualify,
     LeadResponse,
     LeadUpdate,
-    OpportunityResponse,
 )
-from services.client_service import ClientService, format_client_response
+from schemas.opportunity import UserRef, VerticalRef
+from services.client_service import ClientService
+from services.opportunity_service import format_opportunity_detail
 
 
 def format_lead_response(lead: Lead) -> LeadResponse:
-    score = 50
+    score = None
     if lead.attributes and isinstance(lead.attributes, dict):
-        score = lead.attributes.get("score", 50)
+        score = lead.attributes.get("score")
 
     code = lead.name if lead.name.startswith("LD-") else f"LD-{str(lead.id)[:8].upper()}"
 
@@ -39,16 +41,20 @@ def format_lead_response(lead: Lead) -> LeadResponse:
         id=lead.id,
         code=code,
         deal_id=getattr(lead, "deal_id", None),
-        vertical_id=lead.vertical_id,
+        vertical=VerticalRef(id=lead.vertical_id, name="Vertical"),
         status=lead.status,
         source=lead.source,
+        campaign_ref=lead.company_ref,
         contact_name=lead.contact_name,
         contact_email=lead.contact_email,
         contact_phone=lead.contact_phone,
         company_name=lead.company_name,
-        owner_user_id=lead.owner_user_id,
+        owner=UserRef(id=lead.owner_user_id, name="Assigned Owner"),
         score=score,
+        client_id=lead.client_id,
+        attributes=lead.attributes or {},
         version=lead.version,
+        created_at=lead.created_at,
     )
 
 
@@ -158,10 +164,11 @@ class LeadService:
         if not lead:
             raise LeadNotFoundError(str(lead_id))
 
-        if if_match is not None:
-            expected_version = int(if_match.strip('"').replace("W/", ""))
-            if lead.version != expected_version:
-                raise VersionConflictError(lead.version)
+        if if_match is None:
+            raise PreconditionRequiredError()
+        expected_version = int(if_match.strip('"').replace("W/", ""))
+        if lead.version != expected_version:
+            raise VersionConflictError(lead.version)
 
         if payload.status is not None:
             if lead.status in ("converted", "disqualified"):
@@ -200,10 +207,11 @@ class LeadService:
         if not lead:
             raise LeadNotFoundError(str(lead_id))
 
-        if if_match is not None:
-            expected_version = int(if_match.strip('"').replace("W/", ""))
-            if lead.version != expected_version:
-                raise VersionConflictError(lead.version)
+        if if_match is None:
+            raise PreconditionRequiredError()
+        expected_version = int(if_match.strip('"').replace("W/", ""))
+        if lead.version != expected_version:
+            raise VersionConflictError(lead.version)
 
         if lead.status in ("converted", "disqualified"):
             raise InvalidStateTransitionError(lead.status, "disqualify")
@@ -229,15 +237,17 @@ class LeadService:
         if not lead:
             raise LeadNotFoundError(str(lead_id))
 
-        if if_match is not None:
-            expected_version = int(if_match.strip('"').replace("W/", ""))
-            if lead.version != expected_version:
-                raise VersionConflictError(lead.version)
+        if if_match is None:
+            raise PreconditionRequiredError()
+        expected_version = int(if_match.strip('"').replace("W/", ""))
+        if lead.version != expected_version:
+            raise VersionConflictError(lead.version)
 
         if lead.status in ("converted", "disqualified"):
             raise InvalidStateTransitionError(lead.status, "convert")
 
         # 1. Resolve or create client
+        client_created = False
         if payload.existing_client_id:
             c_res = await session.execute(
                 select(Client).where(Client.id == payload.existing_client_id, Client.organization_id == org_id)
@@ -249,6 +259,7 @@ class LeadService:
         elif payload.new_client:
             client_resp = await ClientService.create_client(session, org_id, payload.new_client)
             client_entity = await session.get(Client, client_resp.id)
+            client_created = True
         else:
             raise ClientNotFoundError("Either existing_client_id or new_client must be provided")
 
@@ -269,10 +280,11 @@ class LeadService:
             deal_id=deal.id,
             lead_id=lead.id,
             name=payload.opportunity.name,
-            status="open",
-            expected_value=payload.opportunity.estimated_value.amount,
-            currency=payload.opportunity.estimated_value.currency,
-            expected_close_date=payload.opportunity.estimated_close_date,
+            status="qualification",
+            probability=50,
+            expected_value=payload.opportunity.expected_value.amount,
+            currency=payload.opportunity.expected_value.currency,
+            expected_close_date=payload.opportunity.expected_close_date,
             owner_user_id=lead.owner_user_id,
             version=1,
         )
@@ -281,25 +293,13 @@ class LeadService:
 
         # 4. Mark Lead as Converted
         lead.status = "converted"
+        lead.client_id = client_entity.id
         lead.version += 1
         await session.flush()
-
-        opp_resp = OpportunityResponse(
-            id=opp.id,
-            client_id=opp.client_id,
-            deal_id=deal.id,
-            lead_id=lead.id,
-            name=opp.name,
-            status=opp.status,
-            expected_value=float(opp.expected_value) if opp.expected_value else None,
-            currency=opp.currency,
-            expected_close_date=opp.expected_close_date,
-            owner_user_id=opp.owner_user_id,
-            version=opp.version,
-        )
 
         return LeadConvertResult(
             lead=format_lead_response(lead),
             client=client_resp,
-            opportunity=opp_resp,
+            opportunity=format_opportunity_detail(opp, client_resp.name),
+            client_created=client_created,
         )
