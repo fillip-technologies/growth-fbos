@@ -34,7 +34,7 @@ class UserInviteRequest(BaseModel):
     phone: Optional[str] = None
     employee_code: Optional[str] = None
     user_type: str = "employee"  # employee, contractor, client_user
-    home_unit_id: Optional[uuid.UUID] = None
+    home_unit_id: uuid.UUID
     manager_user_id: Optional[uuid.UUID] = None
     role_assignments: Optional[list[dict[str, Any]]] = None
 
@@ -46,7 +46,6 @@ class UserUpdateRequest(BaseModel):
     phone: Optional[str] = None
     home_unit_id: Optional[uuid.UUID] = None
     manager_user_id: Optional[uuid.UUID] = None
-    user_type: Optional[str] = None
 
 
 class UserDeactivateRequest(BaseModel):

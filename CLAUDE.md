@@ -27,6 +27,43 @@ Before analyzing, writing, modifying, or reviewing any code in this repository, 
 
 ---
 
+## 📖 API Specification
+
+The authoritative contract for every endpoint, request/response schema, error code, and event is the HTML reference file at the repo root:
+
+```
+fbos-api-reference (1).html
+```
+
+**Always read this file before implementing or reviewing any endpoint.** It defines exact field names, required vs optional constraints, nested object shapes, permitted enum values, HTTP status codes, idempotency behaviour, and published events. The implementation must match it precisely — any deviation is a bug.
+
+---
+
+## 🗺️ Service–Spec Mapping
+
+The repository uses fine-grained directories for independent deployment. Each directory maps to a logical service defined in the HTML spec. Use this table to navigate between code and spec.
+
+| Directory | Spec service name | Base path | Spec modules covered | Endpoints | Port |
+|-----------|------------------|-----------|----------------------|-----------|------|
+| `01_identity/` | **Identity** | `/api/identity/v1` | Authentication · Organization and access | 39 | 8000 |
+| `02_revenue/` | **Revenue** | `/api/revenue/v1` | Commercial (CRM) · Billing | 42 | 8001 |
+| `03_billing/` | _(part of Revenue)_ | `/api/revenue/v1` | Billing sub-module only | — | 8002 |
+| `04_work/` | **Delivery** | `/api/delivery/v1` | Work units | 60 total | 8003 |
+| `05_workflow/` | **Delivery** | `/api/delivery/v1` | Workflow engine | (shared) | 8004 |
+| `06_task/` | **Delivery** | `/api/delivery/v1` | Tasks · Handovers · Time entries | (shared) | 8005 |
+| `07_approval/` | **Control** | `/api/control/v1` | Approvals · SLA | 17 | 8006 |
+| `08_doc_notify_audit/` | **Documents** + **Communication** + **Insight** (audit) | `/api/documents/v1` · `/api/communication/v1` · `/api/insight/v1` | Documents · Notifications/inbox/webhooks · Audit trail | 9+13+3 | 8007 |
+| `09_res_plan_perf/` | **Management** | `/api/management/v1` | Planning · Performance (KPIs) · Resources and capacity | 11 | 8008 |
+| `10_asset_analytic/` | **Assets** + **Insight** (analytics) | `/api/assets/v1` · `/api/insight/v1` | Assets/credentials · Dashboards/metrics/reports | 6+4 | 8009 |
+
+> **Note:** `02_commercial/` is a stale directory superseded by `02_revenue/`. Do not add code to it.
+>
+> **Note:** The spec defines a single **Delivery service** (`/api/delivery/v1`, 60 endpoints) covering work units, workflow and tasks. The three directories `04_work/`, `05_workflow/`, `06_task/` implement it as separate deployable units — treat their combined routes as one spec service when doing gap analysis.
+>
+> **Note:** Similarly, `08_doc_notify_audit/` implements three distinct spec services (Documents, Communication, Insight-audit); `10_asset_analytic/` implements two (Assets, Insight-analytics). Keep their route prefixes distinct.
+
+---
+
 ## ⚙️ Development Commands
 
 - **Environment Setup**:
@@ -40,35 +77,43 @@ Before analyzing, writing, modifying, or reviewing any code in this repository, 
   ```
 - **Run a Service**:
   ```bash
-  # Identity service (port 8000)
+  # Identity service — spec: identity (/api/identity/v1) — port 8000
   uvicorn main:app --app-dir src/v1/01_identity --reload --host 0.0.0.0 --port 8000
 
-  # Revenue service (port 8001)
+  # Revenue service — spec: revenue (/api/revenue/v1) — port 8001
+  # Covers CRM (clients, leads, opportunities, quotations, contracts)
+  # + Billing (invoices, payments, collections)
   uvicorn main:app --app-dir src/v1/02_revenue --reload --host 0.0.0.0 --port 8001
 
-
-  # Billing service (port 8002)
+  # Billing sub-service — part of revenue spec service — port 8002
   uvicorn main:app --app-dir src/v1/03_billing --reload --host 0.0.0.0 --port 8002
 
-  # Work service (port 8003)
+  # Delivery service — Work units module — port 8003
   uvicorn main:app --app-dir src/v1/04_work --reload --host 0.0.0.0 --port 8003
 
-  # Workflow service (port 8004)
+  # Delivery service — Workflow engine module — port 8004
   uvicorn main:app --app-dir src/v1/05_workflow --reload --host 0.0.0.0 --port 8004
 
-  # Task service (port 8005)
+  # Delivery service — Tasks, handovers & time entries module — port 8005
   uvicorn main:app --app-dir src/v1/06_task --reload --host 0.0.0.0 --port 8005
 
-  # Approval service (port 8006)
+  # Control service — spec: control (/api/control/v1) — port 8006
+  # Covers approvals + SLA clocks
   uvicorn main:app --app-dir src/v1/07_approval --reload --host 0.0.0.0 --port 8006
 
-  # Document, Notification & Audit service (port 8007)
+  # Documents + Communication + Insight-audit — port 8007
+  # spec: documents (/api/documents/v1)
+  #       communication (/api/communication/v1)
+  #       insight-audit (/api/insight/v1 — audit endpoints only)
   uvicorn main:app --app-dir src/v1/08_doc_notify_audit --reload --host 0.0.0.0 --port 8007
 
-  # Resource, Planning & Performance service (port 8008)
+  # Management service — spec: management (/api/management/v1) — port 8008
+  # Covers planning, KPI performance tracking, resources and capacity
   uvicorn main:app --app-dir src/v1/09_res_plan_perf --reload --host 0.0.0.0 --port 8008
 
-  # Asset, Analytics & Platform service (port 8009)
+  # Assets + Insight-analytics — port 8009
+  # spec: assets (/api/assets/v1)
+  #       insight-analytics (/api/insight/v1 — dashboards/metrics/reports)
   uvicorn main:app --app-dir src/v1/10_asset_analytic --reload --host 0.0.0.0 --port 8009
   ```
 - **Run Tests** (per service — tests must be run from within the service directory):
@@ -85,31 +130,59 @@ top-level (non-relative) because `--app-dir` adds the service root to `sys.path`
 
 ```
 src/v1/
-├── 01_identity/          # Identity & authentication service (port 8000)
+├── 01_identity/          # Identity service — /api/identity/v1 (port 8000)
 │   ├── main.py           # FastAPI app entrypoint
 │   ├── config.py         # Pydantic settings (reads .env)
 │   ├── router.py         # Aggregates all route modules
 │   ├── dependencies.py   # FastAPI injectable dependencies
-│   ├── exceptions.py     # Service-specific HTTP exceptions
-│   ├── models/           # Domain models (dataclasses / ORM)
+│   ├── exceptions.py     # Service-specific HTTP exceptions (RFC 7807)
+│   ├── models/           # SQLAlchemy ORM models
 │   ├── schemas/          # Pydantic request & response schemas
 │   ├── services/         # Business logic layer
 │   ├── routes/           # Route handlers
 │   ├── utils/            # Utility functions (hashing, tokens, etc.)
 │   └── requirements.txt  # Service-specific dependencies
-├── 02_revenue/           # Revenue service (port 8001, same structure)
-
-├── 03_billing/           # Billing & invoicing service (port 8002, same structure)
-├── 04_work/              # Work & delivery service (port 8003, same structure)
-├── 05_workflow/          # Workflow & automation service (port 8004, same structure)
-├── 06_task/              # Task & effort service (port 8005, same structure)
-├── 07_approval/          # Approval & delegation service (port 8006, same structure)
-├── 08_doc_notify_audit/  # Document, notification & audit service (port 8007, same structure)
-├── 09_res_plan_perf/     # Resource, planning & performance service (port 8008, same structure)
-└── 10_asset_analytic/    # Asset, analytics & platform service (port 8009, same structure)
+│
+├── 02_revenue/           # Revenue service — /api/revenue/v1 (port 8001)
+│                         # Modules: Commercial CRM + Billing
+│
+├── 02_commercial/        # ⚠️  STALE — superseded by 02_revenue. Do not modify.
+│
+├── 03_billing/           # Billing sub-service — part of revenue spec (port 8002)
+│
+├── 04_work/              # Delivery service (work units) — /api/delivery/v1 (port 8003)
+│
+├── 05_workflow/          # Delivery service (workflow engine) — /api/delivery/v1 (port 8004)
+│
+├── 06_task/              # Delivery service (tasks/handovers/time) — /api/delivery/v1 (port 8005)
+│
+├── 07_approval/          # Control service — /api/control/v1 (port 8006)
+│                         # Modules: Approvals + SLA
+│
+├── 08_doc_notify_audit/  # Documents + Communication + Insight-audit (port 8007)
+│                         # Specs: /api/documents/v1 + /api/communication/v1 + /api/insight/v1 (audit)
+│
+├── 09_res_plan_perf/     # Management service — /api/management/v1 (port 8008)
+│                         # Modules: Planning + Performance (KPIs) + Resources/capacity
+│
+└── 10_asset_analytic/    # Assets + Insight-analytics (port 8009)
+                          # Specs: /api/assets/v1 + /api/insight/v1 (dashboards/metrics/reports)
 ```
 
+---
+
+## 🔌 Common Patterns (all services)
+
+Every service implements these shared contracts, also defined in the spec under **"Every service"** (`/api/{service}/v1`):
+
+| Pattern | How it works |
+|---------|-------------|
+| **Pagination** | Keyset cursor via `page.next_cursor`; `limit` 1–100 default 25 |
+| **Concurrency** | Optimistic locking: `ETag` on reads, `If-Match` on writes → `412` on mismatch, `428` if header missing |
+| **Idempotency** | `Idempotency-Key` UUID header on all `POST` mutations; replayed responses carry `Idempotent-Replayed: true` |
+| **Errors** | RFC 7807 Problem Details: `{type, title, status, code, detail, instance, request_id, retryable}` |
+| **Events** | Every mutation publishes a domain event (e.g. `identity.user.invited.v1`) |
+| **Internal** | `POST /internal/events` · `GET /internal/deliveries` · `POST /internal/deliveries/{id}/replay` |
+| **Health** | `GET /health` → `{"status": "ok", "service": "<name>"}` |
+
 - `.agents/` — Core architecture, Python, and REST guidelines
-
-
-

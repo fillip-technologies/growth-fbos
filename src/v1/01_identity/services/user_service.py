@@ -16,6 +16,7 @@ from exceptions import (
 from models.auth import RefreshToken, UserCredential
 from models.membership import UnitMembership
 from models.org_unit import OrgUnit
+from models.rbac import Role, RoleAssignment
 from models.user import User
 from schemas.common import PageInfo, PaginatedResponse
 from schemas.user import (
@@ -74,6 +75,7 @@ class UserService:
         organization_id: uuid.UUID,
         status: Optional[str] = None,
         unit_id: Optional[uuid.UUID] = None,
+        role_code: Optional[str] = None,
         q: Optional[str] = None,
         limit: int = 25,
         cursor: Optional[str] = None,
@@ -85,6 +87,22 @@ class UserService:
 
         if unit_id:
             query = query.where(User.home_unit_id == unit_id)
+
+        if role_code:
+            role_res = await session.execute(
+                select(Role).where(Role.code == role_code, Role.organization_id == organization_id)
+            )
+            role = role_res.scalar_one_or_none()
+            if not role:
+                return PaginatedResponse(
+                    data=[],
+                    page=PageInfo(next_cursor=None, has_more=False, limit=limit),
+                )
+            assigned_user_ids = select(RoleAssignment.user_id).where(
+                RoleAssignment.role_id == role.id,
+                RoleAssignment.organization_id == organization_id,
+            ).scalar_subquery()
+            query = query.where(User.id.in_(assigned_user_ids))
 
         if q:
             term = f"%{q}%"
@@ -237,8 +255,6 @@ class UserService:
             user.name = data.name
         if data.phone is not None:
             user.phone = data.phone
-        if data.user_type is not None:
-            user.user_type = data.user_type
         if data.manager_user_id is not None:
             user.manager_user_id = data.manager_user_id
         if data.home_unit_id is not None:
