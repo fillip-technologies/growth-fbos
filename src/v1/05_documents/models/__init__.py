@@ -9,11 +9,11 @@ from models.document import (
     DocumentVersion,
     RetentionPolicy,
     StorageObject,
+    UploadSession,
 )
 
 __all__ = [
     "Base",
-    # Document Models (9)
     "RetentionPolicy",
     "DocumentCategory",
     "Document",
@@ -23,4 +23,5 @@ __all__ = [
     "DocumentGrant",
     "DocumentShare",
     "DocumentAccessLog",
+    "UploadSession",
 ]

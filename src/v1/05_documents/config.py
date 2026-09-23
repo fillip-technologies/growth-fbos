@@ -9,7 +9,18 @@ class Settings(BaseSettings):
     port: int = 8005
     debug: bool = False
 
-    database_url: str = ""
+    jwt_secret: str = "fbos-local-secret-key-change-in-production"
+    jwt_algorithm: str = "HS256"
+
+    # Physical / Presigned Storage Settings
+    s3_bucket: str = "fbos-documents"
+    s3_region: str = "ap-south-1"
+    s3_endpoint_url: str = ""
+    public_share_base_url: str = "https://share.fbos.example.com/s"
+    max_upload_size_bytes: int = 104857600  # 100 MB default max
+
+    # Database
+    database_url: str = "mysql+aiomysql://root:fbos_root_password@db:3306/fbos_documents"
     db_ssl: bool = False
     db_pool_size: int = 10
     db_max_overflow: int = 20
