@@ -13,6 +13,7 @@ from exceptions import (
     InvoiceAlreadyIssuedError,
     InvoiceNotFoundError,
     InvoiceNotIssuedError,
+    PreconditionRequiredError,
     VersionConflictError,
 )
 from models.client import Client
@@ -231,7 +232,7 @@ class InvoiceService:
             try:
                 addr_dict = json.loads(client.billing_address) if isinstance(client.billing_address, str) else client.billing_address
                 place_of_supply = addr_dict.get("state_code", "29")
-            except Exception:
+            except (json.JSONDecodeError, AttributeError, TypeError):
                 place_of_supply = "29"
 
         processed_lines, totals = calculate_invoice_lines(
@@ -324,10 +325,11 @@ class InvoiceService:
         if not inv or inv.organization_id != org_id:
             raise InvoiceNotFoundError(str(invoice_id))
 
-        if if_match is not None:
-            expected_version = int(if_match.strip('"').replace("W/", ""))
-            if inv.version != expected_version:
-                raise VersionConflictError(inv.version)
+        if if_match is None:
+            raise PreconditionRequiredError()
+        expected_version = int(if_match.strip('"').replace("W/", ""))
+        if inv.version != expected_version:
+            raise VersionConflictError(inv.version)
 
         if inv.status == "issued":
             raise InvoiceAlreadyIssuedError(inv.invoice_no or str(invoice_id))
@@ -356,7 +358,7 @@ class InvoiceService:
             try:
                 ad = json.loads(client.billing_address) if isinstance(client.billing_address, str) else client.billing_address
                 addr_str = f"{ad.get('line1', '')}, {ad.get('city', '')} {ad.get('postal_code', '')}"
-            except Exception:
+            except (json.JSONDecodeError, AttributeError, TypeError):
                 addr_str = ""
 
         inv.client_snapshot = {

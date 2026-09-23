@@ -51,3 +51,6 @@ class PaymentResponse(BaseModel):
     unallocated_amount: Money
     status: Literal["pending", "confirmed", "failed", "refunded", "partially_refunded"]
     allocations: List[PaymentAllocationResponse]
+    # Not part of the documented Payment schema, but exposed so the route
+    # layer can set the ETag header that allocatePayment's If-Match requires.
+    version: int = 1

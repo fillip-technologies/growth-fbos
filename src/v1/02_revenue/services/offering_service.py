@@ -8,26 +8,25 @@ from exceptions import DuplicateCodeError, OfferingNotFoundError
 from models.offering import Offering
 from schemas.common import Money, PageMeta, PageResponse, decode_cursor, encode_cursor
 from schemas.offering import OfferingCreate, OfferingResponse
+from schemas.opportunity import VerticalRef
 
 
 def format_offering_response(offering: Offering) -> OfferingResponse:
-    price: Optional[Money] = None
-    if offering.list_price is not None:
-        price = Money(amount=float(offering.list_price), currency="INR")
+    price = Money(amount=float(offering.list_price or 0), currency="INR")
+    gst_rate = float(offering.gst_code) if offering.gst_code else 18.0
 
     return OfferingResponse(
         id=offering.id,
         code=offering.code,
         name=offering.name,
-        vertical_id=offering.vertical_id,
-        sac_code=offering.sac_code,
-        gst_rate=18.0,
+        vertical=VerticalRef(id=offering.vertical_id, name="Vertical"),
+        sac_code=offering.sac_code or "",
+        gst_rate=gst_rate,
         unit=offering.unit or "project",
         billing_model=offering.billing_model,
         list_price=price,
         default_work_template_code=offering.default_work_template_code,
         status=offering.status,
-        version=1,
     )
 
 

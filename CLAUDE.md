@@ -38,38 +38,46 @@ Before analyzing, writing, modifying, or reviewing any code in this repository, 
   ```bash
   pip install -r src/v1/01_identity/requirements.txt
   ```
+- **Configure environment files** — each service reads its own `.env` (gitignored); every
+  service ships a tracked `.env.example` with working docker-compose defaults, so onboarding is
+  copy-paste:
+  ```bash
+  for d in src/v1/*/; do cp "$d.env.example" "$d.env"; done
+  cp .env.docker.example .env   # root .env, used by the `db` container in docker-compose
+  ```
+  The defaults already point at the `db` service's docker-compose hostname/credentials, so
+  `docker compose up` works immediately after copying — no values need editing for local dev.
 - **Run a Service**:
   ```bash
-  # Identity service (port 8000)
-  uvicorn main:app --app-dir src/v1/01_identity --reload --host 0.0.0.0 --port 8000
+  # Gateway service (port 8000) — BFF: routing, aggregated screens
+  uvicorn main:app --app-dir src/v1/00_gateway --reload --host 0.0.0.0 --port 8000
 
-  # Revenue service (port 8001)
-  uvicorn main:app --app-dir src/v1/02_revenue --reload --host 0.0.0.0 --port 8001
+  # Identity service (port 8001) — Authentication, Organization and access
+  uvicorn main:app --app-dir src/v1/01_identity --reload --host 0.0.0.0 --port 8001
 
+  # Revenue service (port 8002) — Commercial (CRM), Billing
+  uvicorn main:app --app-dir src/v1/02_revenue --reload --host 0.0.0.0 --port 8002
 
-  # Billing service (port 8002)
-  uvicorn main:app --app-dir src/v1/03_billing --reload --host 0.0.0.0 --port 8002
+  # Delivery service (port 8003) — Work units, Workflow, Tasks
+  uvicorn main:app --app-dir src/v1/03_delivery --reload --host 0.0.0.0 --port 8003
 
-  # Work service (port 8003)
-  uvicorn main:app --app-dir src/v1/04_work --reload --host 0.0.0.0 --port 8003
+  # Control service (port 8004) — Approvals, SLA
+  uvicorn main:app --app-dir src/v1/04_control --reload --host 0.0.0.0 --port 8004
 
-  # Workflow service (port 8004)
-  uvicorn main:app --app-dir src/v1/05_workflow --reload --host 0.0.0.0 --port 8004
+  # Documents service (port 8005)
+  uvicorn main:app --app-dir src/v1/05_documents --reload --host 0.0.0.0 --port 8005
 
-  # Task service (port 8005)
-  uvicorn main:app --app-dir src/v1/06_task --reload --host 0.0.0.0 --port 8005
+  # Communication service (port 8006) — Notifications, inbox and webhooks
+  uvicorn main:app --app-dir src/v1/06_communication --reload --host 0.0.0.0 --port 8006
 
-  # Approval service (port 8006)
-  uvicorn main:app --app-dir src/v1/07_approval --reload --host 0.0.0.0 --port 8006
+  # Management service (port 8007) — Planning, Performance (KPIs), Resources and capacity
+  uvicorn main:app --app-dir src/v1/07_management --reload --host 0.0.0.0 --port 8007
 
-  # Document, Notification & Audit service (port 8007)
-  uvicorn main:app --app-dir src/v1/08_doc_notify_audit --reload --host 0.0.0.0 --port 8007
+  # Insight service (port 8008) — Audit, Analytics
+  uvicorn main:app --app-dir src/v1/08_insight --reload --host 0.0.0.0 --port 8008
 
-  # Resource, Planning & Performance service (port 8008)
-  uvicorn main:app --app-dir src/v1/09_res_plan_perf --reload --host 0.0.0.0 --port 8008
-
-  # Asset, Analytics & Platform service (port 8009)
-  uvicorn main:app --app-dir src/v1/10_asset_analytic --reload --host 0.0.0.0 --port 8009
+  # Assets service (port 8009)
+  uvicorn main:app --app-dir src/v1/09_assets --reload --host 0.0.0.0 --port 8009
   ```
 - **Run Tests** (per service — tests must be run from within the service directory):
   ```bash
@@ -83,33 +91,38 @@ Before analyzing, writing, modifying, or reviewing any code in this repository, 
 Each service under `src/v1/` is independently runnable. All imports within a service are
 top-level (non-relative) because `--app-dir` adds the service root to `sys.path`.
 
+The 10 services and their base paths mirror `ref/fbos-api-reference (1).html` ("The 10 services"
+table) exactly — module boundaries, not just names, were aligned to that spec:
+
 ```
 src/v1/
-├── 01_identity/          # Identity & authentication service (port 8000)
+├── 00_gateway/           # Gateway service (port 8000) — /api/bff/v1 — Aggregated screens
 │   ├── main.py           # FastAPI app entrypoint
 │   ├── config.py         # Pydantic settings (reads .env)
 │   ├── router.py         # Aggregates all route modules
 │   ├── dependencies.py   # FastAPI injectable dependencies
 │   ├── exceptions.py     # Service-specific HTTP exceptions
-│   ├── models/           # Domain models (dataclasses / ORM)
 │   ├── schemas/          # Pydantic request & response schemas
 │   ├── services/         # Business logic layer
 │   ├── routes/           # Route handlers
-│   ├── utils/            # Utility functions (hashing, tokens, etc.)
+│   ├── utils/            # Utility functions
 │   └── requirements.txt  # Service-specific dependencies
-├── 02_revenue/           # Revenue service (port 8001, same structure)
-
-├── 03_billing/           # Billing & invoicing service (port 8002, same structure)
-├── 04_work/              # Work & delivery service (port 8003, same structure)
-├── 05_workflow/          # Workflow & automation service (port 8004, same structure)
-├── 06_task/              # Task & effort service (port 8005, same structure)
-├── 07_approval/          # Approval & delegation service (port 8006, same structure)
-├── 08_doc_notify_audit/  # Document, notification & audit service (port 8007, same structure)
-├── 09_res_plan_perf/     # Resource, planning & performance service (port 8008, same structure)
-└── 10_asset_analytic/    # Asset, analytics & platform service (port 8009, same structure)
+├── 01_identity/          # Identity service (port 8001) — /api/identity/v1 — Authentication, Organization and access
+│   └── ...                 (same structure as above, plus models/ and database/ — every service below follows it)
+├── 02_revenue/           # Revenue service (port 8002) — /api/revenue/v1 — Commercial (CRM), Billing
+├── 03_delivery/          # Delivery service (port 8003) — /api/delivery/v1 — Work units, Workflow, Tasks
+├── 04_control/           # Control service (port 8004) — /api/control/v1 — Approvals, SLA
+├── 05_documents/         # Documents service (port 8005) — /api/documents/v1 — Documents
+├── 06_communication/     # Communication service (port 8006) — /api/communication/v1 — Notifications, inbox and webhooks
+├── 07_management/        # Management service (port 8007) — /api/management/v1 — Planning, Performance (KPIs), Resources and capacity
+├── 08_insight/           # Insight service (port 8008) — /api/insight/v1 — Audit, Analytics
+└── 09_assets/            # Assets service (port 8009) — /api/assets/v1 — Assets
 ```
 
 - `.agents/` — Core architecture, Python, and REST guidelines
+- `ref/fbos-api-reference (1).html` — source-of-truth API spec; service/module boundaries, base
+  paths and ports above are derived from it. Every service's `router.py` mounts routes at both
+  `/v1` and its documented `/api/<service>/v1` base path.
 
 
 

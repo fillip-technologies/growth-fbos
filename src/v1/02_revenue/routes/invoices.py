@@ -4,7 +4,7 @@ from typing import Optional
 
 from fastapi import APIRouter, Header, Query, Response, status
 
-from dependencies import DatabaseSession, OrgId, UserId
+from dependencies import DatabaseSession, OrgId, UserId, require_idempotency_key
 from schemas.common import PageResponse
 from schemas.invoice import (
     CreditNoteCreate,
@@ -93,6 +93,8 @@ async def issue_invoice(
     idempotency_key: Optional[str] = Header(None, alias="Idempotency-Key"),
 ) -> InvoiceResponse:
     """Issue a draft invoice, allocating a gapless sequence number and freezing it."""
+    require_idempotency_key(idempotency_key)
+
     invoice = await InvoiceService.issue_invoice(
         session=session,
         invoice_id=invoice_id,
@@ -116,6 +118,8 @@ async def issue_credit_note(
     idempotency_key: Optional[str] = Header(None, alias="Idempotency-Key"),
 ) -> InvoiceResponse:
     """Issue a credit note against an issued invoice with gapless numbering."""
+    require_idempotency_key(idempotency_key)
+
     credit_note = await InvoiceService.issue_credit_note(
         session=session,
         invoice_id=invoice_id,

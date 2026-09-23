@@ -9,6 +9,7 @@ from exceptions import (
     ContractNotFoundError,
     InvalidStateTransitionError,
     PaymentTermsTotalError,
+    PreconditionRequiredError,
     QuotationNotAcceptedError,
     QuotationNotFoundError,
     VersionConflictError,
@@ -178,10 +179,11 @@ class ContractService:
         if not contract:
             raise ContractNotFoundError(str(contract_id))
 
-        if if_match is not None:
-            expected_version = int(if_match.strip('"').replace("W/", ""))
-            if contract.version != expected_version:
-                raise VersionConflictError(contract.version)
+        if if_match is None:
+            raise PreconditionRequiredError()
+        expected_version = int(if_match.strip('"').replace("W/", ""))
+        if contract.version != expected_version:
+            raise VersionConflictError(contract.version)
 
         if contract.status not in ("draft", "pending_signature"):
             raise InvalidStateTransitionError(contract.status, "activate")

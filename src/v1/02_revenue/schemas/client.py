@@ -1,8 +1,10 @@
 import uuid
+from datetime import datetime
 from typing import List, Literal, Optional
 from pydantic import BaseModel, ConfigDict, Field
 
 from schemas.common import Address
+from schemas.opportunity import UserRef
 
 
 class ContactCreate(BaseModel):
@@ -54,8 +56,12 @@ class ClientResponse(BaseModel):
     client_type: str
     pan: Optional[str] = None
     gstin: Optional[str] = None
-    status: str
+    state_code: Optional[str] = None
     billing_address: Optional[Address] = None
-    owner_user_id: uuid.UUID
+    owner: UserRef
+    status: str
+    source: Optional[str] = None
+    attributes: dict = Field(default_factory=dict)
     version: int
+    created_at: datetime
     contacts: List[ContactResponse] = []

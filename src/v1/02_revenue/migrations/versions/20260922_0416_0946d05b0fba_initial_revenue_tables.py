@@ -81,8 +81,10 @@ def upgrade() -> None:
     sa.Column('status', sa.String(length=50), nullable=False),
     sa.Column('billing_address', sa.Text(), nullable=True),
     sa.Column('owner_user_id', database.types.UUIDType(length=36), nullable=False),
+    sa.Column('source', sa.String(length=100), nullable=True),
     sa.Column('closed_at', sa.DateTime(), nullable=True),
     sa.Column('attributes', sa.JSON(), nullable=True),
+    sa.Column('created_at', sa.DateTime(), server_default=sa.text('now()'), nullable=False),
     sa.Column('version', sa.Integer(), nullable=False),
     sa.PrimaryKeyConstraint('id')
     )
@@ -133,6 +135,7 @@ def upgrade() -> None:
     sa.Column('id', database.types.UUIDType(length=36), nullable=False),
     sa.Column('organization_id', database.types.UUIDType(length=36), nullable=False),
     sa.Column('vertical_id', database.types.UUIDType(length=36), nullable=True),
+    sa.Column('client_id', database.types.UUIDType(length=36), nullable=True),
     sa.Column('name', sa.String(length=255), nullable=False),
     sa.Column('contact_name', sa.String(length=255), nullable=True),
     sa.Column('contact_email', sa.String(length=255), nullable=True),
@@ -145,9 +148,12 @@ def upgrade() -> None:
     sa.Column('loss_reason', sa.String(length=512), nullable=True),
     sa.Column('scope_path', sa.String(length=2048), nullable=True),
     sa.Column('attributes', sa.JSON(), nullable=True),
+    sa.Column('created_at', sa.DateTime(), server_default=sa.text('now()'), nullable=False),
     sa.Column('version', sa.Integer(), nullable=False),
+    sa.ForeignKeyConstraint(['client_id'], ['clients.id'], ondelete='SET NULL'),
     sa.PrimaryKeyConstraint('id')
     )
+    op.create_index(op.f('ix_leads_client_id'), 'leads', ['client_id'], unique=False)
     op.create_index(op.f('ix_leads_organization_id'), 'leads', ['organization_id'], unique=False)
     op.create_index(op.f('ix_leads_owner_user_id'), 'leads', ['owner_user_id'], unique=False)
     op.create_index(op.f('ix_leads_scope_path'), 'leads', ['scope_path'], unique=False)
@@ -187,6 +193,7 @@ def upgrade() -> None:
     sa.Column('status', sa.String(length=50), nullable=False),
     sa.Column('recorded_by', database.types.UUIDType(length=36), nullable=False),
     sa.Column('received_at', sa.DateTime(), server_default=sa.text('now()'), nullable=False),
+    sa.Column('version', sa.Integer(), nullable=False),
     sa.PrimaryKeyConstraint('id')
     )
     op.create_index(op.f('ix_payments_client_id'), 'payments', ['client_id'], unique=False)
@@ -599,6 +606,7 @@ def downgrade() -> None:
     op.drop_index(op.f('ix_leads_scope_path'), table_name='leads')
     op.drop_index(op.f('ix_leads_owner_user_id'), table_name='leads')
     op.drop_index(op.f('ix_leads_organization_id'), table_name='leads')
+    op.drop_index(op.f('ix_leads_client_id'), table_name='leads')
     op.drop_table('leads')
     op.drop_index(op.f('ix_invoice_series_fin_registration_id'), table_name='invoice_series')
     op.drop_table('invoice_series')

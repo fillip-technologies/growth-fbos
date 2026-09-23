@@ -1,1 +1,0 @@
-"""Approval service root package."""

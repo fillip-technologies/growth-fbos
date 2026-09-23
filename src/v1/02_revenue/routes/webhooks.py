@@ -1,3 +1,4 @@
+import json
 from typing import Optional
 
 from fastapi import APIRouter, Header, Request
@@ -20,7 +21,7 @@ async def razorpay_webhook(
     raw_body = await request.body()
     try:
         payload = await request.json()
-    except Exception:
+    except json.JSONDecodeError:
         payload = {}
 
     response = await WebhookService.process_razorpay_webhook(

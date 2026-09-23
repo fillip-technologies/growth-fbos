@@ -1,7 +1,7 @@
 import uuid
 from typing import Optional
 
-from fastapi import APIRouter, Header, Query, Response, status
+from fastapi import APIRouter, Header, Query, status
 
 from dependencies import DatabaseSession, OrgId
 from schemas.common import PageResponse
@@ -36,7 +36,6 @@ async def create_offering(
     payload: OfferingCreate,
     session: DatabaseSession,
     org_id: OrgId,
-    response: Response,
     idempotency_key: Optional[str] = Header(None, alias="Idempotency-Key"),
 ) -> OfferingResponse:
     """Create a new service catalog offering."""
@@ -46,7 +45,6 @@ async def create_offering(
         payload=payload,
     )
     await session.commit()
-    response.headers["ETag"] = f'"{offering.version}"'
     return offering
 
 
@@ -55,13 +53,10 @@ async def get_offering(
     offering_id: uuid.UUID,
     session: DatabaseSession,
     org_id: OrgId,
-    response: Response,
 ) -> OfferingResponse:
     """Retrieve details of a specific service offering."""
-    offering = await OfferingService.get_offering(
+    return await OfferingService.get_offering(
         session=session,
         offering_id=offering_id,
         org_id=org_id,
     )
-    response.headers["ETag"] = f'"{offering.version}"'
-    return offering

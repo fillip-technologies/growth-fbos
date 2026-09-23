@@ -1,7 +1,7 @@
 import json
 import uuid
 from datetime import datetime, timezone
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 from typing import List, Optional
 
 from sqlalchemy import func, select
@@ -11,6 +11,7 @@ from exceptions import (
     InvalidStateTransitionError,
     OfferingNotFoundError,
     OpportunityNotFoundError,
+    PreconditionRequiredError,
     QuotationFrozenError,
     QuotationNotFoundError,
     VersionConflictError,
@@ -70,7 +71,7 @@ def calculate_tax_and_totals(
 
         try:
             gst_rate_val = Decimal(str(offering.gst_code or "18.0"))
-        except Exception:
+        except InvalidOperation:
             gst_rate_val = Decimal("18.0")
 
         if is_inter_state:
@@ -193,7 +194,7 @@ class QuotationService:
             try:
                 addr_dict = json.loads(client.billing_address) if isinstance(client.billing_address, str) else client.billing_address
                 place_of_supply = addr_dict.get("state_code", "29")
-            except Exception:
+            except (json.JSONDecodeError, AttributeError, TypeError):
                 place_of_supply = "29"
         if not place_of_supply:
             place_of_supply = "29"
@@ -296,10 +297,11 @@ class QuotationService:
         if not quote:
             raise QuotationNotFoundError(str(quotation_id))
 
-        if if_match is not None:
-            expected_version = int(if_match.strip('"').replace("W/", ""))
-            if quote.version != expected_version:
-                raise VersionConflictError(quote.version)
+        if if_match is None:
+            raise PreconditionRequiredError()
+        expected_version = int(if_match.strip('"').replace("W/", ""))
+        if quote.version != expected_version:
+            raise VersionConflictError(quote.version)
 
         if quote.status != "draft":
             raise QuotationFrozenError("replace items on", quote.status)
@@ -361,10 +363,11 @@ class QuotationService:
         if not quote:
             raise QuotationNotFoundError(str(quotation_id))
 
-        if if_match is not None:
-            expected_version = int(if_match.strip('"').replace("W/", ""))
-            if quote.version != expected_version:
-                raise VersionConflictError(quote.version)
+        if if_match is None:
+            raise PreconditionRequiredError()
+        expected_version = int(if_match.strip('"').replace("W/", ""))
+        if quote.version != expected_version:
+            raise VersionConflictError(quote.version)
 
         if quote.status != "draft":
             raise InvalidStateTransitionError(quote.status, "submit")
@@ -392,10 +395,11 @@ class QuotationService:
         if not quote:
             raise QuotationNotFoundError(str(quotation_id))
 
-        if if_match is not None:
-            expected_version = int(if_match.strip('"').replace("W/", ""))
-            if quote.version != expected_version:
-                raise VersionConflictError(quote.version)
+        if if_match is None:
+            raise PreconditionRequiredError()
+        expected_version = int(if_match.strip('"').replace("W/", ""))
+        if quote.version != expected_version:
+            raise VersionConflictError(quote.version)
 
         if quote.status not in ("approved", "draft"):
             raise InvalidStateTransitionError(quote.status, "send")
@@ -491,10 +495,11 @@ class QuotationService:
         if not quote:
             raise QuotationNotFoundError(str(quotation_id))
 
-        if if_match is not None:
-            expected_version = int(if_match.strip('"').replace("W/", ""))
-            if quote.version != expected_version:
-                raise VersionConflictError(quote.version)
+        if if_match is None:
+            raise PreconditionRequiredError()
+        expected_version = int(if_match.strip('"').replace("W/", ""))
+        if quote.version != expected_version:
+            raise VersionConflictError(quote.version)
 
         if quote.status not in ("sent", "approved", "draft"):
             raise InvalidStateTransitionError(quote.status, "accept")
@@ -525,10 +530,11 @@ class QuotationService:
         if not quote:
             raise QuotationNotFoundError(str(quotation_id))
 
-        if if_match is not None:
-            expected_version = int(if_match.strip('"').replace("W/", ""))
-            if quote.version != expected_version:
-                raise VersionConflictError(quote.version)
+        if if_match is None:
+            raise PreconditionRequiredError()
+        expected_version = int(if_match.strip('"').replace("W/", ""))
+        if quote.version != expected_version:
+            raise VersionConflictError(quote.version)
 
         if quote.status != "sent":
             raise InvalidStateTransitionError(quote.status, "reject")

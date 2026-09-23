@@ -2,7 +2,7 @@ import base64
 import json
 from datetime import datetime, timezone
 from typing import Any, Generic, List, Optional, TypeVar
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_serializer
 
 T = TypeVar("T")
 
@@ -18,14 +18,31 @@ class Address(BaseModel):
 
 
 class Money(BaseModel):
+    """Money amount and ISO 4217 currency.
+
+    Internally kept as a float so services can do arithmetic on ``.amount``
+    without conversions, but the spec requires money to travel on the wire as
+    a decimal string with 2 places (never floating-point), so the amount is
+    rendered as a string on serialization.
+    """
+
     amount: float = Field(..., description="Numeric money amount")
     currency: str = Field("INR", description="ISO 4217 3-letter currency code")
 
+    @field_serializer("amount")
+    def serialize_amount(self, amount: float) -> str:
+        return f"{amount:.2f}"
+
 
 class Consent(BaseModel):
-    granted: bool = Field(..., description="Consent granted flag")
-    timestamp: datetime = Field(default_factory=lambda: datetime.now(timezone.utc), description="Timestamp of consent")
-    source: str = Field(..., description="Source of consent e.g. web_form, email")
+    """Consent evidence captured with personal data (DPDP Act, 2023)."""
+
+    given: bool = Field(..., description="Whether consent was given")
+    text: str = Field(..., description="The consent text shown to the person")
+    captured_at: datetime = Field(
+        default_factory=lambda: datetime.now(timezone.utc), description="When consent was captured"
+    )
+    channel: str = Field(..., description="Channel consent was captured on e.g. website_form")
 
 
 class PageMeta(BaseModel):
@@ -50,5 +67,8 @@ def decode_cursor(cursor_str: str) -> dict[str, Any]:
     try:
         decoded_bytes = base64.urlsafe_b64decode(cursor_str.encode("ascii"))
         return json.loads(decoded_bytes.decode("utf-8"))
-    except Exception:
+    except ValueError:
+        # Covers binascii.Error (bad base64), json.JSONDecodeError and
+        # UnicodeDecodeError — all ValueError subclasses raised by a
+        # malformed or tampered opaque cursor.
         return {}
