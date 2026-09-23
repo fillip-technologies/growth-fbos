@@ -1,222 +1,252 @@
-from typing import Optional
+from typing import Any, Optional
 from fastapi import HTTPException, status
 
 
-class DocumentNotFoundError(HTTPException):
+class DocumentsServiceError(HTTPException):
+    """Base exception for all Documents service domain errors conforming to RFC 7807."""
+
+    def __init__(
+        self,
+        status_code: int,
+        code: str,
+        message: str,
+        meta: Optional[dict[str, Any]] = None,
+        details: Optional[list[dict[str, Any]]] = None,
+    ) -> None:
+        self.code = code
+        self.message = message
+        self.meta = meta
+        self.details = details
+        payload: dict[str, Any] = {
+            "code": code,
+            "message": message,
+            "status": status_code,
+        }
+        if meta is not None:
+            payload["meta"] = meta
+        if details is not None:
+            payload["details"] = details
+        super().__init__(status_code=status_code, detail=payload)
+
+
+class DocumentNotFoundError(DocumentsServiceError):
+    """404: Document not found or outside caller scope."""
+
     def __init__(self, document_id: Optional[str] = None) -> None:
-        message = f"Document '{document_id}' not found" if document_id is not None else "Document not found"
         super().__init__(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail={"code": "DOCUMENT_NOT_FOUND", "message": message, "status": 404},
+            code="NOT_FOUND",
+            message="The id does not exist, or exists outside every scope you are granted. FBOS does not reveal which.",
         )
 
 
-class DocumentCategoryNotFoundError(HTTPException):
-    def __init__(self, category_id: Optional[str] = None) -> None:
-        message = (
-            f"Document category '{category_id}' not found"
-            if category_id is not None
-            else "Document category not found"
-        )
+class VersionNotFoundError(DocumentsServiceError):
+    """404: Version not found."""
+
+    def __init__(self, version_no: Optional[int] = None) -> None:
         super().__init__(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail={"code": "DOCUMENT_CATEGORY_NOT_FOUND", "message": message, "status": 404},
+            code="NOT_FOUND",
+            message="The requested document version does not exist.",
         )
 
 
-class DocumentVersionNotFoundError(HTTPException):
-    def __init__(self, version_id: Optional[str] = None) -> None:
-        message = (
-            f"Document version '{version_id}' not found"
-            if version_id is not None
-            else "Document version not found"
-        )
-        super().__init__(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail={"code": "DOCUMENT_VERSION_NOT_FOUND", "message": message, "status": 404},
-        )
+class ShareNotFoundError(DocumentsServiceError):
+    """404: Share link not found."""
 
-
-class DocumentShareNotFoundError(HTTPException):
     def __init__(self, share_id: Optional[str] = None) -> None:
-        message = (
-            f"Document share '{share_id}' not found"
-            if share_id is not None
-            else "Document share not found"
-        )
         super().__init__(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail={"code": "DOCUMENT_SHARE_NOT_FOUND", "message": message, "status": 404},
+            code="NOT_FOUND",
+            message="The id does not exist, or exists outside every scope you are granted. FBOS does not reveal which.",
         )
 
 
-class DocumentShareExpiredError(HTTPException):
-    def __init__(self, share_id: str) -> None:
-        super().__init__(
-            status_code=status.HTTP_410_GONE,
-            detail={
-                "code": "DOCUMENT_SHARE_EXPIRED",
-                "message": f"Document share '{share_id}' has expired or reached download limit",
-                "status": 410,
-            },
-        )
+class UploadNotFoundError(DocumentsServiceError):
+    """404: Upload session not found."""
 
-
-class DocumentLockedError(HTTPException):
-    def __init__(self, document_id: str) -> None:
-        super().__init__(
-            status_code=status.HTTP_423_LOCKED,
-            detail={
-                "code": "DOCUMENT_LOCKED",
-                "message": f"Document '{document_id}' is locked or under legal hold",
-                "status": 423,
-            },
-        )
-
-
-class NotificationNotFoundError(HTTPException):
-    def __init__(self, notification_id: Optional[str] = None) -> None:
-        message = (
-            f"Notification '{notification_id}' not found"
-            if notification_id is not None
-            else "Notification not found"
-        )
+    def __init__(self, upload_id: Optional[str] = None) -> None:
         super().__init__(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail={"code": "NOTIFICATION_NOT_FOUND", "message": message, "status": 404},
+            code="NOT_FOUND",
+            message="The upload session was not found.",
         )
 
 
-class NotificationTemplateNotFoundError(HTTPException):
-    def __init__(self, template_code: Optional[str] = None) -> None:
-        message = (
-            f"Notification template '{template_code}' not found"
-            if template_code is not None
-            else "Notification template not found"
-        )
+class CategoryNotFoundError(DocumentsServiceError):
+    """404: Document category not found."""
+
+    def __init__(self, category_code: Optional[str] = None) -> None:
         super().__init__(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail={"code": "TEMPLATE_NOT_FOUND", "message": message, "status": 404},
+            code="NOT_FOUND",
+            message=f"Document category '{category_code}' was not found.",
         )
 
 
-class NotificationRuleNotFoundError(HTTPException):
-    def __init__(self, rule_id: Optional[str] = None) -> None:
-        message = (
-            f"Notification rule '{rule_id}' not found"
-            if rule_id is not None
-            else "Notification rule not found"
-        )
+class FileTooLargeError(DocumentsServiceError):
+    """413: Exceeds 100 MB or the category limit."""
+
+    def __init__(self, max_bytes: int = 104857600) -> None:
         super().__init__(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail={"code": "NOTIFICATION_RULE_NOT_FOUND", "message": message, "status": 404},
+            status_code=getattr(status, "HTTP_413_CONTENT_TOO_LARGE", 413),
+            code="FILE_TOO_LARGE",
+            message="Exceeds 100 MB or the category limit.",
+            meta={"max_bytes": max_bytes},
         )
 
 
-class DeliveryNotFoundError(HTTPException):
-    def __init__(self, delivery_id: Optional[str] = None) -> None:
-        message = f"Delivery '{delivery_id}' not found" if delivery_id is not None else "Delivery not found"
+class MimeTypeNotAllowedError(DocumentsServiceError):
+    """415: The category doesn't accept this MIME type."""
+
+    def __init__(self, mime_type: str) -> None:
         super().__init__(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail={"code": "DELIVERY_NOT_FOUND", "message": message, "status": 404},
+            status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
+            code="MIME_TYPE_NOT_ALLOWED",
+            message="The category doesn't accept this MIME type.",
+            meta={"mime_type": mime_type},
         )
 
 
-class ChannelNotFoundError(HTTPException):
-    def __init__(self, channel_type: Optional[str] = None) -> None:
-        message = (
-            f"Notification channel for '{channel_type}' not found or inactive"
-            if channel_type is not None
-            else "Notification channel not found"
-        )
+class DocumentLockedError(DocumentsServiceError):
+    """409: An approved version locks the document against new versions."""
+
+    def __init__(self, message: str = "An approved version locks the document against new versions.") -> None:
         super().__init__(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail={"code": "CHANNEL_NOT_FOUND", "message": message, "status": 404},
+            status_code=status.HTTP_409_CONFLICT,
+            code="DOCUMENT_LOCKED",
+            message=message,
         )
 
 
-class SuppressedRecipientError(HTTPException):
-    def __init__(self, address: str, channel_type: str) -> None:
+class ChecksumMismatchError(DocumentsServiceError):
+    """422: SHA-256 or size of the stored object differs from declared values."""
+
+    def __init__(self) -> None:
         super().__init__(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail={
-                "code": "RECIPIENT_SUPPRESSED",
-                "message": f"Recipient '{address}' is suppressed for channel '{channel_type}'",
-                "status": 422,
-            },
+            code="CHECKSUM_MISMATCH",
+            message="SHA-256 or size of the stored object differs from the declared values.",
         )
 
 
-class GovernancePolicyNotFoundError(HTTPException):
-    def __init__(self, policy_id: Optional[str] = None) -> None:
-        message = (
-            f"Governance policy '{policy_id}' not found"
-            if policy_id is not None
-            else "Governance policy not found"
-        )
-        super().__init__(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail={"code": "GOVERNANCE_POLICY_NOT_FOUND", "message": message, "status": 404},
-        )
+class DocumentScanPendingError(DocumentsServiceError):
+    """409: Virus scan not finished (usually under 30 seconds). Retryable."""
 
-
-class ComplianceRequirementNotFoundError(HTTPException):
-    def __init__(self, requirement_id: Optional[str] = None) -> None:
-        message = (
-            f"Compliance requirement '{requirement_id}' not found"
-            if requirement_id is not None
-            else "Compliance requirement not found"
-        )
-        super().__init__(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail={"code": "COMPLIANCE_REQUIREMENT_NOT_FOUND", "message": message, "status": 404},
-        )
-
-
-class ComplianceEvidenceNotFoundError(HTTPException):
-    def __init__(self, evidence_id: Optional[str] = None) -> None:
-        message = (
-            f"Compliance evidence '{evidence_id}' not found"
-            if evidence_id is not None
-            else "Compliance evidence not found"
-        )
-        super().__init__(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail={"code": "COMPLIANCE_EVIDENCE_NOT_FOUND", "message": message, "status": 404},
-        )
-
-
-class DuplicateDocumentCodeError(HTTPException):
-    def __init__(self, code: str) -> None:
+    def __init__(self) -> None:
         super().__init__(
             status_code=status.HTTP_409_CONFLICT,
-            detail={
-                "code": "DUPLICATE_DOCUMENT_CODE",
-                "message": f"Document with code '{code}' already exists",
-                "status": 409,
-            },
+            code="DOCUMENT_SCAN_PENDING",
+            message="Virus scan not finished (usually under 30 seconds).",
         )
 
 
-class DuplicatePolicyCodeError(HTTPException):
-    def __init__(self, code: str) -> None:
+class DocumentInfectedError(DocumentsServiceError):
+    """409: File failed the virus scan."""
+
+    def __init__(self) -> None:
         super().__init__(
             status_code=status.HTTP_409_CONFLICT,
-            detail={
-                "code": "DUPLICATE_POLICY_CODE",
-                "message": f"Governance policy with code '{code}' already exists",
-                "status": 409,
-            },
+            code="DOCUMENT_INFECTED",
+            message="Malware detected; the file is quarantined.",
         )
 
 
-class DuplicateComplianceCodeError(HTTPException):
-    def __init__(self, code: str) -> None:
+class ShareExpiredError(DocumentsServiceError):
+    """410: Share expired, was revoked or hit its download limit."""
+
+    def __init__(self) -> None:
         super().__init__(
-            status_code=status.HTTP_409_CONFLICT,
-            detail={
-                "code": "DUPLICATE_COMPLIANCE_CODE",
-                "message": f"Compliance requirement with code '{code}' already exists",
-                "status": 409,
-            },
+            status_code=status.HTTP_410_GONE,
+            code="SHARE_EXPIRED",
+            message="Share expired, was revoked or hit its download limit.",
+        )
+
+
+class UploadExpiredError(DocumentsServiceError):
+    """410: Upload session expired."""
+
+    def __init__(self) -> None:
+        super().__init__(
+            status_code=status.HTTP_410_GONE,
+            code="UPLOAD_EXPIRED",
+            message="Complete was called after the 1-hour upload window.",
+        )
+
+
+class SharePasswordRequiredError(DocumentsServiceError):
+    """401: Password-protected share without (or with a wrong) X-Share-Password."""
+
+    def __init__(self) -> None:
+        super().__init__(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            code="SHARE_PASSWORD_REQUIRED",
+            message="Password-protected share without (or with a wrong) X-Share-Password.",
+        )
+
+
+class SubjectNotFoundError(DocumentsServiceError):
+    """422: Linked business object not found or invalid."""
+
+    def __init__(self, message: str = "subject.type is unknown, or the object does not exist or is not visible to you.") -> None:
+        super().__init__(
+            status_code=getattr(status, "HTTP_422_UNPROCESSABLE_CONTENT", 422),
+            code="SUBJECT_NOT_FOUND",
+            message=message,
+        )
+
+
+class RestrictedDocumentCannotBeSharedError(DocumentsServiceError):
+    """422/409: Only public, internal and confidential documents can be shared; restricted ones cannot."""
+
+    def __init__(self) -> None:
+        super().__init__(
+            status_code=getattr(status, "HTTP_422_UNPROCESSABLE_CONTENT", 422),
+            code="DOCUMENT_RESTRICTED",
+            message="Only public, internal and confidential documents can be shared; restricted ones cannot.",
+        )
+
+
+class PermissionDeniedError(DocumentsServiceError):
+    """403: Missing permission in scope."""
+
+    def __init__(self, required_permission: str) -> None:
+        super().__init__(
+            status_code=status.HTTP_403_FORBIDDEN,
+            code="PERMISSION_DENIED",
+            message="The record is visible to you but your roles in its scope don't include the required permission.",
+            meta={"required_permission": required_permission},
+        )
+
+
+class UnauthorizedError(DocumentsServiceError):
+    """401: Missing or invalid authentication token."""
+
+    def __init__(self, message: str = "Authentication required") -> None:
+        super().__init__(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            code="UNAUTHORIZED",
+            message=message,
+        )
+
+
+class PreconditionRequiredError(DocumentsServiceError):
+    """428: If-Match header is required for updating versioned resource."""
+
+    def __init__(self) -> None:
+        super().__init__(
+            status_code=status.HTTP_428_PRECONDITION_REQUIRED,
+            code="PRECONDITION_REQUIRED",
+            message="The endpoint updates a versioned record and If-Match is missing.",
+        )
+
+
+class PreconditionFailedError(DocumentsServiceError):
+    """412: If-Match version conflict."""
+
+    def __init__(self) -> None:
+        super().__init__(
+            status_code=status.HTTP_412_PRECONDITION_FAILED,
+            code="PRECONDITION_FAILED",
+            message="The resource has been modified since it was fetched.",
         )

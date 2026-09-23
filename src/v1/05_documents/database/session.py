@@ -30,11 +30,13 @@ def _build_engine() -> AsyncEngine:
 
 engine = _build_engine()
 
-_session_factory = async_sessionmaker(
+async_session_factory = async_sessionmaker(
     engine,
     class_=AsyncSession,
     expire_on_commit=False,
 )
+_session_factory = async_session_factory
+
 
 
 async def get_db_session() -> AsyncGenerator[AsyncSession, None]:

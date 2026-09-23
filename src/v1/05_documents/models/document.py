@@ -1,9 +1,9 @@
-import uuid
-from datetime import date, datetime
+from datetime import date, datetime, timezone
 from typing import Optional
+import uuid
 
 from sqlalchemy import BigInteger, Boolean, Date, DateTime, ForeignKey, Integer, String, Text, func
-from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from database.base import Base
 from database.types import UUIDType
@@ -23,6 +23,11 @@ class RetentionPolicy(Base):
     retain_days: Mapped[int] = mapped_column(Integer, nullable=False)
     trigger: Mapped[str] = mapped_column(String(50), nullable=False, default="creation")
     final_action: Mapped[str] = mapped_column(String(50), nullable=False, default="archive")
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        nullable=False,
+    )
 
 
 class DocumentCategory(Base):
@@ -39,6 +44,13 @@ class DocumentCategory(Base):
     default_classification: Mapped[str] = mapped_column(String(50), nullable=False, default="internal")
     retention_policy_id: Mapped[Optional[uuid.UUID]] = mapped_column(
         UUIDType, ForeignKey("retention_policies.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    allowed_mime_types: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
+    max_file_size_bytes: Mapped[Optional[int]] = mapped_column(BigInteger, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        nullable=False,
     )
 
 
@@ -58,6 +70,8 @@ class Document(Base):
     )
     classification: Mapped[str] = mapped_column(String(50), nullable=False, default="internal")
     owner_user_id: Mapped[uuid.UUID] = mapped_column(UUIDType, nullable=False, index=True)
+    owner_user_name: Mapped[str] = mapped_column(String(255), nullable=False, default="Aarav Sharma")
+    owner_avatar_url: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
     current_version_id: Mapped[Optional[uuid.UUID]] = mapped_column(UUIDType, nullable=True, index=True)
     status: Mapped[str] = mapped_column(String(50), nullable=False, default="active", index=True)
     locked: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
@@ -65,6 +79,31 @@ class Document(Base):
     retain_until: Mapped[Optional[date]] = mapped_column(Date, nullable=True)
     scope_path: Mapped[Optional[str]] = mapped_column(String(255), nullable=True, index=True)
     version: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        nullable=False,
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        onupdate=lambda: datetime.now(timezone.utc),
+        nullable=False,
+    )
+
+    # Relationships
+    category: Mapped["DocumentCategory"] = relationship(lazy="joined")
+    versions: Mapped[list["DocumentVersion"]] = relationship(
+        back_populates="document",
+        cascade="all, delete-orphan",
+        order_by="DocumentVersion.version_no.desc()",
+        lazy="selectin",
+    )
+    links: Mapped[list["DocumentLink"]] = relationship(
+        back_populates="document",
+        cascade="all, delete-orphan",
+        lazy="selectin",
+    )
 
 
 class StorageObject(Base):
@@ -77,13 +116,17 @@ class StorageObject(Base):
     id: Mapped[uuid.UUID] = mapped_column(UUIDType, primary_key=True, default=uuid.uuid4)
     provider: Mapped[str] = mapped_column(String(50), nullable=False, default="s3")
     bucket: Mapped[str] = mapped_column(String(255), nullable=False)
-    object_key: Mapped[str] = mapped_column(String(1024), nullable=False, unique=True, index=True)
+    object_key: Mapped[str] = mapped_column(String(500), nullable=False, unique=True, index=True)
     size_bytes: Mapped[int] = mapped_column(BigInteger, nullable=False)
     mime_type: Mapped[str] = mapped_column(String(100), nullable=False)
     sha256: Mapped[str] = mapped_column(String(64), nullable=False)
-    scan_status: Mapped[str] = mapped_column(String(50), nullable=False, default="clean")
+    scan_status: Mapped[str] = mapped_column(String(50), nullable=False, default="pending")
     encryption: Mapped[str] = mapped_column(String(50), nullable=False, default="aes256")
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        nullable=False,
+    )
 
 
 class DocumentVersion(Base):
@@ -103,9 +146,19 @@ class DocumentVersion(Base):
     )
     file_name: Mapped[str] = mapped_column(String(255), nullable=False)
     change_note: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
-    status: Mapped[str] = mapped_column(String(50), nullable=False, default="active")
+    status: Mapped[str] = mapped_column(String(50), nullable=False, default="draft")
     uploaded_by: Mapped[Optional[uuid.UUID]] = mapped_column(UUIDType, nullable=True)
-    uploaded_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    uploaded_by_name: Mapped[str] = mapped_column(String(255), nullable=False, default="Aarav Sharma")
+    uploaded_by_avatar_url: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
+    uploaded_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        nullable=False,
+    )
+
+    # Relationships
+    document: Mapped["Document"] = relationship(back_populates="versions")
+    storage_object: Mapped["StorageObject"] = relationship(lazy="joined")
 
 
 class DocumentLink(Base):
@@ -121,9 +174,16 @@ class DocumentLink(Base):
     )
     subject_type: Mapped[str] = mapped_column(String(100), nullable=False, index=True)
     subject_id: Mapped[uuid.UUID] = mapped_column(UUIDType, nullable=False, index=True)
+    label: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
     link_role: Mapped[str] = mapped_column(String(50), nullable=False, default="attachment")
     linked_by: Mapped[Optional[uuid.UUID]] = mapped_column(UUIDType, nullable=True)
-    linked_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    linked_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        nullable=False,
+    )
+
+    document: Mapped["Document"] = relationship(back_populates="links")
 
 
 class DocumentGrant(Base):
@@ -159,12 +219,21 @@ class DocumentShare(Base):
         UUIDType, ForeignKey("document_versions.id", ondelete="SET NULL"), nullable=True, index=True
     )
     token_hash: Mapped[str] = mapped_column(String(128), nullable=False, unique=True, index=True)
+    raw_token_preview: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
     password_hash: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     expires_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
     max_downloads: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     download_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     created_by: Mapped[Optional[uuid.UUID]] = mapped_column(UUIDType, nullable=True)
     revoked_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        nullable=False,
+    )
+
+    document: Mapped["Document"] = relationship(lazy="joined")
+    version: Mapped[Optional["DocumentVersion"]] = relationship(lazy="joined")
 
 
 class DocumentAccessLog(Base):
@@ -187,4 +256,39 @@ class DocumentAccessLog(Base):
     )
     action: Mapped[str] = mapped_column(String(50), nullable=False)
     ip: Mapped[Optional[str]] = mapped_column(String(45), nullable=True)
-    occurred_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    occurred_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        nullable=False,
+    )
+
+
+class UploadSession(Base):
+    """
+    Temporary session tracking for a presigned upload flow.
+    """
+
+    __tablename__ = "upload_sessions"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUIDType, primary_key=True, default=uuid.uuid4)
+    organization_id: Mapped[uuid.UUID] = mapped_column(UUIDType, nullable=False, index=True)
+    document_id: Mapped[Optional[uuid.UUID]] = mapped_column(UUIDType, nullable=True, index=True)
+    version_no: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    file_name: Mapped[str] = mapped_column(String(255), nullable=False)
+    mime_type: Mapped[str] = mapped_column(String(100), nullable=False)
+    size_bytes: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    category_code: Mapped[str] = mapped_column(String(100), nullable=False)
+    title: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    link_subject_type: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    link_subject_id: Mapped[Optional[uuid.UUID]] = mapped_column(UUIDType, nullable=True)
+    link_role: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
+    upload_url: Mapped[str] = mapped_column(String(1024), nullable=False)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    status: Mapped[str] = mapped_column(String(50), nullable=False, default="initiated")
+    created_by: Mapped[Optional[uuid.UUID]] = mapped_column(UUIDType, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        nullable=False,
+    )
