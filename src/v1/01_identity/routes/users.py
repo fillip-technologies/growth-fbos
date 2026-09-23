@@ -29,6 +29,7 @@ router = APIRouter()
 async def list_users(
     status: Optional[str] = Query(None, description="Filter by status (invited, active, suspended, deactivated)"),
     unit_id: Optional[uuid.UUID] = Query(None, description="Filter by home unit id"),
+    role_code: Optional[str] = Query(None, description="Filter by role code"),
     q: Optional[str] = Query(None, description="Search by name, email or employee code"),
     limit: int = Query(25, ge=1, le=100),
     cursor: Optional[str] = Query(None, description="Opaque pagination cursor"),
@@ -40,6 +41,7 @@ async def list_users(
         organization_id=current_user.organization_id,
         status=status,
         unit_id=unit_id,
+        role_code=role_code,
         q=q,
         limit=limit,
         cursor=cursor,

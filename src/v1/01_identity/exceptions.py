@@ -156,12 +156,12 @@ class UserNotFoundError(IdentityServiceError):
 
 
 class UserAlreadyExistsError(IdentityServiceError):
-    """409: User already exists."""
+    """409: Email is unique per organization."""
 
     def __init__(self) -> None:
         super().__init__(
             status_code=status.HTTP_409_CONFLICT,
-            code="USER_ALREADY_EXISTS",
+            code="EMAIL_ALREADY_EXISTS",
             message="A user with this email already exists",
         )
 
