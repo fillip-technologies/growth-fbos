@@ -2,7 +2,7 @@ import uuid
 from datetime import date, datetime
 from typing import Optional
 
-from sqlalchemy import Boolean, Date, DateTime, ForeignKey, Integer, JSON, Numeric, String, Text, func
+from sqlalchemy import Boolean, Date, DateTime, ForeignKey, func, Integer, JSON, Numeric, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column
 
 from database.base import Base
@@ -17,6 +17,7 @@ class WorkUnit(Base):
     """
 
     __tablename__ = "work_units"
+    __table_args__ = (UniqueConstraint("organization_id", "code", name="uq_work_units_org_code"),)
 
     id: Mapped[uuid.UUID] = mapped_column(UUIDType, primary_key=True, default=uuid.uuid4)
     # Self-reference for hierarchical parent-child structures (e.g., Program -> Project -> Sub-project)
@@ -24,7 +25,7 @@ class WorkUnit(Base):
         UUIDType, ForeignKey("work_units.id", ondelete="SET NULL"), nullable=True, index=True
     )
     organization_id: Mapped[uuid.UUID] = mapped_column(UUIDType, nullable=False, index=True)
-    code: Mapped[str] = mapped_column(String(100), nullable=False, unique=True, index=True)
+    code: Mapped[str] = mapped_column(String(100), nullable=False, index=True)
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     objective: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
 

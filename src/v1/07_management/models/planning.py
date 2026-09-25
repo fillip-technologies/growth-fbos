@@ -2,7 +2,7 @@ import uuid
 from datetime import date
 from typing import Optional
 
-from sqlalchemy import Date, ForeignKey, Integer, Numeric, String, Text
+from sqlalchemy import Date, ForeignKey, Integer, Numeric, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column
 
 from database.base import Base
@@ -15,10 +15,11 @@ class FiscalYear(Base):
     """
 
     __tablename__ = "fiscal_years"
+    __table_args__ = (UniqueConstraint("organization_id", "code", name="uq_fiscal_years_org_code"),)
 
     id: Mapped[uuid.UUID] = mapped_column(UUIDType, primary_key=True, default=uuid.uuid4)
     organization_id: Mapped[uuid.UUID] = mapped_column(UUIDType, nullable=False, index=True)
-    code: Mapped[str] = mapped_column(String(100), nullable=False, unique=True, index=True)
+    code: Mapped[str] = mapped_column(String(100), nullable=False, index=True)
     start_date: Mapped[date] = mapped_column(Date, nullable=False)
     end_date: Mapped[date] = mapped_column(Date, nullable=False)
     status: Mapped[str] = mapped_column(String(50), nullable=False, default="active", index=True)
@@ -52,6 +53,7 @@ class StrategicGoal(Base):
     """
 
     __tablename__ = "strategic_goals"
+    __table_args__ = (UniqueConstraint("organization_id", "code", name="uq_strategic_goals_org_code"),)
 
     id: Mapped[uuid.UUID] = mapped_column(UUIDType, primary_key=True, default=uuid.uuid4)
     organization_id: Mapped[uuid.UUID] = mapped_column(UUIDType, nullable=False, index=True)
@@ -64,7 +66,7 @@ class StrategicGoal(Base):
     scope_unit_id: Mapped[Optional[uuid.UUID]] = mapped_column(UUIDType, nullable=True, index=True)
     scope_vertical_id: Mapped[Optional[uuid.UUID]] = mapped_column(UUIDType, nullable=True, index=True)
     owner_user_id: Mapped[uuid.UUID] = mapped_column(UUIDType, nullable=False, index=True)
-    code: Mapped[str] = mapped_column(String(100), nullable=False, unique=True, index=True)
+    code: Mapped[str] = mapped_column(String(100), nullable=False, index=True)
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     description: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     priority: Mapped[str] = mapped_column(String(50), nullable=False, default="high")
@@ -78,13 +80,14 @@ class Initiative(Base):
     """
 
     __tablename__ = "initiatives"
+    __table_args__ = (UniqueConstraint("organization_id", "code", name="uq_initiatives_org_code"),)
 
     id: Mapped[uuid.UUID] = mapped_column(UUIDType, primary_key=True, default=uuid.uuid4)
     organization_id: Mapped[uuid.UUID] = mapped_column(UUIDType, nullable=False, index=True)
     goal_id: Mapped[uuid.UUID] = mapped_column(
         UUIDType, ForeignKey("strategic_goals.id", ondelete="CASCADE"), nullable=False, index=True
     )
-    code: Mapped[str] = mapped_column(String(100), nullable=False, unique=True, index=True)
+    code: Mapped[str] = mapped_column(String(100), nullable=False, index=True)
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     owner_user_id: Mapped[uuid.UUID] = mapped_column(UUIDType, nullable=False, index=True)
     start_date: Mapped[date] = mapped_column(Date, nullable=False)
@@ -174,6 +177,7 @@ class Budget(Base):
     """
 
     __tablename__ = "budgets"
+    __table_args__ = (UniqueConstraint("organization_id", "code", name="uq_budgets_org_code"),)
 
     id: Mapped[uuid.UUID] = mapped_column(UUIDType, primary_key=True, default=uuid.uuid4)
     organization_id: Mapped[uuid.UUID] = mapped_column(UUIDType, nullable=False, index=True)
@@ -182,7 +186,7 @@ class Budget(Base):
     )
     scope_unit_id: Mapped[Optional[uuid.UUID]] = mapped_column(UUIDType, nullable=True, index=True)
     scope_vertical_id: Mapped[Optional[uuid.UUID]] = mapped_column(UUIDType, nullable=True, index=True)
-    code: Mapped[str] = mapped_column(String(100), nullable=False, unique=True, index=True)
+    code: Mapped[str] = mapped_column(String(100), nullable=False, index=True)
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     currency: Mapped[str] = mapped_column(String(3), nullable=False, default="USD")
     revision_no: Mapped[int] = mapped_column(Integer, nullable=False, default=1)

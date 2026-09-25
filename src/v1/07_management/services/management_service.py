@@ -230,7 +230,7 @@ async def list_kpi_results(
     if status is not None:
         query = query.where(KPIResult.status == status)
     if kpi_code is not None:
-        kpi_res = await session.execute(select(KPIDefinition).where(KPIDefinition.code == kpi_code))
+        kpi_res = await session.execute(select(KPIDefinition).where(KPIDefinition.organization_id == org_id, KPIDefinition.code == kpi_code))
         kpi = kpi_res.scalars().first()
         if kpi:
             query = query.where(KPIResult.kpi_definition_id == kpi.id)

@@ -2,7 +2,7 @@ import uuid
 from datetime import date, datetime
 from typing import Optional
 
-from sqlalchemy import BigInteger, Date, DateTime, ForeignKey, Integer, JSON, String, Text, func
+from sqlalchemy import BigInteger, Date, DateTime, ForeignKey, func, Integer, JSON, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column
 
 from database.base import Base
@@ -56,14 +56,15 @@ class GovernancePolicy(Base):
     """
 
     __tablename__ = "governance_policies"
+    __table_args__ = (UniqueConstraint("organization_id", "code", name="uq_governance_policies_org_code"),)
 
     id: Mapped[uuid.UUID] = mapped_column(UUIDType, primary_key=True, default=uuid.uuid4)
     organization_id: Mapped[uuid.UUID] = mapped_column(UUIDType, nullable=False, index=True)
-    code: Mapped[str] = mapped_column(String(100), nullable=False, unique=True, index=True)
+    code: Mapped[str] = mapped_column(String(100), nullable=False, index=True)
     title: Mapped[str] = mapped_column(String(255), nullable=False)
     version_no: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
     document_id: Mapped[Optional[uuid.UUID]] = mapped_column(
-        UUIDType, ForeignKey("documents.id", ondelete="SET NULL"), nullable=True, index=True
+        UUIDType, nullable=True, index=True
     )
     effective_from: Mapped[Optional[date]] = mapped_column(Date, nullable=True)
     review_by: Mapped[Optional[date]] = mapped_column(Date, nullable=True)
@@ -93,10 +94,11 @@ class ComplianceRequirement(Base):
     """
 
     __tablename__ = "compliance_requirements"
+    __table_args__ = (UniqueConstraint("organization_id", "code", name="uq_compliance_requirements_org_code"),)
 
     id: Mapped[uuid.UUID] = mapped_column(UUIDType, primary_key=True, default=uuid.uuid4)
     organization_id: Mapped[uuid.UUID] = mapped_column(UUIDType, nullable=False, index=True)
-    code: Mapped[str] = mapped_column(String(100), nullable=False, unique=True, index=True)
+    code: Mapped[str] = mapped_column(String(100), nullable=False, index=True)
     framework: Mapped[str] = mapped_column(String(50), nullable=False, index=True)
     requirement: Mapped[str] = mapped_column(Text, nullable=False)
     owner_user_id: Mapped[uuid.UUID] = mapped_column(UUIDType, nullable=False, index=True)
@@ -118,7 +120,7 @@ class ComplianceEvidence(Base):
     )
     period: Mapped[str] = mapped_column(String(50), nullable=False)
     document_id: Mapped[Optional[uuid.UUID]] = mapped_column(
-        UUIDType, ForeignKey("documents.id", ondelete="SET NULL"), nullable=True, index=True
+        UUIDType, nullable=True, index=True
     )
     status: Mapped[str] = mapped_column(String(50), nullable=False, default="pending", index=True)
     reviewed_by: Mapped[Optional[uuid.UUID]] = mapped_column(UUIDType, nullable=True)

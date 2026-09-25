@@ -102,6 +102,7 @@ class WorkDependency(Base):
     __tablename__ = "work_dependencies"
 
     id: Mapped[uuid.UUID] = mapped_column(UUIDType, primary_key=True, default=uuid.uuid4)
+    organization_id: Mapped[uuid.UUID] = mapped_column(UUIDType, nullable=False, index=True)
     predecessor_type: Mapped[str] = mapped_column(String(50), nullable=False)
     predecessor_id: Mapped[uuid.UUID] = mapped_column(UUIDType, nullable=False, index=True)
     successor_type: Mapped[str] = mapped_column(String(50), nullable=False)

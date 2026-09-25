@@ -2,7 +2,7 @@ import uuid
 from datetime import date, datetime
 from typing import Optional
 
-from sqlalchemy import Boolean, Date, DateTime, ForeignKey, Integer, JSON, Numeric, String, Text, func
+from sqlalchemy import Boolean, Date, DateTime, ForeignKey, func, Integer, JSON, Numeric, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column
 
 from database.base import Base
@@ -17,6 +17,7 @@ class Invoice(Base):
     """
 
     __tablename__ = "invoices"
+    __table_args__ = (UniqueConstraint("organization_id", "invoice_no", name="uq_invoices_org_invoice_no"),)
 
     id: Mapped[uuid.UUID] = mapped_column(UUIDType, primary_key=True, default=uuid.uuid4)
     organization_id: Mapped[uuid.UUID] = mapped_column(UUIDType, nullable=False, index=True)
@@ -27,7 +28,7 @@ class Invoice(Base):
     original_invoice_id: Mapped[Optional[uuid.UUID]] = mapped_column(
         UUIDType, ForeignKey("invoices.id", ondelete="SET NULL"), nullable=True
     )
-    invoice_no: Mapped[Optional[str]] = mapped_column(String(100), nullable=True, unique=True, index=True)
+    invoice_no: Mapped[Optional[str]] = mapped_column(String(100), nullable=True, index=True)
     doc_type: Mapped[str] = mapped_column(String(50), nullable=False, index=True)  # tax_invoice / credit_note / proforma
     # context_id: polymorphic reference to contract or billing_schedule (cross-service)
     context_id: Mapped[Optional[uuid.UUID]] = mapped_column(UUIDType, nullable=True, index=True)

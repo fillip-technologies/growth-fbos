@@ -2,7 +2,7 @@ import uuid
 from datetime import datetime
 from typing import Optional
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, JSON, String, Text
+from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, JSON, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column
 
 from database.base import Base
@@ -16,10 +16,11 @@ class TaskType(Base):
     """
 
     __tablename__ = "task_types"
+    __table_args__ = (UniqueConstraint("organization_id", "code", name="uq_task_types_org_code"),)
 
     id: Mapped[uuid.UUID] = mapped_column(UUIDType, primary_key=True, default=uuid.uuid4)
     organization_id: Mapped[uuid.UUID] = mapped_column(UUIDType, nullable=False, index=True)
-    code: Mapped[str] = mapped_column(String(100), nullable=False, unique=True, index=True)
+    code: Mapped[str] = mapped_column(String(100), nullable=False, index=True)
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     category: Mapped[str] = mapped_column(String(100), nullable=False)
     requires_review: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
@@ -32,13 +33,14 @@ class TaskTemplate(Base):
     """
 
     __tablename__ = "task_templates"
+    __table_args__ = (UniqueConstraint("organization_id", "code", name="uq_task_templates_org_code"),)
 
     id: Mapped[uuid.UUID] = mapped_column(UUIDType, primary_key=True, default=uuid.uuid4)
     task_type_id: Mapped[uuid.UUID] = mapped_column(
         UUIDType, ForeignKey("task_types.id", ondelete="RESTRICT"), nullable=False, index=True
     )
     organization_id: Mapped[uuid.UUID] = mapped_column(UUIDType, nullable=False, index=True)
-    code: Mapped[str] = mapped_column(String(100), nullable=False, unique=True, index=True)
+    code: Mapped[str] = mapped_column(String(100), nullable=False, index=True)
     title_template: Mapped[str] = mapped_column(String(255), nullable=False)
     description: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     checklist: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)

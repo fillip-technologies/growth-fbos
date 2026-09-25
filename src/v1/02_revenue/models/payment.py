@@ -2,7 +2,7 @@ import uuid
 from datetime import datetime
 from typing import Optional
 
-from sqlalchemy import DateTime, ForeignKey, Numeric, String, Text, func
+from sqlalchemy import DateTime, ForeignKey, func, Numeric, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column
 
 from database.base import Base
@@ -18,11 +18,12 @@ class Payment(Base):
     """
 
     __tablename__ = "payments"
+    __table_args__ = (UniqueConstraint("organization_id", "receipt_no", name="uq_payments_org_receipt_no"),)
 
     id: Mapped[uuid.UUID] = mapped_column(UUIDType, primary_key=True, default=uuid.uuid4)
     organization_id: Mapped[uuid.UUID] = mapped_column(UUIDType, nullable=False, index=True)
     client_id: Mapped[uuid.UUID] = mapped_column(UUIDType, nullable=False, index=True)
-    receipt_no: Mapped[str] = mapped_column(String(100), nullable=False, unique=True, index=True)
+    receipt_no: Mapped[str] = mapped_column(String(100), nullable=False, index=True)
     amount: Mapped[float] = mapped_column(Numeric(15, 2), nullable=False)
     currency: Mapped[str] = mapped_column(String(10), nullable=False, default="INR")
     method: Mapped[str] = mapped_column(String(50), nullable=False)           # bank_transfer / upi / cheque / card

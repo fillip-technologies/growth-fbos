@@ -12,6 +12,7 @@ from sqlalchemy import (
     Numeric,
     String,
     Text,
+    UniqueConstraint,
     func,
 )
 from sqlalchemy.orm import Mapped, mapped_column
@@ -26,13 +27,14 @@ class AssetCategory(Base):
     """
 
     __tablename__ = "asset_categories"
+    __table_args__ = (UniqueConstraint("organization_id", "code", name="uq_asset_categories_org_code"),)
 
     id: Mapped[uuid.UUID] = mapped_column(UUIDType, primary_key=True, default=uuid.uuid4)
     organization_id: Mapped[uuid.UUID] = mapped_column(UUIDType, nullable=False, index=True)
     parent_id: Mapped[Optional[uuid.UUID]] = mapped_column(
         UUIDType, ForeignKey("asset_categories.id", ondelete="SET NULL"), nullable=True, index=True
     )
-    code: Mapped[str] = mapped_column(String(100), nullable=False, unique=True, index=True)
+    code: Mapped[str] = mapped_column(String(100), nullable=False, index=True)
     name: Mapped[str] = mapped_column(String(255), nullable=False)
 
 
@@ -61,10 +63,11 @@ class Vendor(Base):
     """
 
     __tablename__ = "vendors"
+    __table_args__ = (UniqueConstraint("organization_id", "code", name="uq_vendors_org_code"),)
 
     id: Mapped[uuid.UUID] = mapped_column(UUIDType, primary_key=True, default=uuid.uuid4)
     organization_id: Mapped[uuid.UUID] = mapped_column(UUIDType, nullable=False, index=True)
-    code: Mapped[str] = mapped_column(String(100), nullable=False, unique=True, index=True)
+    code: Mapped[str] = mapped_column(String(100), nullable=False, index=True)
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     vendor_type: Mapped[str] = mapped_column(String(50), nullable=False)
     gstin: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
@@ -94,13 +97,14 @@ class Asset(Base):
     """
 
     __tablename__ = "assets"
+    __table_args__ = (UniqueConstraint("organization_id", "asset_tag", name="uq_assets_org_asset_tag"),)
 
     id: Mapped[uuid.UUID] = mapped_column(UUIDType, primary_key=True, default=uuid.uuid4)
     parent_asset_id: Mapped[Optional[uuid.UUID]] = mapped_column(
         UUIDType, ForeignKey("assets.id", ondelete="SET NULL"), nullable=True, index=True
     )
     organization_id: Mapped[uuid.UUID] = mapped_column(UUIDType, nullable=False, index=True)
-    asset_tag: Mapped[str] = mapped_column(String(100), nullable=False, unique=True, index=True)
+    asset_tag: Mapped[str] = mapped_column(String(100), nullable=False, index=True)
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     asset_type_id: Mapped[uuid.UUID] = mapped_column(
         UUIDType, ForeignKey("asset_types.id", ondelete="RESTRICT"), nullable=False, index=True
