@@ -1,15 +1,15 @@
 from fastapi import APIRouter
 
+from routes.inbox import router as inbox_router
+from routes.preferences import router as preferences_router
+from routes.rules import router as rules_router
+from routes.webhooks import router as webhooks_router
+
 core_router = APIRouter()
-
-
-@core_router.get("/ping", tags=["system"])
-async def ping() -> dict:
-    return {"message": "pong"}
-
-# Include route modules here as the service grows (Notifications, inbox and webhooks):
-# from routes.notifications import router as notifications_router
-# core_router.include_router(notifications_router, prefix="/notifications", tags=["notifications"])
+core_router.include_router(inbox_router)
+core_router.include_router(preferences_router)
+core_router.include_router(rules_router)
+core_router.include_router(webhooks_router)
 
 # Mount both /v1 and /api/communication/v1 for complete compatibility
 router = APIRouter()

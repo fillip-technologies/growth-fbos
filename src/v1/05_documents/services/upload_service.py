@@ -342,6 +342,7 @@ class UploadService:
             .options(
                 selectinload(Document.versions).selectinload(DocumentVersion.storage_object),
                 selectinload(Document.links),
+                selectinload(Document.category),
             )
             .execution_options(populate_existing=True)
         )

@@ -41,6 +41,7 @@ async def list_work_unit_types(
     org_id: OrgId,
     limit: int = Query(25, ge=1, le=100),
     cursor: Optional[str] = Query(None),
+    sort: Optional[str] = Query(None),
 ) -> PageResponse[WorkUnitTypeResponse]:
     """List work unit types."""
     return await service.list_work_unit_types(session, org_id, limit, cursor)
@@ -54,6 +55,7 @@ async def list_templates(
     status_: Optional[str] = Query(None, alias="status"),
     limit: int = Query(25, ge=1, le=100),
     cursor: Optional[str] = Query(None),
+    sort: Optional[str] = Query(None),
 ) -> PageResponse[WorkTemplateResponse]:
     """List work templates."""
     return await service.list_templates(session, org_id, vertical_id, status_, limit, cursor)
@@ -110,6 +112,7 @@ async def list_work_units(
     q: Optional[str] = Query(None),
     limit: int = Query(25, ge=1, le=100),
     cursor: Optional[str] = Query(None),
+    sort: Optional[str] = Query(None),
 ) -> PageResponse[WorkUnitResponse]:
     """List work units."""
     return await service.list_work_units(
@@ -197,6 +200,7 @@ async def list_milestones(
     org_id: OrgId,
     limit: int = Query(25, ge=1, le=100),
     cursor: Optional[str] = Query(None),
+    sort: Optional[str] = Query(None),
 ) -> PageResponse[MilestoneResponse]:
     """List milestones."""
     return await service.list_milestones(session, org_id, work_unit_id, limit, cursor)

@@ -10,11 +10,11 @@ from models.notification import (
     NotificationRule,
     NotificationTemplate,
     Suppression,
+    WebhookSubscription,
 )
 
 __all__ = [
     "Base",
-    # Notification Models (10)
     "NotificationRule",
     "NotificationTemplate",
     "Notification",
@@ -25,4 +25,5 @@ __all__ = [
     "NotificationChannel",
     "NotificationPreference",
     "DeviceToken",
+    "WebhookSubscription",
 ]

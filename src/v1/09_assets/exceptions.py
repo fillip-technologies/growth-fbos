@@ -219,3 +219,44 @@ class IdempotencyConflictError(HTTPException):
                 "status": 409,
             },
         )
+
+
+class AssetAlreadyAssignedError(HTTPException):
+    def __init__(self, current_assignee_id: Optional[str] = None) -> None:
+        meta = {"current_assignee": {"id": current_assignee_id}} if current_assignee_id else {}
+        super().__init__(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={"code": "ASSET_ALREADY_ASSIGNED", "message": "Single-custodian assets can have one active assignment.", "status": 409, "meta": meta},
+        )
+
+
+class InvalidStateTransitionError(HTTPException):
+    def __init__(self, current_status: str, action: str) -> None:
+        super().__init__(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={"code": "INVALID_STATE_TRANSITION", "message": f"Cannot perform '{action}' from status '{current_status}'.", "status": 409, "meta": {"current_status": current_status, "allowed_actions": []}},
+        )
+
+
+class StepUpRequiredError(HTTPException):
+    def __init__(self) -> None:
+        super().__init__(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail={"code": "STEP_UP_REQUIRED", "message": "Sensitive action and the session's MFA is older than 5 minutes.", "status": 403},
+        )
+
+
+class PreconditionRequiredError(HTTPException):
+    def __init__(self) -> None:
+        super().__init__(
+            status_code=status.HTTP_428_PRECONDITION_REQUIRED,
+            detail={"code": "PRECONDITION_REQUIRED", "message": "If-Match header with the current ETag is required.", "status": 428},
+        )
+
+
+class VersionConflictError(HTTPException):
+    def __init__(self, current_version: int) -> None:
+        super().__init__(
+            status_code=status.HTTP_412_PRECONDITION_FAILED,
+            detail={"code": "VERSION_CONFLICT", "message": f"Resource was modified. Current version: {current_version}.", "status": 412, "meta": {"current_version": current_version}},
+        )

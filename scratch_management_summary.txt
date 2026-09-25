@@ -1,0 +1,95 @@
+
+######################################################################
+GET /api/management/v1/kpi-targets  (List KPI targets)
+ID: op-listKpiTargets | Permission: planning.target.read
+
+######################################################################
+POST /api/management/v1/kpi-targets  (Create a KPI target (draft))
+ID: op-createKpiTarget | Permission: planning.target.create
+
+[POST /api/management/v1/kpi-targets]
+{
+  "kpi_code": "revenue_billed",
+  "period_id": "0191f3a2-0051-7051-8237-0000008170e9",
+  "scope": {
+    "unit_id": "0191f3a2-0018-7018-80a8-000000265a58",
+    "vertical_id": "0191f3a2-001b-701b-80bd-0000002b25a3"
+  },
+  "target_value": 4500000,
+  "stretch_value": 5200000,
+  "goal_id": "0191f3a2-0052-7052-823e-000000830a02"
+}
+
+######################################################################
+POST /api/management/v1/kpi-targets/{target_id}/submit  (Submit a target for approval)
+ID: op-submitKpiTarget | Permission: planning.target.submit
+
+######################################################################
+GET /api/management/v1/kpi-definitions  (List KPI definitions)
+ID: op-listKpiDefinitions | Permission: performance.kpi.read
+
+######################################################################
+GET /api/management/v1/kpi-results  (Get KPI results (target vs actual))
+ID: op-listKpiResults | Permission: performance.kpi.read
+
+######################################################################
+POST /api/management/v1/measurements  (Record a manual measurement)
+ID: op-recordMeasurement | Permission: performance.measurement.create
+
+[POST /api/management/v1/measurements]
+{
+  "kpi_code": "client_nps",
+  "measured_on": "2026-10-31",
+  "value": 62,
+  "dimensions": {
+    "vertical_id": "0191f3a2-001b-701b-80bd-0000002b25a3"
+  },
+  "note": "Quarterly NPS survey, 41 responses",
+  "evidence_document_id": "0191f3a2-0048-7048-81f8-000000730f08"
+}
+
+######################################################################
+GET /api/management/v1/corrective-actions  (List corrective actions)
+ID: op-listCorrectiveActions | Permission: performance.corrective.read
+
+######################################################################
+POST /api/management/v1/corrective-actions  (Create a corrective action)
+ID: op-createCorrectiveAction | Permission: performance.corrective.create
+
+[POST /api/management/v1/corrective-actions]
+{
+  "kpi_code": "revenue_billed",
+  "period_id": "0191f3a2-0051-7051-8237-0000008170e9",
+  "scope": {
+    "unit_id": "0191f3a2-0018-7018-80a8-000000265a58",
+    "vertical_id": "0191f3a2-001b-701b-80bd-0000002b25a3"
+  },
+  "title": "Accelerate billing of UAT milestones pending client sign-off",
+  "owner_user_id": "0191f3a2-0013-7013-8085-0000001e5cdb",
+  "due_date": "2026-12-05"
+}
+
+######################################################################
+GET /api/management/v1/availability  (Find available people)
+ID: op-findAvailability | Permission: resource.availability.read
+
+######################################################################
+POST /api/management/v1/allocations  (Allocate a person to work)
+ID: op-createAllocation | Permission: resource.allocation.create
+
+[POST /api/management/v1/allocations]
+{
+  "resource_id": "0191f3a2-0054-7054-824c-000000863c34",
+  "requirement_id": "0191f3a2-0056-7056-825a-000000896e66",
+  "subject": {
+    "type": "work.work_unit",
+    "id": "0191f3a2-002c-702c-8134-00000046504c"
+  },
+  "start_date": "2026-10-12",
+  "end_date": "2026-11-06",
+  "minutes_per_day": 300
+}
+
+######################################################################
+GET /api/management/v1/capacity  (Get capacity for a unit)
+ID: op-getCapacity | Permission: resource.capacity.read

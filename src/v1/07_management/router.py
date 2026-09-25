@@ -1,15 +1,9 @@
 from fastapi import APIRouter
 
+from routes.management import router as management_router
+
 core_router = APIRouter()
-
-
-@core_router.get("/ping", tags=["system"])
-async def ping() -> dict:
-    return {"message": "pong"}
-
-# Include route modules here as the service grows (Planning, Performance/KPIs, Resources and capacity):
-# from routes.planning import router as planning_router
-# core_router.include_router(planning_router, prefix="/kpi-targets", tags=["planning"])
+core_router.include_router(management_router)
 
 # Mount both /v1 and /api/management/v1 for complete compatibility
 router = APIRouter()

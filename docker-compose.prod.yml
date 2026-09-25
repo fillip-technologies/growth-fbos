@@ -1,0 +1,120 @@
+# Production overrides — run with:
+#   docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d
+#
+# Before first run:
+#   1. Copy each service .env.example → .env and set real secrets
+#   2. Set MYSQL_ROOT_PASSWORD / MYSQL_PASSWORD in .env to strong values
+#   3. Point your DNS: api.hamsasoham.com → this machine's public IP
+
+services:
+
+  # -------------------------------------------------------------------------
+  # TLS termination + reverse proxy
+  # -------------------------------------------------------------------------
+  caddy:
+    image: caddy:2-alpine
+    restart: always
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"     # HTTP/3
+    volumes:
+      - ./docker/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      gateway:
+        condition: service_healthy
+    networks:
+      - default
+
+  # -------------------------------------------------------------------------
+  # Lock all service ports to localhost only — Caddy reaches them via the
+  # Docker network; nothing should be reachable from outside the host.
+  # -------------------------------------------------------------------------
+  gateway:
+    restart: always
+    ports:
+      - "127.0.0.1:8000:8000"
+    environment:
+      APP_ENV: production
+      DEBUG: "false"
+
+  identity:
+    restart: always
+    ports:
+      - "127.0.0.1:8001:8000"
+    environment:
+      APP_ENV: production
+      DEBUG: "false"
+
+  revenue:
+    restart: always
+    ports:
+      - "127.0.0.1:8002:8000"
+    environment:
+      APP_ENV: production
+      DEBUG: "false"
+
+  delivery:
+    restart: always
+    ports:
+      - "127.0.0.1:8003:8000"
+    environment:
+      APP_ENV: production
+      DEBUG: "false"
+
+  control:
+    restart: always
+    ports:
+      - "127.0.0.1:8004:8000"
+    environment:
+      APP_ENV: production
+      DEBUG: "false"
+
+  documents:
+    restart: always
+    ports:
+      - "127.0.0.1:8005:8000"
+    environment:
+      APP_ENV: production
+      DEBUG: "false"
+
+  communication:
+    restart: always
+    ports:
+      - "127.0.0.1:8006:8000"
+    environment:
+      APP_ENV: production
+      DEBUG: "false"
+
+  management:
+    restart: always
+    ports:
+      - "127.0.0.1:8007:8000"
+    environment:
+      APP_ENV: production
+      DEBUG: "false"
+
+  insight:
+    restart: always
+    ports:
+      - "127.0.0.1:8008:8000"
+    environment:
+      APP_ENV: production
+      DEBUG: "false"
+
+  assets:
+    restart: always
+    ports:
+      - "127.0.0.1:8009:8000"
+    environment:
+      APP_ENV: production
+      DEBUG: "false"
+
+  db:
+    restart: always
+
+volumes:
+  caddy_data:
+  caddy_config:

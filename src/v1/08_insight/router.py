@@ -1,15 +1,11 @@
 from fastapi import APIRouter
 
+from routes.analytics import router as analytics_router
+from routes.audit import router as audit_router
+
 core_router = APIRouter()
-
-
-@core_router.get("/ping", tags=["system"])
-async def ping() -> dict:
-    return {"message": "pong"}
-
-# Include route modules here as the service grows (Audit, Analytics):
-# from routes.audit import router as audit_router
-# core_router.include_router(audit_router, prefix="/audit-events", tags=["audit"])
+core_router.include_router(audit_router)
+core_router.include_router(analytics_router)
 
 # Mount both /v1 and /api/insight/v1 for complete compatibility
 router = APIRouter()

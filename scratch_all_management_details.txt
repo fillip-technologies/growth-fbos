@@ -1,0 +1,211 @@
+=================== SCHEMAS ===================
+
+--- SCHEMA: KpiTargetCreate ---
+Field | Type |  | Description
+kpi_code | string | required | Example: revenue_billed
+period_id | string (uuid) | required | Example: 0191f3a2-0051-7051-8237-0000008170e9
+scope | KpiScope | required | 
+target_value | number | required | Example: 4500000
+stretch_value | number | optional, nullable | Example: 5200000
+goal_id | string (uuid) | optional, nullable | Example: 0191f3a2-0052-7052-823e-000000830a02
+
+--- SCHEMA: KpiScope ---
+Field | Type |  | Description
+unit_id | string (uuid) | optional, nullable | Example: 0191f3a2-0018-7018-80a8-000000265a58
+vertical_id | string (uuid) | optional, nullable | Example: 0191f3a2-001b-701b-80bd-0000002b25a3
+user_id | string (uuid) | optional, nullable | 
+
+--- SCHEMA: KpiTarget ---
+Field | Type |  | Description
+id | string (uuid) | required | Example: 0191f3a2-004f-704f-8229-0000007e3eb7
+kpi | object | required | 
+period | object | required | 
+scope | KpiScope | required | 
+target_value | number | required | Example: 4500000
+stretch_value | number | optional, nullable | Example: 5200000
+revision_no | integer | required | Example: 1
+status | one of draft, pending_approval, approved, superseded | required | Example: pending_approval
+approval_request_id | string (uuid) | optional, nullable | Example: 0191f3a2-0040-7040-81c0-000000664640
+
+--- SCHEMA: KpiResult ---
+Field | Type |  | Description
+kpi | object | required | 
+period | object | required | 
+scope | KpiScope | required | 
+actual_value | number | required | Example: 2984000
+target_value | number | required | Example: 4500000
+achievement_pct | number | required | Example: 66.3
+variance_abs | number | required | Example: -1516000
+variance_pct | number | required | Example: -33.7
+status | one of green, amber, red, no_data | required | Example: amber
+trend | one of up, down, flat | required | Example: up
+calculated_at | string (date-time) | required | Example: 2026-11-20T10:30:30Z
+
+--- SCHEMA: KpiDefinition ---
+Field | Type |  | Description
+code | string | required | Example: revenue_billed
+name | string | required | Example: Revenue billed
+unit | string | required | Example: INR
+direction | one of higher_is_better, lower_is_better, range | required | Example: higher_is_better
+aggregation | one of sum, count, avg, latest, ratio | required | Example: sum
+formula | object | optional, nullable | 
+frequency | one of daily, weekly, monthly, quarterly | required | Example: monthly
+sources | array of object | required | 
+status | one of draft, active, retired | required | Example: active
+
+--- SCHEMA: ManualMeasurementCreate ---
+Field | Type |  | Description
+kpi_code | string | required | Example: client_nps
+measured_on | string (date) | required | Example: 2026-10-31
+value | number | required | Example: 62
+dimensions | object | optional | 
+note | string | required | Example: Quarterly NPS survey, 41 responses
+evidence_document_id | string (uuid) | optional, nullable | Example: 0191f3a2-0048-7048-81f8-000000730f08
+
+--- SCHEMA: CorrectiveActionCreate ---
+Field | Type |  | Description
+kpi_code | string | required | Example: revenue_billed
+period_id | string (uuid) | required | Example: 0191f3a2-0051-7051-8237-0000008170e9
+scope | KpiScope | required | 
+title | string | required | Example: Accelerate billing of UAT milestones pending client sign-off
+owner_user_id | string (uuid) | required | Example: 0191f3a2-0013-7013-8085-0000001e5cdb
+due_date | string (date) | required | Example: 2026-12-05
+
+--- SCHEMA: CorrectiveAction ---
+Field | Type |  | Description
+id | string (uuid) | required | Example: 0191f3a2-0053-7053-8245-00000084a31b
+title | string | required | Example: Accelerate billing of UAT milestones pending client sign-off
+kpi | object | required | 
+owner | UserRef | required | 
+due_date | string (date) | required | Example: 2026-12-05
+task_id | string (uuid) | optional, nullable | Example: 0191f3a2-0038-7038-8188-000000597d78
+status | one of open, in_progress, closed, cancelled | required | Example: open
+
+--- SCHEMA: ResourceAvailability ---
+Field | Type |  | Description
+resource_id | string (uuid) | required | Example: 0191f3a2-0054-7054-824c-000000863c34
+user | UserRef | required | 
+unit | UnitRef | required | 
+skills | array of object | required | 
+capacity_minutes | integer | required | Example: 4860
+allocated_minutes | integer | required | Example: 2880
+free_minutes | integer | required | Example: 1980
+utilization_pct | number | required | Example: 59.3
+
+--- SCHEMA: AllocationCreate ---
+Field | Type |  | Description
+resource_id | string (uuid) | required | Example: 0191f3a2-0054-7054-824c-000000863c34
+requirement_id | string (uuid) | optional, nullable | Example: 0191f3a2-0056-7056-825a-000000896e66
+subject | SubjectRefInput | required | 
+start_date | string (date) | required | Example: 2026-10-12
+end_date | string (date) | required | Example: 2026-11-06
+minutes_per_day | integer | required | Example: 300
+override_reason | string | optional, nullable | Required when the allocation overloads the resource on any day.
+
+--- SCHEMA: Allocation ---
+Field | Type |  | Description
+id | string (uuid) | required | Example: 0191f3a2-0055-7055-8253-00000087d54d
+resource | object | required | 
+subject | SubjectRef | required | 
+start_date | string (date) | required | Example: 2026-10-12
+end_date | string (date) | required | Example: 2026-11-06
+minutes_per_day | integer | required | Example: 300
+status | one of tentative, confirmed, active, released, cancelled | required | Example: confirmed
+overload_days | array of string (date) | required | 
+
+--- SCHEMA: CapacitySummary ---
+Field | Type |  | Description
+unit | UnitRef | required | 
+from | string (date) | required | Example: 2026-10-01
+to | string (date) | required | Example: 2026-10-31
+capacity_minutes | integer | required | Example: 108000
+allocated_minutes | integer | required | Example: 93600
+actual_minutes | integer | required | Example: 51200
+utilization_pct | number | required | Example: 86.7
+overloaded_resources | integer | required | Example: 1
+by_skill | array of object | required | 
+
+
+=================== ENDPOINTS ===================
+
+==================================================
+ENDPOINT: GET /api/management/v1/kpi-targets
+TITLE: List KPI targets
+PERMISSION: planning.target.read
+ID: op-listKpiTargets
+Note: 200 OK with a page of KpiTarget items.
+
+==================================================
+ENDPOINT: POST /api/management/v1/kpi-targets
+TITLE: Create a KPI target (draft)
+PERMISSION: planning.target.create
+ID: op-createKpiTarget
+Note: Changing an approved target creates a new revision that supersedes the old one after approval.
+Note: 201 Created with KpiTarget.
+
+==================================================
+ENDPOINT: POST /api/management/v1/kpi-targets/{target_id}/submit
+TITLE: Submit a target for approval
+PERMISSION: planning.target.submit
+ID: op-submitKpiTarget
+Note: 200 OK with KpiTarget.
+
+==================================================
+ENDPOINT: GET /api/management/v1/kpi-definitions
+TITLE: List KPI definitions
+PERMISSION: performance.kpi.read
+ID: op-listKpiDefinitions
+Note: 200 OK with a page of KpiDefinition items.
+
+==================================================
+ENDPOINT: GET /api/management/v1/kpi-results
+TITLE: Get KPI results (target vs actual)
+PERMISSION: performance.kpi.read
+ID: op-listKpiResults
+Note: Results are recalculated within about 30 seconds of the business events that feed them.
+Note: 200 OK with a page of KpiResult items.
+
+==================================================
+ENDPOINT: POST /api/management/v1/measurements
+TITLE: Record a manual measurement
+PERMISSION: performance.measurement.create
+ID: op-recordMeasurement
+Note: Only for KPIs whose source type is manual (for example survey results). Event-fed KPIs reject manual values.
+Note: 201 Created with an empty body.
+
+==================================================
+ENDPOINT: GET /api/management/v1/corrective-actions
+TITLE: List corrective actions
+PERMISSION: performance.corrective.read
+ID: op-listCorrectiveActions
+Note: 200 OK with a page of CorrectiveAction items.
+
+==================================================
+ENDPOINT: POST /api/management/v1/corrective-actions
+TITLE: Create a corrective action
+PERMISSION: performance.corrective.create
+ID: op-createCorrectiveAction
+Note: 201 Created with CorrectiveAction.
+
+==================================================
+ENDPOINT: GET /api/management/v1/availability
+TITLE: Find available people
+PERMISSION: resource.availability.read
+ID: op-findAvailability
+Note: Ordered by free minutes, then skill level, then cost rate.
+Note: 200 OK with a page of ResourceAvailability items.
+
+==================================================
+ENDPOINT: POST /api/management/v1/allocations
+TITLE: Allocate a person to work
+PERMISSION: resource.allocation.create
+ID: op-createAllocation
+Note: Over-allocation is refused unless override_reason is given by a user with resource.allocation.override; the overloaded days are listed in the error meta.
+Note: 201 Created with Allocation.
+
+==================================================
+ENDPOINT: GET /api/management/v1/capacity
+TITLE: Get capacity for a unit
+PERMISSION: resource.capacity.read
+ID: op-getCapacity
+Note: 200 OK with CapacitySummary.

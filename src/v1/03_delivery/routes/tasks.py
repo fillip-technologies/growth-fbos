@@ -56,6 +56,7 @@ async def list_tasks(
     q: Optional[str] = Query(None),
     limit: int = Query(25, ge=1, le=100),
     cursor: Optional[str] = Query(None),
+    sort: Optional[str] = Query(None),
 ) -> PageResponse[TaskResponse]:
     """List tasks."""
     return await service.list_tasks(
@@ -259,6 +260,7 @@ async def get_task_history(
     org_id: OrgId,
     limit: int = Query(25, ge=1, le=100),
     cursor: Optional[str] = Query(None),
+    sort: Optional[str] = Query(None),
 ) -> PageResponse[TaskHistoryItemResponse]:
     """Get the status history."""
     return await service.get_task_history(session, org_id, task_id, limit, cursor)
@@ -274,6 +276,7 @@ async def list_task_time_entries(
     org_id: OrgId,
     limit: int = Query(25, ge=1, le=100),
     cursor: Optional[str] = Query(None),
+    sort: Optional[str] = Query(None),
 ) -> PageResponse[TimeEntryResponse]:
     """List time entries for a task."""
     return await service.list_task_time_entries(session, org_id, task_id, limit, cursor)
@@ -306,6 +309,7 @@ async def list_time_entries(
     user_id: Optional[str] = Query(None, alias="user_id", description="'me' or a user id"),
     limit: int = Query(25, ge=1, le=100),
     cursor: Optional[str] = Query(None),
+    sort: Optional[str] = Query(None),
 ) -> PageResponse[TimeEntryResponse]:
     """List time entries (timesheet)."""
     return await service.list_time_entries(session, org_id, caller_user_id, user_id, date_from, date_to, limit, cursor)
@@ -321,6 +325,7 @@ async def list_comments(
     org_id: OrgId,
     limit: int = Query(25, ge=1, le=100),
     cursor: Optional[str] = Query(None),
+    sort: Optional[str] = Query(None),
 ) -> PageResponse[CommentResponse]:
     """List comments."""
     return await service.list_comments(session, org_id, task_id, limit, cursor)
@@ -366,6 +371,7 @@ async def list_handovers(
     status_: Optional[str] = Query(None, alias="status"),
     limit: int = Query(25, ge=1, le=100),
     cursor: Optional[str] = Query(None),
+    sort: Optional[str] = Query(None),
 ) -> PageResponse[HandoverResponse]:
     """List handovers."""
     return await service.list_handovers(session, org_id, to_unit_id, status_, limit, cursor)
@@ -425,6 +431,7 @@ async def list_recurring_rules(
     subject_id: Optional[uuid.UUID] = Query(None),
     limit: int = Query(25, ge=1, le=100),
     cursor: Optional[str] = Query(None),
+    sort: Optional[str] = Query(None),
 ) -> PageResponse[RecurringRuleResponse]:
     """List recurring task rules."""
     return await service.list_recurring_rules(session, org_id, subject_id, limit, cursor)

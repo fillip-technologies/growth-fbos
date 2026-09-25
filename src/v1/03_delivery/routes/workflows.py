@@ -35,6 +35,7 @@ async def list_workflow_definitions(
     vertical_id: Optional[uuid.UUID] = Query(None),
     limit: int = Query(25, ge=1, le=100),
     cursor: Optional[str] = Query(None),
+    sort: Optional[str] = Query(None),
 ) -> PageResponse[WorkflowDefinitionResponse]:
     """List workflow definitions."""
     return await service.list_workflow_definitions(session, org_id, subject_type, vertical_id, limit, cursor)
@@ -151,6 +152,7 @@ async def list_workflow_instances(
     definition_code: Optional[str] = Query(None),
     limit: int = Query(25, ge=1, le=100),
     cursor: Optional[str] = Query(None),
+    sort: Optional[str] = Query(None),
 ) -> PageResponse[WorkflowInstanceResponse]:
     """List workflow instances."""
     return await service.list_workflow_instances(
@@ -180,6 +182,7 @@ async def list_available_transitions(
     org_id: OrgId,
     limit: int = Query(25, ge=1, le=100),
     cursor: Optional[str] = Query(None),
+    sort: Optional[str] = Query(None),
 ) -> PageResponse[AvailableTransitionResponse]:
     """List transitions available now."""
     return await service.list_available_transitions(session, org_id, instance_id, limit, cursor)
@@ -249,6 +252,7 @@ async def get_instance_history(
     org_id: OrgId,
     limit: int = Query(25, ge=1, le=100),
     cursor: Optional[str] = Query(None),
+    sort: Optional[str] = Query(None),
 ) -> PageResponse[InstanceHistoryItemResponse]:
     """Get the instance timeline."""
     return await service.get_instance_history(session, org_id, instance_id, limit, cursor)
