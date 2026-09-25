@@ -1,15 +1,9 @@
 from fastapi import APIRouter
 
+from routes.assets import router as assets_router
+
 core_router = APIRouter()
-
-
-@core_router.get("/ping", tags=["system"])
-async def ping() -> dict:
-    return {"message": "pong"}
-
-# Include route modules here as the service grows (Assets):
-# from routes.assets import router as assets_router
-# core_router.include_router(assets_router, prefix="/assets", tags=["assets"])
+core_router.include_router(assets_router)
 
 # Mount both /v1 and /api/assets/v1 for complete compatibility
 router = APIRouter()

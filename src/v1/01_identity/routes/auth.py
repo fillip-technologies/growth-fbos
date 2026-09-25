@@ -195,23 +195,6 @@ async def get_me(
     )
 
 
-# Alias /refresh to /token/refresh for full spec compatibility
-@router.post(
-    "/refresh",
-    response_model=TokenResponse,
-    status_code=status.HTTP_200_OK,
-    summary="Rotate refresh token and get a new access token",
-)
-async def refresh_token_alias(
-    request: Request,
-    response: Response,
-    request_body: Optional[RefreshRequest] = None,
-    x_csrf_token: Optional[str] = Header(None, alias="X-CSRF-Token"),
-    session: AsyncSession = Depends(get_db_session),
-) -> TokenResponse:
-    return await refresh_token(request, response, request_body, x_csrf_token, session)
-
-
 @router.post(
     "/password/forgot",
     status_code=status.HTTP_202_ACCEPTED,

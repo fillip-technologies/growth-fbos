@@ -18,14 +18,16 @@ class NotificationRule(Base):
 
     id: Mapped[uuid.UUID] = mapped_column(UUIDType, primary_key=True, default=uuid.uuid4)
     organization_id: Mapped[uuid.UUID] = mapped_column(UUIDType, nullable=False, index=True)
+    code: Mapped[str] = mapped_column(String(100), nullable=False, index=True)
     event_type: Mapped[str] = mapped_column(String(100), nullable=False, index=True)
     condition: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
     template_code: Mapped[str] = mapped_column(String(100), nullable=False)
     recipient_selector: Mapped[dict] = mapped_column(JSON, nullable=False)
-    channel_types: Mapped[str] = mapped_column(String(100), nullable=False)  # comma-separated e.g. "email,push"
-    urgency: Mapped[str] = mapped_column(String(50), nullable=False, default="medium")
+    channel_types: Mapped[str] = mapped_column(String(100), nullable=False)  # comma-separated e.g. "in_app,whatsapp"
+    urgency: Mapped[str] = mapped_column(String(50), nullable=False, default="normal")
     digestible: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
 
 
 class NotificationTemplate(Base):
@@ -125,8 +127,13 @@ class InboxItem(Base):
     )
     body: Mapped[str] = mapped_column(Text, nullable=False)
     action_url: Mapped[Optional[str]] = mapped_column(String(512), nullable=True)
+    subject_type: Mapped[Optional[str]] = mapped_column(String(100), nullable=True, index=True)
+    subject_id: Mapped[Optional[uuid.UUID]] = mapped_column(UUIDType, nullable=True, index=True)
+    event_type: Mapped[Optional[str]] = mapped_column(String(100), nullable=True, index=True)
+    urgency: Mapped[str] = mapped_column(String(50), nullable=False, default="normal")
     read_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
     archived_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
 
 
 class Suppression(Base):
@@ -188,3 +195,20 @@ class DeviceToken(Base):
     platform: Mapped[str] = mapped_column(String(50), nullable=False)
     token: Mapped[str] = mapped_column(String(512), nullable=False, unique=True, index=True)
     last_seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+
+
+class WebhookSubscription(Base):
+    """
+    Outbound webhook subscription delivering signed event payloads to an external URL.
+    """
+
+    __tablename__ = "webhook_subscriptions"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUIDType, primary_key=True, default=uuid.uuid4)
+    organization_id: Mapped[uuid.UUID] = mapped_column(UUIDType, nullable=False, index=True)
+    url: Mapped[str] = mapped_column(String(2048), nullable=False)
+    event_types: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
+    description: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    secret: Mapped[str] = mapped_column(String(255), nullable=False)
+    status: Mapped[str] = mapped_column(String(50), nullable=False, default="active", index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)

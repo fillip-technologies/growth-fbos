@@ -46,17 +46,3 @@ async def create_offering(
     )
     await session.commit()
     return offering
-
-
-@router.get("/{offering_id}", response_model=OfferingResponse)
-async def get_offering(
-    offering_id: uuid.UUID,
-    session: DatabaseSession,
-    org_id: OrgId,
-) -> OfferingResponse:
-    """Retrieve details of a specific service offering."""
-    return await OfferingService.get_offering(
-        session=session,
-        offering_id=offering_id,
-        org_id=org_id,
-    )

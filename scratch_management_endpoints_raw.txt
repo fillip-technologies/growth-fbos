@@ -1,0 +1,741 @@
+====================================================================================================
+EP: op-listKpiTargets
+
+  <div class="ep-main">
+    <h4 class="ep-title">List KPI targets</h4>
+    <p class="ep-line"><span class="m m-get">GET</span><code class="path">/api/management/v1/kpi-targets</code></p>
+    
+    <dl class="facts"><dt>Permission</dt><dd><code>planning.target.read</code></dd><dt>Authentication</dt><dd>Access token</dd><dt>Idempotency</dt><dd>Naturally idempotent</dd><dt>Concurrency</dt><dd>—</dd><dt>Rate limit class</dt><dd><a href="#rate-limits">standard</a></dd></dl>
+    <h5>Parameters</h5><ul class="plist"><li><div class="ph"><code class="pname">period_id</code><span class="ptype">string (uuid)</span><span class="pin">query</span><span class="popt">optional</span></div><div class="pd"><span class="ex">Example: <code>0191f3a2-0051-7051-8237-0000008170e9</code></span></div></li><li><div class="ph"><code class="pname">kpi_code</code><span class="ptype">string</span><span class="pin">query</span><span class="popt">optional</span></div><div class="pd"><span class="ex">Example: <code>revenue_billed</code></span></div></li><li><div class="ph"><code class="pname">status</code><span class="ptype">one of <code>draft</code>, <code>pending_approval</code>, <code>approved</code>, <code>superseded</code></span><span class="pin">query</span><span class="popt">optional</span></div><div class="pd"><span class="ex">Example: <code>approved</code></span></div></li><li><div class="ph"><code class="pname">limit</code><span class="ptype">integer</span><span class="pin">query</span><span class="popt">optional</span></div><div class="pd">1–100, default 25.</div></li><li><div class="ph"><code class="pname">cursor</code><span class="ptype">string</span><span class="pin">query</span><span class="popt">optional</span></div><div class="pd">Opaque cursor from <code>page.next_cursor</code>. See <a href="#pagination">pagination</a>.</div></li><li><div class="ph"><code class="pname">sort</code><span class="ptype">string</span><span class="pin">query</span><span class="popt">optional</span></div><div class="pd">Comma-separated fields, <code>-</code> for descending.</div></li></ul>
+    <h5>Response</h5><p><strong>200 OK</strong> with a page of <a href="#schema-KpiTarget">KpiTarget</a> items.</p>
+    <h5>Errors</h5><p class="std-errors">Also the standard errors for authentication (401), permission (403), rate limiting (429) and server and dependency failures (500, 503). <a href="#errors-guide">How to handle them</a>.</p>
+  </div>
+  <div class="ep-code"><div class="tabs" role="tablist" aria-label="Examples"><button type="button" role="tab" aria-selected="true" aria-controls="listKpiTargets-curl" id="listKpiTargets-curl-tab">cURL</button><button type="button" role="tab" aria-selected="false" aria-controls="listKpiTargets-res" id="listKpiTargets-res-tab">Response 200</button><button type="button" role="tab" aria-selected="false" aria-controls="listKpiTargets-err" id="listKpiTargets-err-tab">Error 403</button></div><div role="tabpanel" id="listKpiTargets-curl" aria-labelledby="listKpiTargets-curl-tab"><figure class="code"><div class="bar"><span></span><button class="copy" type="button" aria-label="Copy code">Copy</button></div><pre><code class="lang-text"><span class="hm">curl</span> -X GET &quot;https://api.hamsasoham.com/api/management/v1/kpi-targets?limit=25&quot; \
+  -H &quot;Authorization: Bearer <span class="v">$FBOS_TOKEN</span>&quot;</code></pre></figure></div><div role="tabpanel" id="listKpiTargets-res" aria-labelledby="listKpiTargets-res-tab" hidden><figure class="code"><div class="bar"><span></span><button class="copy" type="button" aria-label="Copy code">Copy</button></div><pre><code class="lang-text"><span class="hm">HTTP/1.1</span> 200 OK
+<span class="hh">Content-Type</span>: application/json; charset=utf-8
+<span class="hh">X-Request-Id</span>: 0191f3a2-005e-705e-8292-00000096372e
+
+{
+  <span class="k">&quot;data&quot;</span>: [
+    {
+      <span class="k">&quot;id&quot;</span>: <span class="s">&quot;0191f3a2-004f-704f-8229-0000007e3eb7&quot;</span>,
+      <span class="k">&quot;kpi&quot;</span>: {
+        <span class="k">&quot;code&quot;</span>: <span class="s">&quot;revenue_billed&quot;</span>,
+        <span class="k">&quot;name&quot;</span>: <span class="s">&quot;Revenue billed&quot;</span>,
+        <span class="k">&quot;unit&quot;</span>: <span class="s">&quot;INR&quot;</span>
+      },
+      <span class="k">&quot;period&quot;</span>: {
+        <span class="k">&quot;id&quot;</span>: <span class="s">&quot;0191f3a2-0051-7051-8237-0000008170e9&quot;</span>,
+        <span class="k">&quot;name&quot;</span>: <span class="s">&quot;Q3 FY2026-27&quot;</span>
+      },
+      <span class="k">&quot;scope&quot;</span>: {
+        <span class="k">&quot;unit_id&quot;</span>: <span class="s">&quot;0191f3a2-0018-7018-80a8-000000265a58&quot;</span>,
+        <span class="k">&quot;vertical_id&quot;</span>: <span class="s">&quot;0191f3a2-001b-701b-80bd-0000002b25a3&quot;</span>,
+        <span class="k">&quot;user_id&quot;</span>: <span class="l">null</span>
+      },
+      <span class="k">&quot;target_value&quot;</span>: <span class="n">4500000</span>,
+      <span class="k">&quot;stretch_value&quot;</span>: <span class="n">5200000</span>,
+      <span class="k">&quot;revision_no&quot;</span>: <span class="n">1</span>,
+      <span class="k">&quot;status&quot;</span>: <span class="s">&quot;pending_approval&quot;</span>,
+      <span class="k">&quot;approval_request_id&quot;</span>: <span class="s">&quot;0191f3a2-0040-7040-81c0-000000664640&quot;</span>
+    }
+  ],
+  <span class="k">&quot;page&quot;</span>: {
+    <span class="k">&quot;next_cursor&quot;</span>: <span class="s">&quot;eyJpZCI6IjAxOTFmM2EyIn0&quot;</span>,
+    <span class="k">&quot;has_more&quot;</span>: <span class="l">true</span>,
+    <span class="k">&quot;limit&quot;</span>: <span class="n">25</span>
+  }
+}</code></pre></figure></div><div role="tabpanel" id="listKpiTargets-err" aria-labelledby="listKpiTargets-err-tab" hidden><figure class="code"><div class="bar"><span></span><button class="copy" type="button" aria-label="Copy code">Copy</button></div><pre><code class="lang-text"><span class="hm">HTTP/1.1</span> 403
+<span class="hh">Content-Type</span>: application/problem+json
+
+{
+  <span class="k">&quot;type&quot;</span>: <span class="s">&quot;https://docs.hamsasoham.com/errors/PERMISSION_DENIED&quot;</span>,
+  <span class="k">&quot;title&quot;</span>: <span class="s">&quot;You don&#x27;t have permission for this action&quot;</span>,
+  <span class="k">&quot;status&quot;</span>: <span class="n">403</span>,
+  <span class="k">&quot;code&quot;</span>: <span class="s">&quot;PERMISSION_DENIED&quot;</span>,
+  <span class="k">&quot;detail&quot;</span>: <span class="s">&quot;The record is visible to you but your roles in its scope don&#x27;t include the required permission.&quot;</span>,
+  <span class="k">&quot;instance&quot;</span>: <span class="s">&quot;/api/management/v1/kpi-targets&quot;</span>,
+  <span class="k">&quot;request_id&quot;</span>: <span class="s">&quot;0191f3a2-005e-705e-8292-00000096372e&quot;</span>,
+  <span class="k">&quot;retryable&quot;</span>: <span class="l">false</span>,
+  <span class="k">&quot;meta&quot;</span>: {
+    <span class="k">&quot;required_permission&quot;</span>: <span class="s">&quot;task.task.assign&quot;</span>
+  }
+}</code></pre></figure></div></div>
+
+
+====================================================================================================
+EP: op-createKpiTarget
+
+  <div class="ep-main">
+    <h4 class="ep-title">Create a KPI target (draft)</h4>
+    <p class="ep-line"><span class="m m-post">POST</span><code class="path">/api/management/v1/kpi-targets</code></p>
+    <p>Changing an approved target creates a new revision that supersedes the old one after approval.</p>
+    <dl class="facts"><dt>Permission</dt><dd><code>planning.target.create</code></dd><dt>Authentication</dt><dd>Access token</dd><dt>Idempotency</dt><dd>Supported: send <code>Idempotency-Key</code></dd><dt>Concurrency</dt><dd>—</dd><dt>Rate limit class</dt><dd><a href="#rate-limits">standard</a></dd></dl>
+    <h5>Parameters</h5><ul class="plist"><li><div class="ph"><code class="pname">Idempotency-Key</code><span class="ptype">string (uuid)</span><span class="pin">header</span><span class="popt">optional</span></div><div class="pd"><a href="#idempotency">One UUID per user action</a>, reused on every retry.</div></li></ul><h5>Request body <a class="schema-link" href="#schema-KpiTargetCreate">KpiTargetCreate</a></h5><ul class="plist"><li><div class="ph"><code class="pname">kpi_code</code><span class="ptype">string</span><span class="preq">required</span></div></li><li><div class="ph"><code class="pname">period_id</code><span class="ptype">string (uuid)</span><span class="preq">required</span></div></li><li><div class="ph"><code class="pname">scope</code><span class="ptype"><a href="#schema-KpiScope">KpiScope</a></span><span class="preq">required</span></div></li><li><div class="ph"><code class="pname">target_value</code><span class="ptype">number</span><span class="preq">required</span></div></li><li><div class="ph"><code class="pname">stretch_value</code><span class="ptype">number</span><span class="popt">optional, nullable</span></div></li><li><div class="ph"><code class="pname">goal_id</code><span class="ptype">string (uuid)</span><span class="popt">optional, nullable</span></div></li></ul>
+    <h5>Response</h5><p><strong>201 Created</strong> with <a href="#schema-KpiTarget">KpiTarget</a>.</p>
+    <h5>Errors</h5><div class="table-wrap"><table class="errs"><thead><tr><th scope="col">HTTP</th><th scope="col">Code</th><th scope="col">When it happens</th></tr></thead><tbody><tr><td>409</td><td><a href="#err-DUPLICATE_OPEN_REQUEST"><code>DUPLICATE_OPEN_REQUEST</code></a></td><td>Only one open approval (or draft target) per subject and type.</td></tr></tbody></table></div><p class="std-errors">Also the standard errors for authentication (401), permission (403), malformed or invalid input (400, 422), idempotency (400, 409, 422), rate limiting (429) and server and dependency failures (500, 503). <a href="#errors-guide">How to handle them</a>.</p>
+  </div>
+  <div class="ep-code"><div class="tabs" role="tablist" aria-label="Examples"><button type="button" role="tab" aria-selected="true" aria-controls="createKpiTarget-curl" id="createKpiTarget-curl-tab">cURL</button><button type="button" role="tab" aria-selected="false" aria-controls="createKpiTarget-req" id="createKpiTarget-req-tab">Request</button><button type="button" role="tab" aria-selected="false" aria-controls="createKpiTarget-res" id="createKpiTarget-res-tab">Response 201</button><button type="button" role="tab" aria-selected="false" aria-controls="createKpiTarget-err" id="createKpiTarget-err-tab">Error 409</button></div><div role="tabpanel" id="createKpiTarget-curl" aria-labelledby="createKpiTarget-curl-tab"><figure class="code"><div class="bar"><span></span><button class="copy" type="button" aria-label="Copy code">Copy</button></div><pre><code class="lang-text"><span class="hm">curl</span> -X POST &quot;https://api.hamsasoham.com/api/management/v1/kpi-targets&quot; \
+  -H &quot;Authorization: Bearer <span class="v">$FBOS_TOKEN</span>&quot; \
+  -H &quot;Content-Type: application/json&quot; \
+  -H &quot;Idempotency-Key: $(uuidgen)&quot; \
+  --data-raw &#x27;{
+  &quot;kpi_code&quot;: &quot;revenue_billed&quot;,
+  &quot;period_id&quot;: &quot;0191f3a2-0051-7051-8237-0000008170e9&quot;,
+  &quot;scope&quot;: {
+    &quot;unit_id&quot;: &quot;0191f3a2-0018-7018-80a8-000000265a58&quot;,
+    &quot;vertical_id&quot;: &quot;0191f3a2-001b-701b-80bd-0000002b25a3&quot;
+  },
+  &quot;target_value&quot;: 4500000,
+  &quot;stretch_value&quot;: 5200000,
+  &quot;goal_id&quot;: &quot;0191f3a2-0052-7052-823e-000000830a02&quot;
+}&#x27;</code></pre></figure></div><div role="tabpanel" id="createKpiTarget-req" aria-labelledby="createKpiTarget-req-tab" hidden><figure class="code"><div class="bar"><figcaption>POST /api/management/v1/kpi-targets</figcaption><button class="copy" type="button" aria-label="Copy code">Copy</button></div><pre><code class="lang-text">{
+  <span class="k">&quot;kpi_code&quot;</span>: <span class="s">&quot;revenue_billed&quot;</span>,
+  <span class="k">&quot;period_id&quot;</span>: <span class="s">&quot;0191f3a2-0051-7051-8237-0000008170e9&quot;</span>,
+  <span class="k">&quot;scope&quot;</span>: {
+    <span class="k">&quot;unit_id&quot;</span>: <span class="s">&quot;0191f3a2-0018-7018-80a8-000000265a58&quot;</span>,
+    <span class="k">&quot;vertical_id&quot;</span>: <span class="s">&quot;0191f3a2-001b-701b-80bd-0000002b25a3&quot;</span>
+  },
+  <span class="k">&quot;target_value&quot;</span>: <span class="n">4500000</span>,
+  <span class="k">&quot;stretch_value&quot;</span>: <span class="n">5200000</span>,
+  <span class="k">&quot;goal_id&quot;</span>: <span class="s">&quot;0191f3a2-0052-7052-823e-000000830a02&quot;</span>
+}</code></pre></figure></div><div role="tabpanel" id="createKpiTarget-res" aria-labelledby="createKpiTarget-res-tab" hidden><figure class="code"><div class="bar"><span></span><button class="copy" type="button" aria-label="Copy code">Copy</button></div><pre><code class="lang-text"><span class="hm">HTTP/1.1</span> 201 Created
+<span class="hh">Content-Type</span>: application/json; charset=utf-8
+<span class="hh">Location</span>: /api/management/v1/kpi-targets
+<span class="hh">X-Request-Id</span>: 0191f3a2-005e-705e-8292-00000096372e
+
+{
+  <span class="k">&quot;id&quot;</span>: <span class="s">&quot;0191f3a2-004f-704f-8229-0000007e3eb7&quot;</span>,
+  <span class="k">&quot;kpi&quot;</span>: {
+    <span class="k">&quot;code&quot;</span>: <span class="s">&quot;revenue_billed&quot;</span>,
+    <span class="k">&quot;name&quot;</span>: <span class="s">&quot;Revenue billed&quot;</span>,
+    <span class="k">&quot;unit&quot;</span>: <span class="s">&quot;INR&quot;</span>
+  },
+  <span class="k">&quot;period&quot;</span>: {
+    <span class="k">&quot;id&quot;</span>: <span class="s">&quot;0191f3a2-0051-7051-8237-0000008170e9&quot;</span>,
+    <span class="k">&quot;name&quot;</span>: <span class="s">&quot;Q3 FY2026-27&quot;</span>
+  },
+  <span class="k">&quot;scope&quot;</span>: {
+    <span class="k">&quot;unit_id&quot;</span>: <span class="s">&quot;0191f3a2-0018-7018-80a8-000000265a58&quot;</span>,
+    <span class="k">&quot;vertical_id&quot;</span>: <span class="s">&quot;0191f3a2-001b-701b-80bd-0000002b25a3&quot;</span>,
+    <span class="k">&quot;user_id&quot;</span>: <span class="l">null</span>
+  },
+  <span class="k">&quot;target_value&quot;</span>: <span class="n">4500000</span>,
+  <span class="k">&quot;stretch_value&quot;</span>: <span class="n">5200000</span>,
+  <span class="k">&quot;revision_no&quot;</span>: <span class="n">1</span>,
+  <span class="k">&quot;status&quot;</span>: <span class="s">&quot;draft&quot;</span>,
+  <span class="k">&quot;approval_request_id&quot;</span>: <span class="l">null</span>
+}</code></pre></figure></div><div role="tabpanel" id="createKpiTarget-err" aria-labelledby="createKpiTarget-err-tab" hidden><figure class="code"><div class="bar"><span></span><button class="copy" type="button" aria-label="Copy code">Copy</button></div><pre><code class="lang-text"><span class="hm">HTTP/1.1</span> 409
+<span class="hh">Content-Type</span>: application/problem+json
+
+{
+  <span class="k">&quot;type&quot;</span>: <span class="s">&quot;https://docs.hamsasoham.com/errors/DUPLICATE_OPEN_REQUEST&quot;</span>,
+  <span class="k">&quot;title&quot;</span>: <span class="s">&quot;An open request already exists for this object&quot;</span>,
+  <span class="k">&quot;status&quot;</span>: <span class="n">409</span>,
+  <span class="k">&quot;code&quot;</span>: <span class="s">&quot;DUPLICATE_OPEN_REQUEST&quot;</span>,
+  <span class="k">&quot;detail&quot;</span>: <span class="s">&quot;Only one open approval (or draft target) per subject and type.&quot;</span>,
+  <span class="k">&quot;instance&quot;</span>: <span class="s">&quot;/api/management/v1/kpi-targets&quot;</span>,
+  <span class="k">&quot;request_id&quot;</span>: <span class="s">&quot;0191f3a2-005e-705e-8292-00000096372e&quot;</span>,
+  <span class="k">&quot;retryable&quot;</span>: <span class="l">false</span>,
+  <span class="k">&quot;meta&quot;</span>: {
+    <span class="k">&quot;existing_id&quot;</span>: <span class="s">&quot;0191f3a2-0040-7040-81c0-000000664640&quot;</span>
+  }
+}</code></pre></figure></div></div>
+
+
+====================================================================================================
+EP: op-submitKpiTarget
+
+  <div class="ep-main">
+    <h4 class="ep-title">Submit a target for approval</h4>
+    <p class="ep-line"><span class="m m-post">POST</span><code class="path">/api/management/v1/kpi-targets/{target_id}/submit</code></p>
+    
+    <dl class="facts"><dt>Permission</dt><dd><code>planning.target.submit</code></dd><dt>Authentication</dt><dd>Access token</dd><dt>Idempotency</dt><dd>Supported: send <code>Idempotency-Key</code></dd><dt>Concurrency</dt><dd>Send <code>If-Match</code> with the current ETag</dd><dt>Rate limit class</dt><dd><a href="#rate-limits">standard</a></dd></dl>
+    <h5>Parameters</h5><ul class="plist"><li><div class="ph"><code class="pname">target_id</code><span class="ptype">string (uuid)</span><span class="pin">path</span><span class="preq">required</span></div><div class="pd">Target id. <span class="ex">Example: <code>0191f3a2-004f-704f-8229-0000007e3eb7</code></span></div></li><li><div class="ph"><code class="pname">Idempotency-Key</code><span class="ptype">string (uuid)</span><span class="pin">header</span><span class="popt">optional</span></div><div class="pd"><a href="#idempotency">One UUID per user action</a>, reused on every retry.</div></li><li><div class="ph"><code class="pname">If-Match</code><span class="ptype">string</span><span class="pin">header</span><span class="preq">required</span></div><div class="pd">The <a href="#concurrency">ETag</a> of the version you last read.</div></li></ul>
+    <h5>Response</h5><p><strong>200 OK</strong> with <a href="#schema-KpiTarget">KpiTarget</a>.</p>
+    <h5>What happens next</h5><ul><li>On approval: <code>planning.target.approved.v1</code>; performance recalculates results for the period.</li></ul><h5>Events published</h5><p class="chips"><a href="#evt-planning-target-submitted-v1"><code>planning.target.submitted.v1</code></a></p><h5>Errors</h5><div class="table-wrap"><table class="errs"><thead><tr><th scope="col">HTTP</th><th scope="col">Code</th><th scope="col">When it happens</th></tr></thead><tbody><tr><td>409</td><td><a href="#err-INVALID_STATE_TRANSITION"><code>INVALID_STATE_TRANSITION</code></a></td><td>The state machine does not allow this action from the record&#x27;s current status.</td></tr><tr><td>422</td><td><a href="#err-NO_APPROVAL_POLICY"><code>NO_APPROVAL_POLICY</code></a></td><td>No active policy matches and the organization requires one.</td></tr></tbody></table></div><p class="std-errors">Also the standard errors for authentication (401), permission (403), not found (404), idempotency (400, 409, 422), stale or missing If-Match (412, 428), rate limiting (429) and server and dependency failures (500, 503). <a href="#errors-guide">How to handle them</a>.</p>
+  </div>
+  <div class="ep-code"><div class="tabs" role="tablist" aria-label="Examples"><button type="button" role="tab" aria-selected="true" aria-controls="submitKpiTarget-curl" id="submitKpiTarget-curl-tab">cURL</button><button type="button" role="tab" aria-selected="false" aria-controls="submitKpiTarget-res" id="submitKpiTarget-res-tab">Response 200</button><button type="button" role="tab" aria-selected="false" aria-controls="submitKpiTarget-err" id="submitKpiTarget-err-tab">Error 409</button></div><div role="tabpanel" id="submitKpiTarget-curl" aria-labelledby="submitKpiTarget-curl-tab"><figure class="code"><div class="bar"><span></span><button class="copy" type="button" aria-label="Copy code">Copy</button></div><pre><code class="lang-text"><span class="hm">curl</span> -X POST &quot;https://api.hamsasoham.com/api/management/v1/kpi-targets/0191f3a2-004f-704f-8229-0000007e3eb7/submit&quot; \
+  -H &quot;Authorization: Bearer <span class="v">$FBOS_TOKEN</span>&quot; \
+  -H &quot;Idempotency-Key: $(uuidgen)&quot; \
+  -H &#x27;If-Match: &quot;11&quot;&#x27;</code></pre></figure></div><div role="tabpanel" id="submitKpiTarget-res" aria-labelledby="submitKpiTarget-res-tab" hidden><figure class="code"><div class="bar"><span></span><button class="copy" type="button" aria-label="Copy code">Copy</button></div><pre><code class="lang-text"><span class="hm">HTTP/1.1</span> 200 OK
+<span class="hh">Content-Type</span>: application/json; charset=utf-8
+<span class="hh">X-Request-Id</span>: 0191f3a2-005e-705e-8292-00000096372e
+
+{
+  <span class="k">&quot;id&quot;</span>: <span class="s">&quot;0191f3a2-004f-704f-8229-0000007e3eb7&quot;</span>,
+  <span class="k">&quot;kpi&quot;</span>: {
+    <span class="k">&quot;code&quot;</span>: <span class="s">&quot;revenue_billed&quot;</span>,
+    <span class="k">&quot;name&quot;</span>: <span class="s">&quot;Revenue billed&quot;</span>,
+    <span class="k">&quot;unit&quot;</span>: <span class="s">&quot;INR&quot;</span>
+  },
+  <span class="k">&quot;period&quot;</span>: {
+    <span class="k">&quot;id&quot;</span>: <span class="s">&quot;0191f3a2-0051-7051-8237-0000008170e9&quot;</span>,
+    <span class="k">&quot;name&quot;</span>: <span class="s">&quot;Q3 FY2026-27&quot;</span>
+  },
+  <span class="k">&quot;scope&quot;</span>: {
+    <span class="k">&quot;unit_id&quot;</span>: <span class="s">&quot;0191f3a2-0018-7018-80a8-000000265a58&quot;</span>,
+    <span class="k">&quot;vertical_id&quot;</span>: <span class="s">&quot;0191f3a2-001b-701b-80bd-0000002b25a3&quot;</span>,
+    <span class="k">&quot;user_id&quot;</span>: <span class="l">null</span>
+  },
+  <span class="k">&quot;target_value&quot;</span>: <span class="n">4500000</span>,
+  <span class="k">&quot;stretch_value&quot;</span>: <span class="n">5200000</span>,
+  <span class="k">&quot;revision_no&quot;</span>: <span class="n">1</span>,
+  <span class="k">&quot;status&quot;</span>: <span class="s">&quot;pending_approval&quot;</span>,
+  <span class="k">&quot;approval_request_id&quot;</span>: <span class="s">&quot;0191f3a2-0040-7040-81c0-000000664640&quot;</span>
+}</code></pre></figure></div><div role="tabpanel" id="submitKpiTarget-err" aria-labelledby="submitKpiTarget-err-tab" hidden><figure class="code"><div class="bar"><span></span><button class="copy" type="button" aria-label="Copy code">Copy</button></div><pre><code class="lang-text"><span class="hm">HTTP/1.1</span> 409
+<span class="hh">Content-Type</span>: application/problem+json
+
+{
+  <span class="k">&quot;type&quot;</span>: <span class="s">&quot;https://docs.hamsasoham.com/errors/INVALID_STATE_TRANSITION&quot;</span>,
+  <span class="k">&quot;title&quot;</span>: <span class="s">&quot;Action not allowed in the current status&quot;</span>,
+  <span class="k">&quot;status&quot;</span>: <span class="n">409</span>,
+  <span class="k">&quot;code&quot;</span>: <span class="s">&quot;INVALID_STATE_TRANSITION&quot;</span>,
+  <span class="k">&quot;detail&quot;</span>: <span class="s">&quot;The state machine does not allow this action from the record&#x27;s current status.&quot;</span>,
+  <span class="k">&quot;instance&quot;</span>: <span class="s">&quot;/api/management/v1/kpi-targets/0191f3a2-004f-704f-8229-0000007e3eb7/submit&quot;</span>,
+  <span class="k">&quot;request_id&quot;</span>: <span class="s">&quot;0191f3a2-005e-705e-8292-00000096372e&quot;</span>,
+  <span class="k">&quot;retryable&quot;</span>: <span class="l">false</span>,
+  <span class="k">&quot;meta&quot;</span>: {
+    <span class="k">&quot;current_status&quot;</span>: <span class="s">&quot;done&quot;</span>,
+    <span class="k">&quot;allowed_actions&quot;</span>: []
+  }
+}</code></pre></figure></div></div>
+
+
+====================================================================================================
+EP: op-listKpiDefinitions
+
+  <div class="ep-main">
+    <h4 class="ep-title">List KPI definitions</h4>
+    <p class="ep-line"><span class="m m-get">GET</span><code class="path">/api/management/v1/kpi-definitions</code></p>
+    
+    <dl class="facts"><dt>Permission</dt><dd><code>performance.kpi.read</code></dd><dt>Authentication</dt><dd>Access token</dd><dt>Idempotency</dt><dd>Naturally idempotent</dd><dt>Concurrency</dt><dd>—</dd><dt>Rate limit class</dt><dd><a href="#rate-limits">standard</a></dd></dl>
+    <h5>Parameters</h5><ul class="plist"><li><div class="ph"><code class="pname">limit</code><span class="ptype">integer</span><span class="pin">query</span><span class="popt">optional</span></div><div class="pd">1–100, default 25.</div></li><li><div class="ph"><code class="pname">cursor</code><span class="ptype">string</span><span class="pin">query</span><span class="popt">optional</span></div><div class="pd">Opaque cursor from <code>page.next_cursor</code>. See <a href="#pagination">pagination</a>.</div></li><li><div class="ph"><code class="pname">sort</code><span class="ptype">string</span><span class="pin">query</span><span class="popt">optional</span></div><div class="pd">Comma-separated fields, <code>-</code> for descending.</div></li></ul>
+    <h5>Response</h5><p><strong>200 OK</strong> with a page of <a href="#schema-KpiDefinition">KpiDefinition</a> items.</p>
+    <h5>Errors</h5><p class="std-errors">Also the standard errors for authentication (401), permission (403), rate limiting (429) and server and dependency failures (500, 503). <a href="#errors-guide">How to handle them</a>.</p>
+  </div>
+  <div class="ep-code"><div class="tabs" role="tablist" aria-label="Examples"><button type="button" role="tab" aria-selected="true" aria-controls="listKpiDefinitions-curl" id="listKpiDefinitions-curl-tab">cURL</button><button type="button" role="tab" aria-selected="false" aria-controls="listKpiDefinitions-res" id="listKpiDefinitions-res-tab">Response 200</button><button type="button" role="tab" aria-selected="false" aria-controls="listKpiDefinitions-err" id="listKpiDefinitions-err-tab">Error 403</button></div><div role="tabpanel" id="listKpiDefinitions-curl" aria-labelledby="listKpiDefinitions-curl-tab"><figure class="code"><div class="bar"><span></span><button class="copy" type="button" aria-label="Copy code">Copy</button></div><pre><code class="lang-text"><span class="hm">curl</span> -X GET &quot;https://api.hamsasoham.com/api/management/v1/kpi-definitions?limit=25&quot; \
+  -H &quot;Authorization: Bearer <span class="v">$FBOS_TOKEN</span>&quot;</code></pre></figure></div><div role="tabpanel" id="listKpiDefinitions-res" aria-labelledby="listKpiDefinitions-res-tab" hidden><figure class="code"><div class="bar"><span></span><button class="copy" type="button" aria-label="Copy code">Copy</button></div><pre><code class="lang-text"><span class="hm">HTTP/1.1</span> 200 OK
+<span class="hh">Content-Type</span>: application/json; charset=utf-8
+<span class="hh">X-Request-Id</span>: 0191f3a2-005e-705e-8292-00000096372e
+
+{
+  <span class="k">&quot;data&quot;</span>: [
+    {
+      <span class="k">&quot;code&quot;</span>: <span class="s">&quot;revenue_billed&quot;</span>,
+      <span class="k">&quot;name&quot;</span>: <span class="s">&quot;Revenue billed&quot;</span>,
+      <span class="k">&quot;unit&quot;</span>: <span class="s">&quot;INR&quot;</span>,
+      <span class="k">&quot;direction&quot;</span>: <span class="s">&quot;higher_is_better&quot;</span>,
+      <span class="k">&quot;aggregation&quot;</span>: <span class="s">&quot;sum&quot;</span>,
+      <span class="k">&quot;formula&quot;</span>: <span class="l">null</span>,
+      <span class="k">&quot;frequency&quot;</span>: <span class="s">&quot;monthly&quot;</span>,
+      <span class="k">&quot;sources&quot;</span>: [
+        {
+          <span class="k">&quot;event_type&quot;</span>: <span class="s">&quot;billing.invoice.issued.v1&quot;</span>,
+          <span class="k">&quot;value_path&quot;</span>: <span class="s">&quot;$.payload.totals.taxable_total.amount&quot;</span>,
+          <span class="k">&quot;filter&quot;</span>: {
+            <span class="k">&quot;==&quot;</span>: [
+              {
+                <span class="k">&quot;var&quot;</span>: <span class="s">&quot;payload.doc_type&quot;</span>
+              },
+              <span class="s">&quot;tax_invoice&quot;</span>
+            ]
+          },
+          <span class="k">&quot;dimensions&quot;</span>: {
+            <span class="k">&quot;vertical_id&quot;</span>: <span class="s">&quot;$.scope.vertical_id&quot;</span>,
+            <span class="k">&quot;client_id&quot;</span>: <span class="s">&quot;$.payload.client.id&quot;</span>
+          }
+        },
+        {
+          <span class="k">&quot;event_type&quot;</span>: <span class="s">&quot;billing.credit_note.issued.v1&quot;</span>,
+          <span class="k">&quot;value_path&quot;</span>: <span class="s">&quot;$.payload.totals.taxable_total.amount&quot;</span>,
+          <span class="k">&quot;sign&quot;</span>: <span class="n">-1</span>
+        }
+      ],
+      <span class="k">&quot;status&quot;</span>: <span class="s">&quot;active&quot;</span>
+    }
+  ],
+  <span class="k">&quot;page&quot;</span>: {
+    <span class="k">&quot;next_cursor&quot;</span>: <span class="s">&quot;eyJpZCI6IjAxOTFmM2EyIn0&quot;</span>,
+    <span class="k">&quot;has_more&quot;</span>: <span class="l">true</span>,
+    <span class="k">&quot;limit&quot;</span>: <span class="n">25</span>
+  }
+}</code></pre></figure></div><div role="tabpanel" id="listKpiDefinitions-err" aria-labelledby="listKpiDefinitions-err-tab" hidden><figure class="code"><div class="bar"><span></span><button class="copy" type="button" aria-label="Copy code">Copy</button></div><pre><code class="lang-text"><span class="hm">HTTP/1.1</span> 403
+<span class="hh">Content-Type</span>: application/problem+json
+
+{
+  <span class="k">&quot;type&quot;</span>: <span class="s">&quot;https://docs.hamsasoham.com/errors/PERMISSION_DENIED&quot;</span>,
+  <span class="k">&quot;title&quot;</span>: <span class="s">&quot;You don&#x27;t have permission for this action&quot;</span>,
+  <span class="k">&quot;status&quot;</span>: <span class="n">403</span>,
+  <span class="k">&quot;code&quot;</span>: <span class="s">&quot;PERMISSION_DENIED&quot;</span>,
+  <span class="k">&quot;detail&quot;</span>: <span class="s">&quot;The record is visible to you but your roles in its scope don&#x27;t include the required permission.&quot;</span>,
+  <span class="k">&quot;instance&quot;</span>: <span class="s">&quot;/api/management/v1/kpi-definitions&quot;</span>,
+  <span class="k">&quot;request_id&quot;</span>: <span class="s">&quot;0191f3a2-005e-705e-8292-00000096372e&quot;</span>,
+  <span class="k">&quot;retryable&quot;</span>: <span class="l">false</span>,
+  <span class="k">&quot;meta&quot;</span>: {
+    <span class="k">&quot;required_permission&quot;</span>: <span class="s">&quot;task.task.assign&quot;</span>
+  }
+}</code></pre></figure></div></div>
+
+
+====================================================================================================
+EP: op-listKpiResults
+
+  <div class="ep-main">
+    <h4 class="ep-title">Get KPI results (target vs actual)</h4>
+    <p class="ep-line"><span class="m m-get">GET</span><code class="path">/api/management/v1/kpi-results</code></p>
+    <p>Results are recalculated within about 30 seconds of the business events that feed them.</p>
+    <dl class="facts"><dt>Permission</dt><dd><code>performance.kpi.read</code></dd><dt>Authentication</dt><dd>Access token</dd><dt>Idempotency</dt><dd>Naturally idempotent</dd><dt>Concurrency</dt><dd>—</dd><dt>Rate limit class</dt><dd><a href="#rate-limits">standard</a></dd></dl>
+    <h5>Parameters</h5><ul class="plist"><li><div class="ph"><code class="pname">period_id</code><span class="ptype">string (uuid)</span><span class="pin">query</span><span class="preq">required</span></div><div class="pd"><span class="ex">Example: <code>0191f3a2-0051-7051-8237-0000008170e9</code></span></div></li><li><div class="ph"><code class="pname">kpi_code</code><span class="ptype">string</span><span class="pin">query</span><span class="popt">optional</span></div><div class="pd"><span class="ex">Example: <code>revenue_billed</code></span></div></li><li><div class="ph"><code class="pname">unit_id</code><span class="ptype">string (uuid)</span><span class="pin">query</span><span class="popt">optional</span></div><div class="pd"><span class="ex">Example: <code>0191f3a2-0018-7018-80a8-000000265a58</code></span></div></li><li><div class="ph"><code class="pname">vertical_id</code><span class="ptype">string (uuid)</span><span class="pin">query</span><span class="popt">optional</span></div><div class="pd"><span class="ex">Example: <code>0191f3a2-001b-701b-80bd-0000002b25a3</code></span></div></li><li><div class="ph"><code class="pname">status</code><span class="ptype">one of <code>green</code>, <code>amber</code>, <code>red</code>, <code>no_data</code></span><span class="pin">query</span><span class="popt">optional</span></div><div class="pd"><span class="ex">Example: <code>red</code></span></div></li><li><div class="ph"><code class="pname">limit</code><span class="ptype">integer</span><span class="pin">query</span><span class="popt">optional</span></div><div class="pd">1–100, default 25.</div></li><li><div class="ph"><code class="pname">cursor</code><span class="ptype">string</span><span class="pin">query</span><span class="popt">optional</span></div><div class="pd">Opaque cursor from <code>page.next_cursor</code>. See <a href="#pagination">pagination</a>.</div></li><li><div class="ph"><code class="pname">sort</code><span class="ptype">string</span><span class="pin">query</span><span class="popt">optional</span></div><div class="pd">Comma-separated fields, <code>-</code> for descending.</div></li></ul>
+    <h5>Response</h5><p><strong>200 OK</strong> with a page of <a href="#schema-KpiResult">KpiResult</a> items.</p>
+    <h5>Errors</h5><p class="std-errors">Also the standard errors for authentication (401), permission (403), rate limiting (429) and server and dependency failures (500, 503). <a href="#errors-guide">How to handle them</a>.</p>
+  </div>
+  <div class="ep-code"><div class="tabs" role="tablist" aria-label="Examples"><button type="button" role="tab" aria-selected="true" aria-controls="listKpiResults-curl" id="listKpiResults-curl-tab">cURL</button><button type="button" role="tab" aria-selected="false" aria-controls="listKpiResults-res" id="listKpiResults-res-tab">Response 200</button><button type="button" role="tab" aria-selected="false" aria-controls="listKpiResults-err" id="listKpiResults-err-tab">Error 403</button></div><div role="tabpanel" id="listKpiResults-curl" aria-labelledby="listKpiResults-curl-tab"><figure class="code"><div class="bar"><span></span><button class="copy" type="button" aria-label="Copy code">Copy</button></div><pre><code class="lang-text"><span class="hm">curl</span> -X GET &quot;https://api.hamsasoham.com/api/management/v1/kpi-results?period_id=0191f3a2-0051-7051-8237-0000008170e9&amp;limit=25&quot; \
+  -H &quot;Authorization: Bearer <span class="v">$FBOS_TOKEN</span>&quot;</code></pre></figure></div><div role="tabpanel" id="listKpiResults-res" aria-labelledby="listKpiResults-res-tab" hidden><figure class="code"><div class="bar"><span></span><button class="copy" type="button" aria-label="Copy code">Copy</button></div><pre><code class="lang-text"><span class="hm">HTTP/1.1</span> 200 OK
+<span class="hh">Content-Type</span>: application/json; charset=utf-8
+<span class="hh">X-Request-Id</span>: 0191f3a2-005e-705e-8292-00000096372e
+
+{
+  <span class="k">&quot;data&quot;</span>: [
+    {
+      <span class="k">&quot;kpi&quot;</span>: {
+        <span class="k">&quot;code&quot;</span>: <span class="s">&quot;revenue_billed&quot;</span>,
+        <span class="k">&quot;name&quot;</span>: <span class="s">&quot;Revenue billed&quot;</span>,
+        <span class="k">&quot;unit&quot;</span>: <span class="s">&quot;INR&quot;</span>,
+        <span class="k">&quot;direction&quot;</span>: <span class="s">&quot;higher_is_better&quot;</span>
+      },
+      <span class="k">&quot;period&quot;</span>: {
+        <span class="k">&quot;id&quot;</span>: <span class="s">&quot;0191f3a2-0051-7051-8237-0000008170e9&quot;</span>,
+        <span class="k">&quot;name&quot;</span>: <span class="s">&quot;Q3 FY2026-27&quot;</span>
+      },
+      <span class="k">&quot;scope&quot;</span>: {
+        <span class="k">&quot;unit_id&quot;</span>: <span class="s">&quot;0191f3a2-0018-7018-80a8-000000265a58&quot;</span>,
+        <span class="k">&quot;vertical_id&quot;</span>: <span class="s">&quot;0191f3a2-001b-701b-80bd-0000002b25a3&quot;</span>,
+        <span class="k">&quot;user_id&quot;</span>: <span class="l">null</span>
+      },
+      <span class="k">&quot;actual_value&quot;</span>: <span class="n">2984000</span>,
+      <span class="k">&quot;target_value&quot;</span>: <span class="n">4500000</span>,
+      <span class="k">&quot;achievement_pct&quot;</span>: <span class="n">66.3</span>,
+      <span class="k">&quot;variance_abs&quot;</span>: <span class="n">-1516000</span>,
+      <span class="k">&quot;variance_pct&quot;</span>: <span class="n">-33.7</span>,
+      <span class="k">&quot;status&quot;</span>: <span class="s">&quot;amber&quot;</span>,
+      <span class="k">&quot;trend&quot;</span>: <span class="s">&quot;up&quot;</span>,
+      <span class="k">&quot;calculated_at&quot;</span>: <span class="s">&quot;2026-11-20T10:30:30Z&quot;</span>
+    }
+  ],
+  <span class="k">&quot;page&quot;</span>: {
+    <span class="k">&quot;next_cursor&quot;</span>: <span class="s">&quot;eyJpZCI6IjAxOTFmM2EyIn0&quot;</span>,
+    <span class="k">&quot;has_more&quot;</span>: <span class="l">true</span>,
+    <span class="k">&quot;limit&quot;</span>: <span class="n">25</span>
+  }
+}</code></pre></figure></div><div role="tabpanel" id="listKpiResults-err" aria-labelledby="listKpiResults-err-tab" hidden><figure class="code"><div class="bar"><span></span><button class="copy" type="button" aria-label="Copy code">Copy</button></div><pre><code class="lang-text"><span class="hm">HTTP/1.1</span> 403
+<span class="hh">Content-Type</span>: application/problem+json
+
+{
+  <span class="k">&quot;type&quot;</span>: <span class="s">&quot;https://docs.hamsasoham.com/errors/PERMISSION_DENIED&quot;</span>,
+  <span class="k">&quot;title&quot;</span>: <span class="s">&quot;You don&#x27;t have permission for this action&quot;</span>,
+  <span class="k">&quot;status&quot;</span>: <span class="n">403</span>,
+  <span class="k">&quot;code&quot;</span>: <span class="s">&quot;PERMISSION_DENIED&quot;</span>,
+  <span class="k">&quot;detail&quot;</span>: <span class="s">&quot;The record is visible to you but your roles in its scope don&#x27;t include the required permission.&quot;</span>,
+  <span class="k">&quot;instance&quot;</span>: <span class="s">&quot;/api/management/v1/kpi-results&quot;</span>,
+  <span class="k">&quot;request_id&quot;</span>: <span class="s">&quot;0191f3a2-005e-705e-8292-00000096372e&quot;</span>,
+  <span class="k">&quot;retryable&quot;</span>: <span class="l">false</span>,
+  <span class="k">&quot;meta&quot;</span>: {
+    <span class="k">&quot;required_permission&quot;</span>: <span class="s">&quot;task.task.assign&quot;</span>
+  }
+}</code></pre></figure></div></div>
+
+
+====================================================================================================
+EP: op-recordMeasurement
+
+  <div class="ep-main">
+    <h4 class="ep-title">Record a manual measurement</h4>
+    <p class="ep-line"><span class="m m-post">POST</span><code class="path">/api/management/v1/measurements</code></p>
+    <p>Only for KPIs whose source type is <code>manual</code> (for example survey results). Event-fed KPIs reject manual values.</p>
+    <dl class="facts"><dt>Permission</dt><dd><code>performance.measurement.create</code></dd><dt>Authentication</dt><dd>Access token</dd><dt>Idempotency</dt><dd>Required: send <code>Idempotency-Key</code></dd><dt>Concurrency</dt><dd>—</dd><dt>Rate limit class</dt><dd><a href="#rate-limits">standard</a></dd></dl>
+    <h5>Parameters</h5><ul class="plist"><li><div class="ph"><code class="pname">Idempotency-Key</code><span class="ptype">string (uuid)</span><span class="pin">header</span><span class="preq">required</span></div><div class="pd"><a href="#idempotency">One UUID per user action</a>, reused on every retry.</div></li></ul><h5>Request body <a class="schema-link" href="#schema-ManualMeasurementCreate">ManualMeasurementCreate</a></h5><ul class="plist"><li><div class="ph"><code class="pname">kpi_code</code><span class="ptype">string</span><span class="preq">required</span></div></li><li><div class="ph"><code class="pname">measured_on</code><span class="ptype">string (date)</span><span class="preq">required</span></div></li><li><div class="ph"><code class="pname">value</code><span class="ptype">number</span><span class="preq">required</span></div></li><li><div class="ph"><code class="pname">dimensions</code><span class="ptype">object</span><span class="popt">optional</span></div></li><li><div class="ph"><code class="pname">note</code><span class="ptype">string</span><span class="preq">required</span></div></li><li><div class="ph"><code class="pname">evidence_document_id</code><span class="ptype">string (uuid)</span><span class="popt">optional, nullable</span></div></li></ul>
+    <h5>Response</h5><p><strong>201 Created</strong> with an empty body.</p>
+    <h5>Events published</h5><p class="chips"><a href="#evt-performance-measurement-recorded-v1"><code>performance.measurement.recorded.v1</code></a></p><h5>Errors</h5><div class="table-wrap"><table class="errs"><thead><tr><th scope="col">HTTP</th><th scope="col">Code</th><th scope="col">When it happens</th></tr></thead><tbody><tr><td>422</td><td><a href="#err-KPI_NOT_MANUAL"><code>KPI_NOT_MANUAL</code></a></td><td>The KPI is fed by business events.</td></tr></tbody></table></div><p class="std-errors">Also the standard errors for authentication (401), permission (403), malformed or invalid input (400, 422), idempotency (400, 409, 422), rate limiting (429) and server and dependency failures (500, 503). <a href="#errors-guide">How to handle them</a>.</p>
+  </div>
+  <div class="ep-code"><div class="tabs" role="tablist" aria-label="Examples"><button type="button" role="tab" aria-selected="true" aria-controls="recordMeasurement-curl" id="recordMeasurement-curl-tab">cURL</button><button type="button" role="tab" aria-selected="false" aria-controls="recordMeasurement-req" id="recordMeasurement-req-tab">Request</button><button type="button" role="tab" aria-selected="false" aria-controls="recordMeasurement-res" id="recordMeasurement-res-tab">Response 201</button><button type="button" role="tab" aria-selected="false" aria-controls="recordMeasurement-err" id="recordMeasurement-err-tab">Error 422</button></div><div role="tabpanel" id="recordMeasurement-curl" aria-labelledby="recordMeasurement-curl-tab"><figure class="code"><div class="bar"><span></span><button class="copy" type="button" aria-label="Copy code">Copy</button></div><pre><code class="lang-text"><span class="hm">curl</span> -X POST &quot;https://api.hamsasoham.com/api/management/v1/measurements&quot; \
+  -H &quot;Authorization: Bearer <span class="v">$FBOS_TOKEN</span>&quot; \
+  -H &quot;Content-Type: application/json&quot; \
+  -H &quot;Idempotency-Key: $(uuidgen)&quot; \
+  --data-raw &#x27;{
+  &quot;kpi_code&quot;: &quot;client_nps&quot;,
+  &quot;measured_on&quot;: &quot;2026-10-31&quot;,
+  &quot;value&quot;: 62,
+  &quot;dimensions&quot;: {
+    &quot;vertical_id&quot;: &quot;0191f3a2-001b-701b-80bd-0000002b25a3&quot;
+  },
+  &quot;note&quot;: &quot;Quarterly NPS survey, 41 responses&quot;,
+  &quot;evidence_document_id&quot;: &quot;0191f3a2-0048-7048-81f8-000000730f08&quot;
+}&#x27;</code></pre></figure></div><div role="tabpanel" id="recordMeasurement-req" aria-labelledby="recordMeasurement-req-tab" hidden><figure class="code"><div class="bar"><figcaption>POST /api/management/v1/measurements</figcaption><button class="copy" type="button" aria-label="Copy code">Copy</button></div><pre><code class="lang-text">{
+  <span class="k">&quot;kpi_code&quot;</span>: <span class="s">&quot;client_nps&quot;</span>,
+  <span class="k">&quot;measured_on&quot;</span>: <span class="s">&quot;2026-10-31&quot;</span>,
+  <span class="k">&quot;value&quot;</span>: <span class="n">62</span>,
+  <span class="k">&quot;dimensions&quot;</span>: {
+    <span class="k">&quot;vertical_id&quot;</span>: <span class="s">&quot;0191f3a2-001b-701b-80bd-0000002b25a3&quot;</span>
+  },
+  <span class="k">&quot;note&quot;</span>: <span class="s">&quot;Quarterly NPS survey, 41 responses&quot;</span>,
+  <span class="k">&quot;evidence_document_id&quot;</span>: <span class="s">&quot;0191f3a2-0048-7048-81f8-000000730f08&quot;</span>
+}</code></pre></figure></div><div role="tabpanel" id="recordMeasurement-res" aria-labelledby="recordMeasurement-res-tab" hidden><figure class="code"><div class="bar"><span></span><button class="copy" type="button" aria-label="Copy code">Copy</button></div><pre><code class="lang-text"><span class="hm">HTTP/1.1</span> 201 Created
+<span class="hh">X-Request-Id</span>: 0191f3a2-005e-705e-8292-00000096372e</code></pre></figure></div><div role="tabpanel" id="recordMeasurement-err" aria-labelledby="recordMeasurement-err-tab" hidden><figure class="code"><div class="bar"><span></span><button class="copy" type="button" aria-label="Copy code">Copy</button></div><pre><code class="lang-text"><span class="hm">HTTP/1.1</span> 422
+<span class="hh">Content-Type</span>: application/problem+json
+
+{
+  <span class="k">&quot;type&quot;</span>: <span class="s">&quot;https://docs.hamsasoham.com/errors/KPI_NOT_MANUAL&quot;</span>,
+  <span class="k">&quot;title&quot;</span>: <span class="s">&quot;This KPI can&#x27;t take manual values&quot;</span>,
+  <span class="k">&quot;status&quot;</span>: <span class="n">422</span>,
+  <span class="k">&quot;code&quot;</span>: <span class="s">&quot;KPI_NOT_MANUAL&quot;</span>,
+  <span class="k">&quot;detail&quot;</span>: <span class="s">&quot;The KPI is fed by business events.&quot;</span>,
+  <span class="k">&quot;instance&quot;</span>: <span class="s">&quot;/api/management/v1/measurements&quot;</span>,
+  <span class="k">&quot;request_id&quot;</span>: <span class="s">&quot;0191f3a2-005e-705e-8292-00000096372e&quot;</span>,
+  <span class="k">&quot;retryable&quot;</span>: <span class="l">false</span>
+}</code></pre></figure></div></div>
+
+
+====================================================================================================
+EP: op-listCorrectiveActions
+
+  <div class="ep-main">
+    <h4 class="ep-title">List corrective actions</h4>
+    <p class="ep-line"><span class="m m-get">GET</span><code class="path">/api/management/v1/corrective-actions</code></p>
+    
+    <dl class="facts"><dt>Permission</dt><dd><code>performance.corrective.read</code></dd><dt>Authentication</dt><dd>Access token</dd><dt>Idempotency</dt><dd>Naturally idempotent</dd><dt>Concurrency</dt><dd>—</dd><dt>Rate limit class</dt><dd><a href="#rate-limits">standard</a></dd></dl>
+    <h5>Parameters</h5><ul class="plist"><li><div class="ph"><code class="pname">status</code><span class="ptype">one of <code>open</code>, <code>in_progress</code>, <code>closed</code>, <code>cancelled</code></span><span class="pin">query</span><span class="popt">optional</span></div><div class="pd"><span class="ex">Example: <code>open</code></span></div></li><li><div class="ph"><code class="pname">owner_user_id</code><span class="ptype">string (uuid)</span><span class="pin">query</span><span class="popt">optional</span></div><div class="pd"><span class="ex">Example: <code>0191f3a2-0013-7013-8085-0000001e5cdb</code></span></div></li><li><div class="ph"><code class="pname">limit</code><span class="ptype">integer</span><span class="pin">query</span><span class="popt">optional</span></div><div class="pd">1–100, default 25.</div></li><li><div class="ph"><code class="pname">cursor</code><span class="ptype">string</span><span class="pin">query</span><span class="popt">optional</span></div><div class="pd">Opaque cursor from <code>page.next_cursor</code>. See <a href="#pagination">pagination</a>.</div></li><li><div class="ph"><code class="pname">sort</code><span class="ptype">string</span><span class="pin">query</span><span class="popt">optional</span></div><div class="pd">Comma-separated fields, <code>-</code> for descending.</div></li></ul>
+    <h5>Response</h5><p><strong>200 OK</strong> with a page of <a href="#schema-CorrectiveAction">CorrectiveAction</a> items.</p>
+    <h5>Errors</h5><p class="std-errors">Also the standard errors for authentication (401), permission (403), rate limiting (429) and server and dependency failures (500, 503). <a href="#errors-guide">How to handle them</a>.</p>
+  </div>
+  <div class="ep-code"><div class="tabs" role="tablist" aria-label="Examples"><button type="button" role="tab" aria-selected="true" aria-controls="listCorrectiveActions-curl" id="listCorrectiveActions-curl-tab">cURL</button><button type="button" role="tab" aria-selected="false" aria-controls="listCorrectiveActions-res" id="listCorrectiveActions-res-tab">Response 200</button><button type="button" role="tab" aria-selected="false" aria-controls="listCorrectiveActions-err" id="listCorrectiveActions-err-tab">Error 403</button></div><div role="tabpanel" id="listCorrectiveActions-curl" aria-labelledby="listCorrectiveActions-curl-tab"><figure class="code"><div class="bar"><span></span><button class="copy" type="button" aria-label="Copy code">Copy</button></div><pre><code class="lang-text"><span class="hm">curl</span> -X GET &quot;https://api.hamsasoham.com/api/management/v1/corrective-actions?limit=25&quot; \
+  -H &quot;Authorization: Bearer <span class="v">$FBOS_TOKEN</span>&quot;</code></pre></figure></div><div role="tabpanel" id="listCorrectiveActions-res" aria-labelledby="listCorrectiveActions-res-tab" hidden><figure class="code"><div class="bar"><span></span><button class="copy" type="button" aria-label="Copy code">Copy</button></div><pre><code class="lang-text"><span class="hm">HTTP/1.1</span> 200 OK
+<span class="hh">Content-Type</span>: application/json; charset=utf-8
+<span class="hh">X-Request-Id</span>: 0191f3a2-005e-705e-8292-00000096372e
+
+{
+  <span class="k">&quot;data&quot;</span>: [
+    {
+      <span class="k">&quot;id&quot;</span>: <span class="s">&quot;0191f3a2-0053-7053-8245-00000084a31b&quot;</span>,
+      <span class="k">&quot;title&quot;</span>: <span class="s">&quot;Accelerate billing of UAT milestones pending client sign-off&quot;</span>,
+      <span class="k">&quot;kpi&quot;</span>: {
+        <span class="k">&quot;code&quot;</span>: <span class="s">&quot;revenue_billed&quot;</span>,
+        <span class="k">&quot;status&quot;</span>: <span class="s">&quot;amber&quot;</span>
+      },
+      <span class="k">&quot;owner&quot;</span>: {
+        <span class="k">&quot;id&quot;</span>: <span class="s">&quot;0191f3a2-0013-7013-8085-0000001e5cdb&quot;</span>,
+        <span class="k">&quot;name&quot;</span>: <span class="s">&quot;Priya Singh&quot;</span>
+      },
+      <span class="k">&quot;due_date&quot;</span>: <span class="s">&quot;2026-12-05&quot;</span>,
+      <span class="k">&quot;task_id&quot;</span>: <span class="s">&quot;0191f3a2-0038-7038-8188-000000597d78&quot;</span>,
+      <span class="k">&quot;status&quot;</span>: <span class="s">&quot;open&quot;</span>
+    }
+  ],
+  <span class="k">&quot;page&quot;</span>: {
+    <span class="k">&quot;next_cursor&quot;</span>: <span class="s">&quot;eyJpZCI6IjAxOTFmM2EyIn0&quot;</span>,
+    <span class="k">&quot;has_more&quot;</span>: <span class="l">true</span>,
+    <span class="k">&quot;limit&quot;</span>: <span class="n">25</span>
+  }
+}</code></pre></figure></div><div role="tabpanel" id="listCorrectiveActions-err" aria-labelledby="listCorrectiveActions-err-tab" hidden><figure class="code"><div class="bar"><span></span><button class="copy" type="button" aria-label="Copy code">Copy</button></div><pre><code class="lang-text"><span class="hm">HTTP/1.1</span> 403
+<span class="hh">Content-Type</span>: application/problem+json
+
+{
+  <span class="k">&quot;type&quot;</span>: <span class="s">&quot;https://docs.hamsasoham.com/errors/PERMISSION_DENIED&quot;</span>,
+  <span class="k">&quot;title&quot;</span>: <span class="s">&quot;You don&#x27;t have permission for this action&quot;</span>,
+  <span class="k">&quot;status&quot;</span>: <span class="n">403</span>,
+  <span class="k">&quot;code&quot;</span>: <span class="s">&quot;PERMISSION_DENIED&quot;</span>,
+  <span class="k">&quot;detail&quot;</span>: <span class="s">&quot;The record is visible to you but your roles in its scope don&#x27;t include the required permission.&quot;</span>,
+  <span class="k">&quot;instance&quot;</span>: <span class="s">&quot;/api/management/v1/corrective-actions&quot;</span>,
+  <span class="k">&quot;request_id&quot;</span>: <span class="s">&quot;0191f3a2-005e-705e-8292-00000096372e&quot;</span>,
+  <span class="k">&quot;retryable&quot;</span>: <span class="l">false</span>,
+  <span class="k">&quot;meta&quot;</span>: {
+    <span class="k">&quot;required_permission&quot;</span>: <span class="s">&quot;task.task.assign&quot;</span>
+  }
+}</code></pre></figure></div></div>
+
+
+====================================================================================================
+EP: op-createCorrectiveAction
+
+  <div class="ep-main">
+    <h4 class="ep-title">Create a corrective action</h4>
+    <p class="ep-line"><span class="m m-post">POST</span><code class="path">/api/management/v1/corrective-actions</code></p>
+    
+    <dl class="facts"><dt>Permission</dt><dd><code>performance.corrective.create</code></dd><dt>Authentication</dt><dd>Access token</dd><dt>Idempotency</dt><dd>Supported: send <code>Idempotency-Key</code></dd><dt>Concurrency</dt><dd>—</dd><dt>Rate limit class</dt><dd><a href="#rate-limits">standard</a></dd></dl>
+    <h5>Parameters</h5><ul class="plist"><li><div class="ph"><code class="pname">Idempotency-Key</code><span class="ptype">string (uuid)</span><span class="pin">header</span><span class="popt">optional</span></div><div class="pd"><a href="#idempotency">One UUID per user action</a>, reused on every retry.</div></li></ul><h5>Request body <a class="schema-link" href="#schema-CorrectiveActionCreate">CorrectiveActionCreate</a></h5><ul class="plist"><li><div class="ph"><code class="pname">kpi_code</code><span class="ptype">string</span><span class="preq">required</span></div></li><li><div class="ph"><code class="pname">period_id</code><span class="ptype">string (uuid)</span><span class="preq">required</span></div></li><li><div class="ph"><code class="pname">scope</code><span class="ptype"><a href="#schema-KpiScope">KpiScope</a></span><span class="preq">required</span></div></li><li><div class="ph"><code class="pname">title</code><span class="ptype">string</span><span class="preq">required</span></div></li><li><div class="ph"><code class="pname">owner_user_id</code><span class="ptype">string (uuid)</span><span class="preq">required</span></div></li><li><div class="ph"><code class="pname">due_date</code><span class="ptype">string (date)</span><span class="preq">required</span></div></li></ul>
+    <h5>Response</h5><p><strong>201 Created</strong> with <a href="#schema-CorrectiveAction">CorrectiveAction</a>.</p>
+    <h5>What happens next</h5><ul><li>Task creates the linked task (source <code>corrective_action</code>) for the owner.</li></ul><h5>Events published</h5><p class="chips"><a href="#evt-performance-corrective_action-created-v1"><code>performance.corrective_action.created.v1</code></a></p><h5>Errors</h5><p class="std-errors">Also the standard errors for authentication (401), permission (403), malformed or invalid input (400, 422), idempotency (400, 409, 422), rate limiting (429) and server and dependency failures (500, 503). <a href="#errors-guide">How to handle them</a>.</p>
+  </div>
+  <div class="ep-code"><div class="tabs" role="tablist" aria-label="Examples"><button type="button" role="tab" aria-selected="true" aria-controls="createCorrectiveAction-curl" id="createCorrectiveAction-curl-tab">cURL</button><button type="button" role="tab" aria-selected="false" aria-controls="createCorrectiveAction-req" id="createCorrectiveAction-req-tab">Request</button><button type="button" role="tab" aria-selected="false" aria-controls="createCorrectiveAction-res" id="createCorrectiveAction-res-tab">Response 201</button><button type="button" role="tab" aria-selected="false" aria-controls="createCorrectiveAction-err" id="createCorrectiveAction-err-tab">Error 422</button></div><div role="tabpanel" id="createCorrectiveAction-curl" aria-labelledby="createCorrectiveAction-curl-tab"><figure class="code"><div class="bar"><span></span><button class="copy" type="button" aria-label="Copy code">Copy</button></div><pre><code class="lang-text"><span class="hm">curl</span> -X POST &quot;https://api.hamsasoham.com/api/management/v1/corrective-actions&quot; \
+  -H &quot;Authorization: Bearer <span class="v">$FBOS_TOKEN</span>&quot; \
+  -H &quot;Content-Type: application/json&quot; \
+  -H &quot;Idempotency-Key: $(uuidgen)&quot; \
+  --data-raw &#x27;{
+  &quot;kpi_code&quot;: &quot;revenue_billed&quot;,
+  &quot;period_id&quot;: &quot;0191f3a2-0051-7051-8237-0000008170e9&quot;,
+  &quot;scope&quot;: {
+    &quot;unit_id&quot;: &quot;0191f3a2-0018-7018-80a8-000000265a58&quot;,
+    &quot;vertical_id&quot;: &quot;0191f3a2-001b-701b-80bd-0000002b25a3&quot;
+  },
+  &quot;title&quot;: &quot;Accelerate billing of UAT milestones pending client sign-off&quot;,
+  &quot;owner_user_id&quot;: &quot;0191f3a2-0013-7013-8085-0000001e5cdb&quot;,
+  &quot;due_date&quot;: &quot;2026-12-05&quot;
+}&#x27;</code></pre></figure></div><div role="tabpanel" id="createCorrectiveAction-req" aria-labelledby="createCorrectiveAction-req-tab" hidden><figure class="code"><div class="bar"><figcaption>POST /api/management/v1/corrective-actions</figcaption><button class="copy" type="button" aria-label="Copy code">Copy</button></div><pre><code class="lang-text">{
+  <span class="k">&quot;kpi_code&quot;</span>: <span class="s">&quot;revenue_billed&quot;</span>,
+  <span class="k">&quot;period_id&quot;</span>: <span class="s">&quot;0191f3a2-0051-7051-8237-0000008170e9&quot;</span>,
+  <span class="k">&quot;scope&quot;</span>: {
+    <span class="k">&quot;unit_id&quot;</span>: <span class="s">&quot;0191f3a2-0018-7018-80a8-000000265a58&quot;</span>,
+    <span class="k">&quot;vertical_id&quot;</span>: <span class="s">&quot;0191f3a2-001b-701b-80bd-0000002b25a3&quot;</span>
+  },
+  <span class="k">&quot;title&quot;</span>: <span class="s">&quot;Accelerate billing of UAT milestones pending client sign-off&quot;</span>,
+  <span class="k">&quot;owner_user_id&quot;</span>: <span class="s">&quot;0191f3a2-0013-7013-8085-0000001e5cdb&quot;</span>,
+  <span class="k">&quot;due_date&quot;</span>: <span class="s">&quot;2026-12-05&quot;</span>
+}</code></pre></figure></div><div role="tabpanel" id="createCorrectiveAction-res" aria-labelledby="createCorrectiveAction-res-tab" hidden><figure class="code"><div class="bar"><span></span><button class="copy" type="button" aria-label="Copy code">Copy</button></div><pre><code class="lang-text"><span class="hm">HTTP/1.1</span> 201 Created
+<span class="hh">Content-Type</span>: application/json; charset=utf-8
+<span class="hh">Location</span>: /api/management/v1/corrective-actions
+<span class="hh">X-Request-Id</span>: 0191f3a2-005e-705e-8292-00000096372e
+
+{
+  <span class="k">&quot;id&quot;</span>: <span class="s">&quot;0191f3a2-0053-7053-8245-00000084a31b&quot;</span>,
+  <span class="k">&quot;title&quot;</span>: <span class="s">&quot;Accelerate billing of UAT milestones pending client sign-off&quot;</span>,
+  <span class="k">&quot;kpi&quot;</span>: {
+    <span class="k">&quot;code&quot;</span>: <span class="s">&quot;revenue_billed&quot;</span>,
+    <span class="k">&quot;status&quot;</span>: <span class="s">&quot;amber&quot;</span>
+  },
+  <span class="k">&quot;owner&quot;</span>: {
+    <span class="k">&quot;id&quot;</span>: <span class="s">&quot;0191f3a2-0013-7013-8085-0000001e5cdb&quot;</span>,
+    <span class="k">&quot;name&quot;</span>: <span class="s">&quot;Priya Singh&quot;</span>
+  },
+  <span class="k">&quot;due_date&quot;</span>: <span class="s">&quot;2026-12-05&quot;</span>,
+  <span class="k">&quot;task_id&quot;</span>: <span class="s">&quot;0191f3a2-0038-7038-8188-000000597d78&quot;</span>,
+  <span class="k">&quot;status&quot;</span>: <span class="s">&quot;open&quot;</span>
+}</code></pre></figure></div><div role="tabpanel" id="createCorrectiveAction-err" aria-labelledby="createCorrectiveAction-err-tab" hidden><figure class="code"><div class="bar"><span></span><button class="copy" type="button" aria-label="Copy code">Copy</button></div><pre><code class="lang-text"><span class="hm">HTTP/1.1</span> 422
+<span class="hh">Content-Type</span>: application/problem+json
+
+{
+  <span class="k">&quot;type&quot;</span>: <span class="s">&quot;https://docs.hamsasoham.com/errors/VALIDATION_FAILED&quot;</span>,
+  <span class="k">&quot;title&quot;</span>: <span class="s">&quot;Some fields are invalid&quot;</span>,
+  <span class="k">&quot;status&quot;</span>: <span class="n">422</span>,
+  <span class="k">&quot;code&quot;</span>: <span class="s">&quot;VALIDATION_FAILED&quot;</span>,
+  <span class="k">&quot;detail&quot;</span>: <span class="s">&quot;Schema or field-level business rules failed.&quot;</span>,
+  <span class="k">&quot;instance&quot;</span>: <span class="s">&quot;/api/management/v1/corrective-actions&quot;</span>,
+  <span class="k">&quot;request_id&quot;</span>: <span class="s">&quot;0191f3a2-005e-705e-8292-00000096372e&quot;</span>,
+  <span class="k">&quot;retryable&quot;</span>: <span class="l">false</span>,
+  <span class="k">&quot;errors&quot;</span>: [
+    {
+      <span class="k">&quot;field&quot;</span>: <span class="s">&quot;due_at&quot;</span>,
+      <span class="k">&quot;code&quot;</span>: <span class="s">&quot;must_be_after_start&quot;</span>,
+      <span class="k">&quot;message&quot;</span>: <span class="s">&quot;due_at must be later than start_at&quot;</span>
+    }
+  ]
+}</code></pre></figure></div></div>
+
+
+====================================================================================================
+EP: op-findAvailability
+
+  <div class="ep-main">
+    <h4 class="ep-title">Find available people</h4>
+    <p class="ep-line"><span class="m m-get">GET</span><code class="path">/api/management/v1/availability</code></p>
+    <p>Ordered by free minutes, then skill level, then cost rate.</p>
+    <dl class="facts"><dt>Permission</dt><dd><code>resource.availability.read</code></dd><dt>Authentication</dt><dd>Access token</dd><dt>Idempotency</dt><dd>Naturally idempotent</dd><dt>Concurrency</dt><dd>—</dd><dt>Rate limit class</dt><dd><a href="#rate-limits">standard</a></dd></dl>
+    <h5>Parameters</h5><ul class="plist"><li><div class="ph"><code class="pname">from</code><span class="ptype">string (date)</span><span class="pin">query</span><span class="preq">required</span></div><div class="pd"><span class="ex">Example: <code>2026-10-12</code></span></div></li><li><div class="ph"><code class="pname">to</code><span class="ptype">string (date)</span><span class="pin">query</span><span class="preq">required</span></div><div class="pd"><span class="ex">Example: <code>2026-11-06</code></span></div></li><li><div class="ph"><code class="pname">skill</code><span class="ptype">string</span><span class="pin">query</span><span class="popt">optional</span></div><div class="pd"><span class="ex">Example: <code>react</code></span></div></li><li><div class="ph"><code class="pname">min_level</code><span class="ptype">integer</span><span class="pin">query</span><span class="popt">optional</span></div><div class="pd"><span class="ex">Example: <code>3</code></span></div></li><li><div class="ph"><code class="pname">unit_id</code><span class="ptype">string (uuid)</span><span class="pin">query</span><span class="popt">optional</span></div><div class="pd"><span class="ex">Example: <code>0191f3a2-0019-7019-80af-00000027f371</code></span></div></li><li><div class="ph"><code class="pname">limit</code><span class="ptype">integer</span><span class="pin">query</span><span class="popt">optional</span></div><div class="pd">1–100, default 25.</div></li><li><div class="ph"><code class="pname">cursor</code><span class="ptype">string</span><span class="pin">query</span><span class="popt">optional</span></div><div class="pd">Opaque cursor from <code>page.next_cursor</code>. See <a href="#pagination">pagination</a>.</div></li><li><div class="ph"><code class="pname">sort</code><span class="ptype">string</span><span class="pin">query</span><span class="popt">optional</span></div><div class="pd">Comma-separated fields, <code>-</code> for descending.</div></li></ul>
+    <h5>Response</h5><p><strong>200 OK</strong> with a page of <a href="#schema-ResourceAvailability">ResourceAvailability</a> items.</p>
+    <h5>Errors</h5><p class="std-errors">Also the standard errors for authentication (401), permission (403), rate limiting (429) and server and dependency failures (500, 503). <a href="#errors-guide">How to handle them</a>.</p>
+  </div>
+  <div class="ep-code"><div class="tabs" role="tablist" aria-label="Examples"><button type="button" role="tab" aria-selected="true" aria-controls="findAvailability-curl" id="findAvailability-curl-tab">cURL</button><button type="button" role="tab" aria-selected="false" aria-controls="findAvailability-res" id="findAvailability-res-tab">Response 200</button><button type="button" role="tab" aria-selected="false" aria-controls="findAvailability-err" id="findAvailability-err-tab">Error 403</button></div><div role="tabpanel" id="findAvailability-curl" aria-labelledby="findAvailability-curl-tab"><figure class="code"><div class="bar"><span></span><button class="copy" type="button" aria-label="Copy code">Copy</button></div><pre><code class="lang-text"><span class="hm">curl</span> -X GET &quot;https://api.hamsasoham.com/api/management/v1/availability?from=2026-10-12&amp;to=2026-11-06&amp;limit=25&quot; \
+  -H &quot;Authorization: Bearer <span class="v">$FBOS_TOKEN</span>&quot;</code></pre></figure></div><div role="tabpanel" id="findAvailability-res" aria-labelledby="findAvailability-res-tab" hidden><figure class="code"><div class="bar"><span></span><button class="copy" type="button" aria-label="Copy code">Copy</button></div><pre><code class="lang-text"><span class="hm">HTTP/1.1</span> 200 OK
+<span class="hh">Content-Type</span>: application/json; charset=utf-8
+<span class="hh">X-Request-Id</span>: 0191f3a2-005e-705e-8292-00000096372e
+
+{
+  <span class="k">&quot;data&quot;</span>: [
+    {
+      <span class="k">&quot;resource_id&quot;</span>: <span class="s">&quot;0191f3a2-0054-7054-824c-000000863c34&quot;</span>,
+      <span class="k">&quot;user&quot;</span>: {
+        <span class="k">&quot;id&quot;</span>: <span class="s">&quot;0191f3a2-0012-7012-807e-0000001cc3c2&quot;</span>,
+        <span class="k">&quot;name&quot;</span>: <span class="s">&quot;Aarav Sharma&quot;</span>,
+        <span class="k">&quot;avatar_url&quot;</span>: <span class="s">&quot;https://cdn.hamsasoham.com/avatars/aarav.png&quot;</span>
+      },
+      <span class="k">&quot;unit&quot;</span>: {
+        <span class="k">&quot;id&quot;</span>: <span class="s">&quot;0191f3a2-0019-7019-80af-00000027f371&quot;</span>,
+        <span class="k">&quot;name&quot;</span>: <span class="s">&quot;Web Development Team&quot;</span>,
+        <span class="k">&quot;unit_type&quot;</span>: <span class="s">&quot;team&quot;</span>
+      },
+      <span class="k">&quot;skills&quot;</span>: [
+        {
+          <span class="k">&quot;code&quot;</span>: <span class="s">&quot;react&quot;</span>,
+          <span class="k">&quot;level&quot;</span>: <span class="n">4</span>
+        },
+        {
+          <span class="k">&quot;code&quot;</span>: <span class="s">&quot;node&quot;</span>,
+          <span class="k">&quot;level&quot;</span>: <span class="n">3</span>
+        }
+      ],
+      <span class="k">&quot;capacity_minutes&quot;</span>: <span class="n">4860</span>,
+      <span class="k">&quot;allocated_minutes&quot;</span>: <span class="n">2880</span>,
+      <span class="k">&quot;free_minutes&quot;</span>: <span class="n">1980</span>,
+      <span class="k">&quot;utilization_pct&quot;</span>: <span class="n">59.3</span>
+    }
+  ],
+  <span class="k">&quot;page&quot;</span>: {
+    <span class="k">&quot;next_cursor&quot;</span>: <span class="s">&quot;eyJpZCI6IjAxOTFmM2EyIn0&quot;</span>,
+    <span class="k">&quot;has_more&quot;</span>: <span class="l">true</span>,
+    <span class="k">&quot;limit&quot;</span>: <span class="n">25</span>
+  }
+}</code></pre></figure></div><div role="tabpanel" id="findAvailability-err" aria-labelledby="findAvailability-err-tab" hidden><figure class="code"><div class="bar"><span></span><button class="copy" type="button" aria-label="Copy code">Copy</button></div><pre><code class="lang-text"><span class="hm">HTTP/1.1</span> 403
+<span class="hh">Content-Type</span>: application/problem+json
+
+{
+  <span class="k">&quot;type&quot;</span>: <span class="s">&quot;https://docs.hamsasoham.com/errors/PERMISSION_DENIED&quot;</span>,
+  <span class="k">&quot;title&quot;</span>: <span class="s">&quot;You don&#x27;t have permission for this action&quot;</span>,
+  <span class="k">&quot;status&quot;</span>: <span class="n">403</span>,
+  <span class="k">&quot;code&quot;</span>: <span class="s">&quot;PERMISSION_DENIED&quot;</span>,
+  <span class="k">&quot;detail&quot;</span>: <span class="s">&quot;The record is visible to you but your roles in its scope don&#x27;t include the required permission.&quot;</span>,
+  <span class="k">&quot;instance&quot;</span>: <span class="s">&quot;/api/management/v1/availability&quot;</span>,
+  <span class="k">&quot;request_id&quot;</span>: <span class="s">&quot;0191f3a2-005e-705e-8292-00000096372e&quot;</span>,
+  <span class="k">&quot;retryable&quot;</span>: <span class="l">false</span>,
+  <span class="k">&quot;meta&quot;</span>: {
+    <span class="k">&quot;required_permission&quot;</span>: <span class="s">&quot;task.task.assign&quot;</span>
+  }
+}</code></pre></figure></div></div>
+
+
+====================================================================================================
+EP: op-createAllocation
+
+  <div class="ep-main">
+    <h4 class="ep-title">Allocate a person to work</h4>
+    <p class="ep-line"><span class="m m-post">POST</span><code class="path">/api/management/v1/allocations</code></p>
+    <p>Over-allocation is refused unless <code>override_reason</code> is given by a user with <code>resource.allocation.override</code>; the overloaded days are listed in the error <code>meta</code>.</p>
+    <dl class="facts"><dt>Permission</dt><dd><code>resource.allocation.create</code></dd><dt>Authentication</dt><dd>Access token</dd><dt>Idempotency</dt><dd>Supported: send <code>Idempotency-Key</code></dd><dt>Concurrency</dt><dd>—</dd><dt>Rate limit class</dt><dd><a href="#rate-limits">standard</a></dd></dl>
+    <h5>Parameters</h5><ul class="plist"><li><div class="ph"><code class="pname">Idempotency-Key</code><span class="ptype">string (uuid)</span><span class="pin">header</span><span class="popt">optional</span></div><div class="pd"><a href="#idempotency">One UUID per user action</a>, reused on every retry.</div></li></ul><h5>Request body <a class="schema-link" href="#schema-AllocationCreate">AllocationCreate</a></h5><ul class="plist"><li><div class="ph"><code class="pname">resource_id</code><span class="ptype">string (uuid)</span><span class="preq">required</span></div></li><li><div class="ph"><code class="pname">requirement_id</code><span class="ptype">string (uuid)</span><span class="popt">optional, nullable</span></div></li><li><div class="ph"><code class="pname">subject</code><span class="ptype"><a href="#schema-SubjectRefInput">SubjectRefInput</a></span><span class="preq">required</span></div></li><li><div class="ph"><code class="pname">start_date</code><span class="ptype">string (date)</span><span class="preq">required</span></div></li><li><div class="ph"><code class="pname">end_date</code><span class="ptype">string (date)</span><span class="preq">required</span></div></li><li><div class="ph"><code class="pname">minutes_per_day</code><span class="ptype">integer</span><span class="preq">required</span></div></li><li><div class="ph"><code class="pname">override_reason</code><span class="ptype">string</span><span class="popt">optional, nullable</span></div><div class="pd">Required when the allocation overloads the resource on any day.</div></li></ul>
+    <h5>Response</h5><p><strong>201 Created</strong> with <a href="#schema-Allocation">Allocation</a>.</p>
+    <h5>What happens next</h5><ul><li>The capacity ledger is updated for every day in the range.</li></ul><h5>Events published</h5><p class="chips"><a href="#evt-resource-allocation-created-v1"><code>resource.allocation.created.v1</code></a></p><h5>Errors</h5><div class="table-wrap"><table class="errs"><thead><tr><th scope="col">HTTP</th><th scope="col">Code</th><th scope="col">When it happens</th></tr></thead><tbody><tr><td>409</td><td><a href="#err-CAPACITY_EXCEEDED"><code>CAPACITY_EXCEEDED</code></a></td><td>Allocated minutes would exceed capacity on some days.</td></tr></tbody></table></div><p class="std-errors">Also the standard errors for authentication (401), permission (403), malformed or invalid input (400, 422), idempotency (400, 409, 422), rate limiting (429) and server and dependency failures (500, 503). <a href="#errors-guide">How to handle them</a>.</p>
+  </div>
+  <div class="ep-code"><div class="tabs" role="tablist" aria-label="Examples"><button type="button" role="tab" aria-selected="true" aria-controls="createAllocation-curl" id="createAllocation-curl-tab">cURL</button><button type="button" role="tab" aria-selected="false" aria-controls="createAllocation-req" id="createAllocation-req-tab">Request</button><button type="button" role="tab" aria-selected="false" aria-controls="createAllocation-res" id="createAllocation-res-tab">Response 201</button><button type="button" role="tab" aria-selected="false" aria-controls="createAllocation-err" id="createAllocation-err-tab">Error 409</button></div><div role="tabpanel" id="createAllocation-curl" aria-labelledby="createAllocation-curl-tab"><figure class="code"><div class="bar"><span></span><button class="copy" type="button" aria-label="Copy code">Copy</button></div><pre><code class="lang-text"><span class="hm">curl</span> -X POST &quot;https://api.hamsasoham.com/api/management/v1/allocations&quot; \
+  -H &quot;Authorization: Bearer <span class="v">$FBOS_TOKEN</span>&quot; \
+  -H &quot;Content-Type: application/json&quot; \
+  -H &quot;Idempotency-Key: $(uuidgen)&quot; \
+  --data-raw &#x27;{
+  &quot;resource_id&quot;: &quot;0191f3a2-0054-7054-824c-000000863c34&quot;,
+  &quot;requirement_id&quot;: &quot;0191f3a2-0056-7056-825a-000000896e66&quot;,
+  &quot;subject&quot;: {
+    &quot;type&quot;: &quot;work.work_unit&quot;,
+    &quot;id&quot;: &quot;0191f3a2-002c-702c-8134-00000046504c&quot;
+  },
+  &quot;start_date&quot;: &quot;2026-10-12&quot;,
+  &quot;end_date&quot;: &quot;2026-11-06&quot;,
+  &quot;minutes_per_day&quot;: 300
+}&#x27;</code></pre></figure></div><div role="tabpanel" id="createAllocation-req" aria-labelledby="createAllocation-req-tab" hidden><figure class="code"><div class="bar"><figcaption>POST /api/management/v1/allocations</figcaption><button class="copy" type="button" aria-label="Copy code">Copy</button></div><pre><code class="lang-text">{
+  <span class="k">&quot;resource_id&quot;</span>: <span class="s">&quot;0191f3a2-0054-7054-824c-000000863c34&quot;</span>,
+  <span class="k">&quot;requirement_id&quot;</span>: <span class="s">&quot;0191f3a2-0056-7056-825a-000000896e66&quot;</span>,
+  <span class="k">&quot;subject&quot;</span>: {
+    <span class="k">&quot;type&quot;</span>: <span class="s">&quot;work.work_unit&quot;</span>,
+    <span class="k">&quot;id&quot;</span>: <span class="s">&quot;0191f3a2-002c-702c-8134-00000046504c&quot;</span>
+  },
+  <span class="k">&quot;start_date&quot;</span>: <span class="s">&quot;2026-10-12&quot;</span>,
+  <span class="k">&quot;end_date&quot;</span>: <span class="s">&quot;2026-11-06&quot;</span>,
+  <span class="k">&quot;minutes_per_day&quot;</span>: <span class="n">300</span>
+}</code></pre></figure></div><div role="tabpanel" id="createAllocation-res" aria-labelledby="createAllocation-res-tab" hidden><figure class="code"><div class="bar"><span></span><button class="copy" type="button" aria-label="Copy code">Copy</button></div><pre><code class="lang-text"><span class="hm">HTTP/1.1</span> 201 Created
+<span class="hh">Content-Type</span>: application/json; charset=utf-8
+<span class="hh">Location</span>: /api/management/v1/allocations
+<span class="hh">X-Request-Id</span>: 0191f3a2-005e-705e-8292-00000096372e
+
+{
+  <span class="k">&quot;id&quot;</span>: <span class="s">&quot;0191f3a2-0055-7055-8253-00000087d54d&quot;</span>,
+  <span class="k">&quot;resource&quot;</span>: {
+    <span class="k">&quot;id&quot;</span>: <span class="s">&quot;0191f3a2-0054-7054-824c-000000863c34&quot;</span>,
+    <span class="k">&quot;user&quot;</span>: {
+      <span class="k">&quot;id&quot;</span>: <span class="s">&quot;0191f3a2-0012-7012-807e-0000001cc3c2&quot;</span>,
+      <span class="k">&quot;name&quot;</span>: <span class="s">&quot;Aarav Sharma&quot;</span>
+    }
+  },
+  <span class="k">&quot;subject&quot;</span>: {
+    <span class="k">&quot;type&quot;</span>: <span class="s">&quot;work.work_unit&quot;</span>,
+    <span class="k">&quot;id&quot;</span>: <span class="s">&quot;0191f3a2-002c-702c-8134-00000046504c&quot;</span>,
+    <span class="k">&quot;label&quot;</span>: <span class="s">&quot;WU-2026-0042 · Patliputra Traders e-commerce website&quot;</span>
+  },
+  <span class="k">&quot;start_date&quot;</span>: <span class="s">&quot;2026-10-12&quot;</span>,
+  <span class="k">&quot;end_date&quot;</span>: <span class="s">&quot;2026-11-06&quot;</span>,
+  <span class="k">&quot;minutes_per_day&quot;</span>: <span class="n">300</span>,
+  <span class="k">&quot;status&quot;</span>: <span class="s">&quot;confirmed&quot;</span>,
+  <span class="k">&quot;overload_days&quot;</span>: []
+}</code></pre></figure></div><div role="tabpanel" id="createAllocation-err" aria-labelledby="createAllocation-err-tab" hidden><figure class="code"><div class="bar"><span></span><button class="copy" type="button" aria-label="Copy code">Copy</button></div><pre><code class="lang-text"><span class="hm">HTTP/1.1</span> 409
+<span class="hh">Content-Type</span>: application/problem+json
+
+{
+  <span class="k">&quot;type&quot;</span>: <span class="s">&quot;https://docs.hamsasoham.com/errors/CAPACITY_EXCEEDED&quot;</span>,
+  <span class="k">&quot;title&quot;</span>: <span class="s">&quot;Allocation overloads this person&quot;</span>,
+  <span class="k">&quot;status&quot;</span>: <span class="n">409</span>,
+  <span class="k">&quot;code&quot;</span>: <span class="s">&quot;CAPACITY_EXCEEDED&quot;</span>,
+  <span class="k">&quot;detail&quot;</span>: <span class="s">&quot;Allocated minutes would exceed capacity on some days.&quot;</span>,
+  <span class="k">&quot;instance&quot;</span>: <span class="s">&quot;/api/management/v1/allocations&quot;</span>,
+  <span class="k">&quot;request_id&quot;</span>: <span class="s">&quot;0191f3a2-005e-705e-8292-00000096372e&quot;</span>,
+  <span class="k">&quot;retryable&quot;</span>: <span class="l">false</span>,
+  <span class="k">&quot;meta&quot;</span>: {
+    <span class="k">&quot;overload_days&quot;</span>: [
+      <span class="s">&quot;2026-10-19&quot;</span>,
+      <span class="s">&quot;2026-10-20&quot;</span>
+    ],
+    <span class="k">&quot;capacity_minutes&quot;</span>: <span class="n">540</span>,
+    <span class="k">&quot;requested_minutes&quot;</span>: <span class="n">600</span>
+  }
+}</code></pre></figure></div></div>
+
+
+====================================================================================================
+EP: op-getCapacity
+
+  <div class="ep-main">
+    <h4 class="ep-title">Get capacity for a unit</h4>
+    <p class="ep-line"><span class="m m-get">GET</span><code class="path">/api/management/v1/capacity</code></p>
+    
+    <dl class="facts"><dt>Permission</dt><dd><code>resource.capacity.read</code></dd><dt>Authentication</dt><dd>Access token</dd><dt>Idempotency</dt><dd>Naturally idempotent</dd><dt>Concurrency</dt><dd>—</dd><dt>Rate limit class</dt><dd><a href="#rate-limits">standard</a></dd></dl>
+    <h5>Parameters</h5><ul class="plist"><li><div class="ph"><code class="pname">unit_id</code><span class="ptype">string (uuid)</span><span class="pin">query</span><span class="preq">required</span></div><div class="pd"><span class="ex">Example: <code>0191f3a2-0019-7019-80af-00000027f371</code></span></div></li><li><div class="ph"><code class="pname">from</code><span class="ptype">string (date)</span><span class="pin">query</span><span class="preq">required</span></div><div class="pd"><span class="ex">Example: <code>2026-10-01</code></span></div></li><li><div class="ph"><code class="pname">to</code><span class="ptype">string (date)</span><span class="pin">query</span><span class="preq">required</span></div><div class="pd"><span class="ex">Example: <code>2026-10-31</code></span></div></li></ul>
+    <h5>Response</h5><p><strong>200 OK</strong> with <a href="#schema-CapacitySummary">CapacitySummary</a>.</p>
+    <h5>Errors</h5><p class="std-errors">Also the standard errors for authentication (401), permission (403), rate limiting (429) and server and dependency failures (500, 503). <a href="#errors-guide">How to handle them</a>.</p>
+  </div>
+  <div class="ep-code"><div class="tabs" role="tablist" aria-label="Examples"><button type="button" role="tab" aria-selected="true" aria-controls="getCapacity-curl" id="getCapacity-curl-tab">cURL</button><button type="button" role="tab" aria-selected="false" aria-controls="getCapacity-res" id="getCapacity-res-tab">Response 200</button><button type="button" role="tab" aria-selected="false" aria-controls="getCapacity-err" id="getCapacity-err-tab">Error 403</button></div><div role="tabpanel" id="getCapacity-curl" aria-labelledby="getCapacity-curl-tab"><figure class="code"><div class="bar"><span></span><button class="copy" type="button" aria-label="Copy code">Copy</button></div><pre><code class="lang-text"><span class="hm">curl</span> -X GET &quot;https://api.hamsasoham.com/api/management/v1/capacity?unit_id=0191f3a2-0019-7019-80af-00000027f371&amp;from=2026-10-01&amp;to=2026-10-31&quot; \
+  -H &quot;Authorization: Bearer <span class="v">$FBOS_TOKEN</span>&quot;</code></pre></figure></div><div role="tabpanel" id="getCapacity-res" aria-labelledby="getCapacity-res-tab" hidden><figure class="code"><div class="bar"><span></span><button class="copy" type="button" aria-label="Copy code">Copy</button></div><pre><code class="lang-text"><span class="hm">HTTP/1.1</span> 200 OK
+<span class="hh">Content-Type</span>: application/json; charset=utf-8
+<span class="hh">X-Request-Id</span>: 0191f3a2-005e-705e-8292-00000096372e
+
+{
+  <span class="k">&quot;unit&quot;</span>: {
+    <span class="k">&quot;id&quot;</span>: <span class="s">&quot;0191f3a2-0019-7019-80af-00000027f371&quot;</span>,
+    <span class="k">&quot;name&quot;</span>: <span class="s">&quot;Web Development Team&quot;</span>,
+    <span class="k">&quot;unit_type&quot;</span>: <span class="s">&quot;team&quot;</span>
+  },
+  <span class="k">&quot;from&quot;</span>: <span class="s">&quot;2026-10-01&quot;</span>,
+  <span class="k">&quot;to&quot;</span>: <span class="s">&quot;2026-10-31&quot;</span>,
+  <span class="k">&quot;capacity_minutes&quot;</span>: <span class="n">108000</span>,
+  <span class="k">&quot;allocated_minutes&quot;</span>: <span class="n">93600</span>,
+  <span class="k">&quot;actual_minutes&quot;</span>: <span class="n">51200</span>,
+  <span class="k">&quot;utilization_pct&quot;</span>: <span class="n">86.7</span>,
+  <span class="k">&quot;overloaded_resources&quot;</span>: <span class="n">1</span>,
+  <span class="k">&quot;by_skill&quot;</span>: [
+    {
+      <span class="k">&quot;skill&quot;</span>: <span class="s">&quot;react&quot;</span>,
+      <span class="k">&quot;capacity_minutes&quot;</span>: <span class="n">48600</span>,
+      <span class="k">&quot;allocated_minutes&quot;</span>: <span class="n">46800</span>
+    }
+  ]
+}</code></pre></figure></div><div role="tabpanel" id="getCapacity-err" aria-labelledby="getCapacity-err-tab" hidden><figure class="code"><div class="bar"><span></span><button class="copy" type="button" aria-label="Copy code">Copy</button></div><pre><code class="lang-text"><span class="hm">HTTP/1.1</span> 403
+<span class="hh">Content-Type</span>: application/problem+json
+
+{
+  <span class="k">&quot;type&quot;</span>: <span class="s">&quot;https://docs.hamsasoham.com/errors/PERMISSION_DENIED&quot;</span>,
+  <span class="k">&quot;title&quot;</span>: <span class="s">&quot;You don&#x27;t have permission for this action&quot;</span>,
+  <span class="k">&quot;status&quot;</span>: <span class="n">403</span>,
+  <span class="k">&quot;code&quot;</span>: <span class="s">&quot;PERMISSION_DENIED&quot;</span>,
+  <span class="k">&quot;detail&quot;</span>: <span class="s">&quot;The record is visible to you but your roles in its scope don&#x27;t include the required permission.&quot;</span>,
+  <span class="k">&quot;instance&quot;</span>: <span class="s">&quot;/api/management/v1/capacity&quot;</span>,
+  <span class="k">&quot;request_id&quot;</span>: <span class="s">&quot;0191f3a2-005e-705e-8292-00000096372e&quot;</span>,
+  <span class="k">&quot;retryable&quot;</span>: <span class="l">false</span>,
+  <span class="k">&quot;meta&quot;</span>: {
+    <span class="k">&quot;required_permission&quot;</span>: <span class="s">&quot;task.task.assign&quot;</span>
+  }
+}</code></pre></figure></div></div>
+
+
