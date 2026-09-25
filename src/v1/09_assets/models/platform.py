@@ -30,8 +30,8 @@ class IdempotencyKey(Base):
 
     __tablename__ = "idempotency_keys"
 
+    organization_id: Mapped[uuid.UUID] = mapped_column(UUIDType, primary_key=True)
     key: Mapped[str] = mapped_column(String(255), primary_key=True)
-    organization_id: Mapped[uuid.UUID] = mapped_column(UUIDType, nullable=False, index=True)
     request_hash: Mapped[str] = mapped_column(String(64), nullable=False)
     response_status: Mapped[int] = mapped_column(Integer, nullable=False)
     response_body: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)

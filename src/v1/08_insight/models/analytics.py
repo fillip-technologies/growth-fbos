@@ -11,6 +11,7 @@ from sqlalchemy import (
     JSON,
     Numeric,
     String,
+    UniqueConstraint,
 )
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -114,10 +115,11 @@ class Dashboard(Base):
     """
 
     __tablename__ = "dashboards"
+    __table_args__ = (UniqueConstraint("organization_id", "code", name="uq_dashboards_org_code"),)
 
     id: Mapped[uuid.UUID] = mapped_column(UUIDType, primary_key=True, default=uuid.uuid4)
     organization_id: Mapped[uuid.UUID] = mapped_column(UUIDType, nullable=False, index=True)
-    code: Mapped[str] = mapped_column(String(100), nullable=False, unique=True, index=True)
+    code: Mapped[str] = mapped_column(String(100), nullable=False, index=True)
     audience: Mapped[str] = mapped_column(String(50), nullable=False, default="executive")
     layout: Mapped[dict] = mapped_column(JSON, nullable=False)
 
@@ -144,10 +146,11 @@ class ReportDefinition(Base):
     """
 
     __tablename__ = "report_definitions"
+    __table_args__ = (UniqueConstraint("organization_id", "code", name="uq_report_definitions_org_code"),)
 
     id: Mapped[uuid.UUID] = mapped_column(UUIDType, primary_key=True, default=uuid.uuid4)
     organization_id: Mapped[uuid.UUID] = mapped_column(UUIDType, nullable=False, index=True)
-    code: Mapped[str] = mapped_column(String(100), nullable=False, unique=True, index=True)
+    code: Mapped[str] = mapped_column(String(100), nullable=False, index=True)
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     dataset: Mapped[str] = mapped_column(String(100), nullable=False)
     parameters_schema: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)

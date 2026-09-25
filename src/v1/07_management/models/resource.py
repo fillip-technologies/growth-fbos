@@ -12,6 +12,7 @@ from sqlalchemy import (
     Numeric,
     String,
     Text,
+    UniqueConstraint,
     func,
 )
 from sqlalchemy.orm import Mapped, mapped_column
@@ -48,10 +49,11 @@ class Skill(Base):
     """
 
     __tablename__ = "skills"
+    __table_args__ = (UniqueConstraint("organization_id", "code", name="uq_skills_org_code"),)
 
     id: Mapped[uuid.UUID] = mapped_column(UUIDType, primary_key=True, default=uuid.uuid4)
     organization_id: Mapped[uuid.UUID] = mapped_column(UUIDType, nullable=False, index=True)
-    code: Mapped[str] = mapped_column(String(100), nullable=False, unique=True, index=True)
+    code: Mapped[str] = mapped_column(String(100), nullable=False, index=True)
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     category: Mapped[str] = mapped_column(String(100), nullable=False, index=True)
 

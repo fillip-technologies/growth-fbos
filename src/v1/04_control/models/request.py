@@ -2,7 +2,7 @@ import uuid
 from datetime import datetime
 from typing import Optional
 
-from sqlalchemy import DateTime, ForeignKey, Integer, JSON, String, Text, func
+from sqlalchemy import DateTime, ForeignKey, func, Integer, JSON, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column
 
 from database.base import Base
@@ -15,6 +15,7 @@ class ApprovalRequest(Base):
     """
 
     __tablename__ = "approval_requests"
+    __table_args__ = (UniqueConstraint("organization_id", "idempotency_key", name="uq_approval_requests_org_idempotency_key"),)
 
     id: Mapped[uuid.UUID] = mapped_column(UUIDType, primary_key=True, default=uuid.uuid4)
     policy_id: Mapped[uuid.UUID] = mapped_column(
@@ -35,7 +36,7 @@ class ApprovalRequest(Base):
     reason: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     priority: Mapped[str] = mapped_column(String(50), nullable=False, default="medium")
     policy_version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
-    idempotency_key: Mapped[Optional[str]] = mapped_column(String(255), nullable=True, unique=True, index=True)
+    idempotency_key: Mapped[Optional[str]] = mapped_column(String(255), nullable=True, index=True)
     status: Mapped[str] = mapped_column(String(50), nullable=False, default="pending", index=True)
     decided_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
     scope_path: Mapped[Optional[str]] = mapped_column(String(255), nullable=True, index=True)

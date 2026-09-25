@@ -131,7 +131,10 @@ async def create_approval_request(
     # Idempotency: return existing request if same key
     if idempotency_key:
         existing_res = await session.execute(
-            select(ApprovalRequest).where(ApprovalRequest.idempotency_key == idempotency_key)
+            select(ApprovalRequest).where(
+                ApprovalRequest.organization_id == org_id,
+                ApprovalRequest.idempotency_key == idempotency_key,
+            )
         )
         existing = existing_res.scalars().first()
         if existing:

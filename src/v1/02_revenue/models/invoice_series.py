@@ -17,6 +17,7 @@ class InvoiceSeries(Base):
     __tablename__ = "invoice_series"
 
     id: Mapped[uuid.UUID] = mapped_column(UUIDType, primary_key=True, default=uuid.uuid4)
+    organization_id: Mapped[uuid.UUID] = mapped_column(UUIDType, nullable=False, index=True)
     # References identity.tax_registrations — cross-service, no DB FK
     fin_registration_id: Mapped[uuid.UUID] = mapped_column(UUIDType, nullable=False, index=True)
     doc_type: Mapped[str] = mapped_column(String(50), nullable=False)   # tax_invoice / credit_note / proforma

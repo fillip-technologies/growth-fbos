@@ -175,6 +175,7 @@ class NotificationPreference(Base):
     __tablename__ = "notification_preferences"
 
     id: Mapped[uuid.UUID] = mapped_column(UUIDType, primary_key=True, default=uuid.uuid4)
+    organization_id: Mapped[uuid.UUID] = mapped_column(UUIDType, nullable=False, index=True)
     user_id: Mapped[uuid.UUID] = mapped_column(UUIDType, nullable=False, index=True)
     event_category: Mapped[str] = mapped_column(String(100), nullable=False)
     channel_type: Mapped[str] = mapped_column(String(50), nullable=False)
@@ -191,6 +192,7 @@ class DeviceToken(Base):
     __tablename__ = "device_tokens"
 
     id: Mapped[uuid.UUID] = mapped_column(UUIDType, primary_key=True, default=uuid.uuid4)
+    organization_id: Mapped[uuid.UUID] = mapped_column(UUIDType, nullable=False, index=True)
     user_id: Mapped[uuid.UUID] = mapped_column(UUIDType, nullable=False, index=True)
     platform: Mapped[str] = mapped_column(String(50), nullable=False)
     token: Mapped[str] = mapped_column(String(512), nullable=False, unique=True, index=True)

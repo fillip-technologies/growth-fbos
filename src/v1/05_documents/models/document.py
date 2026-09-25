@@ -2,7 +2,7 @@ from datetime import date, datetime, timezone
 from typing import Optional
 import uuid
 
-from sqlalchemy import BigInteger, Boolean, Date, DateTime, ForeignKey, Integer, String, Text, func
+from sqlalchemy import BigInteger, Boolean, Date, DateTime, ForeignKey, func, Integer, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from database.base import Base
@@ -15,10 +15,11 @@ class RetentionPolicy(Base):
     """
 
     __tablename__ = "retention_policies"
+    __table_args__ = (UniqueConstraint("organization_id", "code", name="uq_retention_policies_org_code"),)
 
     id: Mapped[uuid.UUID] = mapped_column(UUIDType, primary_key=True, default=uuid.uuid4)
     organization_id: Mapped[uuid.UUID] = mapped_column(UUIDType, nullable=False, index=True)
-    code: Mapped[str] = mapped_column(String(100), nullable=False, unique=True, index=True)
+    code: Mapped[str] = mapped_column(String(100), nullable=False, index=True)
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     retain_days: Mapped[int] = mapped_column(Integer, nullable=False)
     trigger: Mapped[str] = mapped_column(String(50), nullable=False, default="creation")
@@ -36,10 +37,11 @@ class DocumentCategory(Base):
     """
 
     __tablename__ = "document_categories"
+    __table_args__ = (UniqueConstraint("organization_id", "code", name="uq_document_categories_org_code"),)
 
     id: Mapped[uuid.UUID] = mapped_column(UUIDType, primary_key=True, default=uuid.uuid4)
     organization_id: Mapped[uuid.UUID] = mapped_column(UUIDType, nullable=False, index=True)
-    code: Mapped[str] = mapped_column(String(100), nullable=False, unique=True, index=True)
+    code: Mapped[str] = mapped_column(String(100), nullable=False, index=True)
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     default_classification: Mapped[str] = mapped_column(String(50), nullable=False, default="internal")
     retention_policy_id: Mapped[Optional[uuid.UUID]] = mapped_column(
@@ -60,10 +62,11 @@ class Document(Base):
     """
 
     __tablename__ = "documents"
+    __table_args__ = (UniqueConstraint("organization_id", "code", name="uq_documents_org_code"),)
 
     id: Mapped[uuid.UUID] = mapped_column(UUIDType, primary_key=True, default=uuid.uuid4)
     organization_id: Mapped[uuid.UUID] = mapped_column(UUIDType, nullable=False, index=True)
-    code: Mapped[str] = mapped_column(String(100), nullable=False, unique=True, index=True)
+    code: Mapped[str] = mapped_column(String(100), nullable=False, index=True)
     title: Mapped[str] = mapped_column(String(255), nullable=False)
     category_id: Mapped[uuid.UUID] = mapped_column(
         UUIDType, ForeignKey("document_categories.id", ondelete="RESTRICT"), nullable=False, index=True

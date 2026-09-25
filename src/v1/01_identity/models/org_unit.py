@@ -29,8 +29,11 @@ class OrgUnit(Base):
     )
     # Materialized path (e.g. "/root_id/dept_id/team_id/")
     path: Mapped[str] = mapped_column(String(2048), nullable=False, index=True)
+    # users.home_unit_id points back here; use_alter breaks the create-order cycle
     head_user_id: Mapped[Optional[uuid.UUID]] = mapped_column(
-        UUIDType, ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+        UUIDType,
+        ForeignKey("users.id", ondelete="SET NULL", use_alter=True, name="fk_org_units_head_user_id"),
+        nullable=True,
     )
     calendar_id: Mapped[Optional[uuid.UUID]] = mapped_column(
         UUIDType, ForeignKey("calendars.id", ondelete="SET NULL"), nullable=True

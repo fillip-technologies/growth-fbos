@@ -2,7 +2,7 @@ import uuid
 from datetime import date, datetime
 from typing import Optional
 
-from sqlalchemy import Date, DateTime, ForeignKey, Integer, Numeric, String, Text
+from sqlalchemy import Date, DateTime, ForeignKey, Integer, Numeric, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column
 
 from database.base import Base
@@ -11,6 +11,7 @@ from database.types import UUIDType
 
 class Contract(Base):
     __tablename__ = "contracts"
+    __table_args__ = (UniqueConstraint("organization_id", "contract_no", name="uq_contracts_org_contract_no"),)
 
     id: Mapped[uuid.UUID] = mapped_column(UUIDType, primary_key=True, default=uuid.uuid4)
     organization_id: Mapped[uuid.UUID] = mapped_column(UUIDType, nullable=False, index=True)
@@ -30,7 +31,7 @@ class Contract(Base):
     parent_contract_id: Mapped[Optional[uuid.UUID]] = mapped_column(
         UUIDType, ForeignKey("contracts.id", ondelete="SET NULL"), nullable=True
     )
-    contract_no: Mapped[str] = mapped_column(String(100), nullable=False, unique=True, index=True)
+    contract_no: Mapped[str] = mapped_column(String(100), nullable=False, index=True)
     contract_type: Mapped[str] = mapped_column(String(50), nullable=False)
     status: Mapped[str] = mapped_column(String(50), nullable=False, default="draft", index=True)
     sla_tier: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)

@@ -13,7 +13,7 @@ import uuid
 from datetime import datetime, timezone
 from typing import Optional
 
-from sqlalchemy import select
+from sqlalchemy import Select, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from exceptions import (
@@ -26,7 +26,7 @@ from exceptions import (
     VendorAccountNotFoundError,
     VersionConflictError,
 )
-from models.asset import Asset, AssetAssignment, AssetType, Credential, Vendor, VendorAccount
+from models.asset import Asset, AssetAssignment, AssetCategory, AssetType, Credential, Vendor, VendorAccount
 from schemas.assets import (
     AssetAssignmentCreate,
     AssetCreate,
@@ -119,6 +119,15 @@ async def _generate_asset_tag(session: AsyncSession, org_id: uuid.UUID, type_cod
 # ---------------------------------------------------------------------------
 
 
+def _asset_type_by_code(org_id: uuid.UUID, type_code: str) -> Select:
+    # Asset types carry no organization_id; they belong to a tenant through their category.
+    return (
+        select(AssetType)
+        .join(AssetCategory, AssetType.category_id == AssetCategory.id)
+        .where(AssetCategory.organization_id == org_id, AssetType.code == type_code)
+    )
+
+
 async def list_assets(
     session: AsyncSession,
     org_id: uuid.UUID,
@@ -132,7 +141,7 @@ async def list_assets(
 ) -> PageResponse[AssetResponse]:
     query = select(Asset).where(Asset.organization_id == org_id)
     if type_code is not None:
-        type_res = await session.execute(select(AssetType).where(AssetType.code == type_code))
+        type_res = await session.execute(_asset_type_by_code(org_id, type_code))
         at = type_res.scalars().first()
         if at:
             query = query.where(Asset.asset_type_id == at.id)
@@ -157,7 +166,7 @@ async def register_asset(
     org_id: uuid.UUID,
     data: AssetCreate,
 ) -> AssetResponse:
-    type_res = await session.execute(select(AssetType).where(AssetType.code == data.type_code))
+    type_res = await session.execute(_asset_type_by_code(org_id, data.type_code))
     asset_type = type_res.scalars().first()
     if not asset_type:
         raise AssetTypeNotFoundError(data.type_code)
