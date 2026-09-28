@@ -166,10 +166,15 @@ curl http://localhost:8000/health
 # 2. Identity Service Health Check
 curl http://localhost:8001/health
 
-# 3. Retrieve Seeded Clients (Revenue Service)
+# 3. Authenticate / Login (Identity Service)
+curl -X POST http://localhost:8001/api/identity/v1/auth/login \
+  -H "Content-Type: application/json" \
+  -d '{"email": "aarav.sharma@example.com", "password": "Password@123"}'
+
+# 4. Retrieve Seeded Clients (Revenue Service)
 curl http://localhost:8002/api/revenue/v1/clients
 
-# 4. Retrieve Seeded Documents (Documents Service)
+# 5. Retrieve Seeded Documents (Documents Service)
 curl http://localhost:8005/api/documents/v1/documents
 ```
 
