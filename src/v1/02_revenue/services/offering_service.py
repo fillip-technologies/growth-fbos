@@ -11,18 +11,32 @@ from schemas.offering import OfferingCreate, OfferingResponse
 from schemas.opportunity import VerticalRef
 
 
+def _parse_gst_rate(gst_code: Optional[str]) -> float:
+    if not gst_code:
+        return 18.0
+    code = gst_code.strip()
+    if code.upper().startswith("GST"):
+        code = code[3:].strip()
+    try:
+        return float(code)
+    except ValueError:
+        return 18.0
+
+
 def format_offering_response(offering: Offering) -> OfferingResponse:
     price = Money(amount=float(offering.list_price or 0), currency="INR")
-    gst_rate = float(offering.gst_code) if offering.gst_code else 18.0
+    gst_rate = _parse_gst_rate(offering.gst_code)
+    valid_units = {"project", "hour", "month", "unit"}
+    unit = offering.unit if offering.unit in valid_units else "project"
 
     return OfferingResponse(
         id=offering.id,
         code=offering.code,
         name=offering.name,
-        vertical=VerticalRef(id=offering.vertical_id, name="Vertical"),
+        vertical=VerticalRef(id=offering.vertical_id, name="Vertical") if offering.vertical_id else None,
         sac_code=offering.sac_code or "",
         gst_rate=gst_rate,
-        unit=offering.unit or "project",
+        unit=unit,
         billing_model=offering.billing_model,
         list_price=price,
         default_work_template_code=offering.default_work_template_code,

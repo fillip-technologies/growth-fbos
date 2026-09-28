@@ -24,7 +24,7 @@ class OfferingResponse(BaseModel):
     id: uuid.UUID
     code: str
     name: str
-    vertical: VerticalRef
+    vertical: Optional[VerticalRef] = None
     sac_code: str
     gst_rate: float
     unit: Literal["project", "hour", "month", "unit"]

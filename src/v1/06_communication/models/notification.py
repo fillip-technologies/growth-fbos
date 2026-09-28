@@ -1,5 +1,5 @@
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional
 
 from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, JSON, String, Text, func
@@ -27,7 +27,9 @@ class NotificationRule(Base):
     urgency: Mapped[str] = mapped_column(String(50), nullable=False, default="normal")
     digestible: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), server_default=func.now(), nullable=False
+    )
 
 
 class NotificationTemplate(Base):
@@ -66,7 +68,9 @@ class Notification(Base):
     event_type: Mapped[str] = mapped_column(String(100), nullable=False, index=True)
     subject_type: Mapped[Optional[str]] = mapped_column(String(100), nullable=True, index=True)
     subject_id: Mapped[Optional[uuid.UUID]] = mapped_column(UUIDType, nullable=True, index=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), server_default=func.now(), nullable=False
+    )
 
 
 class Delivery(Base):
@@ -107,7 +111,9 @@ class DeliveryAttempt(Base):
         UUIDType, ForeignKey("deliveries.id", ondelete="CASCADE"), nullable=False, index=True
     )
     attempt_no: Mapped[int] = mapped_column(Integer, nullable=False)
-    attempted_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    attempted_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), server_default=func.now(), nullable=False
+    )
     success: Mapped[bool] = mapped_column(Boolean, nullable=False)
     provider_response: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
 
@@ -133,7 +139,9 @@ class InboxItem(Base):
     urgency: Mapped[str] = mapped_column(String(50), nullable=False, default="normal")
     read_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
     archived_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), server_default=func.now(), nullable=False
+    )
 
 
 class Suppression(Base):
@@ -148,7 +156,9 @@ class Suppression(Base):
     channel_type: Mapped[str] = mapped_column(String(50), nullable=False)
     address: Mapped[str] = mapped_column(String(255), nullable=False, index=True)
     reason: Mapped[str] = mapped_column(String(100), nullable=False)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), server_default=func.now(), nullable=False
+    )
 
 
 class NotificationChannel(Base):
@@ -196,7 +206,9 @@ class DeviceToken(Base):
     user_id: Mapped[uuid.UUID] = mapped_column(UUIDType, nullable=False, index=True)
     platform: Mapped[str] = mapped_column(String(50), nullable=False)
     token: Mapped[str] = mapped_column(String(512), nullable=False, unique=True, index=True)
-    last_seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    last_seen_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), server_default=func.now(), nullable=False
+    )
 
 
 class WebhookSubscription(Base):
@@ -213,4 +225,6 @@ class WebhookSubscription(Base):
     description: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     secret: Mapped[str] = mapped_column(String(255), nullable=False)
     status: Mapped[str] = mapped_column(String(50), nullable=False, default="active", index=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), server_default=func.now(), nullable=False
+    )

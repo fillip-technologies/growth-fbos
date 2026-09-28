@@ -1,5 +1,6 @@
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 import logging
+import secrets
 from typing import Any, Optional
 import uuid
 
@@ -190,6 +191,7 @@ class UserService:
             created_at=datetime.utcnow(),
         )
         session.add(user)
+        await session.flush()
 
         # 4. If home_unit_id provided, create UnitMembership
         if data.home_unit_id:
@@ -201,8 +203,6 @@ class UserService:
             )
             session.add(membership)
 
-        import secrets
-        from datetime import timedelta, timezone
         inv_token = f"inv_{secrets.token_urlsafe(16)}"
         now = datetime.now(timezone.utc)
         cred = UserCredential(
@@ -212,6 +212,30 @@ class UserService:
             invitation_token_expires_at=now + timedelta(hours=72),
         )
         session.add(cred)
+
+        if data.role_assignments:
+            for ra in data.role_assignments:
+                role_id = ra.get("role_id")
+                if not role_id and ra.get("role_code"):
+                    r_res = await session.execute(
+                        select(Role).where(
+                            Role.organization_id == organization_id,
+                            Role.code == ra.get("role_code"),
+                        )
+                    )
+                    r_obj = r_res.scalar_one_or_none()
+                    if r_obj:
+                        role_id = r_obj.id
+                if role_id:
+                    session.add(
+                        RoleAssignment(
+                            id=uuid.uuid4(),
+                            organization_id=organization_id,
+                            user_id=user.id,
+                            role_id=role_id,
+                            scope_unit_id=ra.get("scope_unit_id"),
+                        )
+                    )
 
         await session.commit()
         await session.refresh(user)

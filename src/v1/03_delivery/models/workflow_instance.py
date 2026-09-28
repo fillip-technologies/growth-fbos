@@ -1,5 +1,5 @@
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional
 
 from sqlalchemy import DateTime, ForeignKey, Integer, JSON, String, func
@@ -28,7 +28,9 @@ class WorkflowInstance(Base):
     status: Mapped[str] = mapped_column(String(50), nullable=False, default="running", index=True)
     context: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
     started_by: Mapped[Optional[uuid.UUID]] = mapped_column(UUIDType, nullable=True)
-    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    started_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), server_default=func.now(), nullable=False
+    )
     completed_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
     version: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
 
@@ -51,7 +53,9 @@ class StageRun(Base):
     iteration: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
     status: Mapped[str] = mapped_column(String(50), nullable=False, default="active", index=True)
     owner_unit_id: Mapped[Optional[uuid.UUID]] = mapped_column(UUIDType, nullable=True)
-    entered_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    entered_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), server_default=func.now(), nullable=False
+    )
     exited_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
     entered_via_transition_id: Mapped[Optional[uuid.UUID]] = mapped_column(
         UUIDType, ForeignKey("transitions.id", ondelete="SET NULL"), nullable=True

@@ -1,5 +1,5 @@
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional
 
 from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, Numeric, String, Text, func
@@ -84,4 +84,6 @@ class Closure(Base):
     lessons_learned: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     client_signoff_document_id: Mapped[Optional[uuid.UUID]] = mapped_column(UUIDType, nullable=True)
     closed_by: Mapped[Optional[uuid.UUID]] = mapped_column(UUIDType, nullable=True)
-    closed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    closed_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), server_default=func.now(), nullable=False
+    )

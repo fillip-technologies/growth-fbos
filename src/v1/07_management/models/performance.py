@@ -1,5 +1,5 @@
 import uuid
-from datetime import date, datetime
+from datetime import date, datetime, timezone
 from typing import Optional
 
 from sqlalchemy import (
@@ -183,7 +183,7 @@ class KPIResult(Base):
     calc_version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
     inputs_hash: Mapped[str] = mapped_column(String(64), nullable=False)
     calculated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now(), nullable=False
+        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), server_default=func.now(), nullable=False
     )
 
 
@@ -199,7 +199,7 @@ class KPIPeriodSnapshot(Base):
         UUIDType, ForeignKey("kpi_results.id", ondelete="CASCADE"), nullable=False, index=True
     )
     frozen_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now(), nullable=False
+        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), server_default=func.now(), nullable=False
     )
     payload: Mapped[dict] = mapped_column(JSON, nullable=False)
 

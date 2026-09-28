@@ -242,6 +242,7 @@ class PaymentService:
                 payment_id=payment.id,
                 invoice_id=inv.id,
                 amount=alloc_amt,
+                allocated_at=datetime.utcnow(),
             )
             session.add(pa)
             existing_allocs.append((pa, inv.invoice_no))

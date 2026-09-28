@@ -1,5 +1,5 @@
 import uuid
-from datetime import date, datetime
+from datetime import date, datetime, timezone
 from typing import Optional
 
 from sqlalchemy import Boolean, Date, DateTime, ForeignKey, Integer, String, Text, func
@@ -30,7 +30,7 @@ class TimeEntry(Base):
     source: Mapped[str] = mapped_column(String(50), nullable=False, default="manual")
     note: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     approved_by: Mapped[Optional[uuid.UUID]] = mapped_column(UUIDType, nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), server_default=func.now(), nullable=False)
 
 
 class TaskReview(Base):
@@ -49,7 +49,7 @@ class TaskReview(Base):
     result: Mapped[str] = mapped_column(String(50), nullable=False)
     rating: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     feedback: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
-    reviewed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    reviewed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), server_default=func.now(), nullable=False)
 
 
 class TaskComment(Base):
@@ -68,7 +68,7 @@ class TaskComment(Base):
     mentions: Mapped[Optional[uuid.UUID]] = mapped_column(UUIDType, nullable=True)
     edited_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
     deleted_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), server_default=func.now(), nullable=False)
 
 
 class TaskStatusHistory(Base):
@@ -86,4 +86,4 @@ class TaskStatusHistory(Base):
     to_status: Mapped[str] = mapped_column(String(50), nullable=False)
     changed_by: Mapped[Optional[uuid.UUID]] = mapped_column(UUIDType, nullable=True)
     reason: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
-    changed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    changed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), server_default=func.now(), nullable=False)

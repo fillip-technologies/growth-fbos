@@ -390,7 +390,7 @@ async def list_availability(
     for resource in rows:
         # Skills
         rs_res = await session.execute(select(ResourceSkill).where(ResourceSkill.resource_id == resource.id))
-        resource_skills = list(rs_res.all())
+        resource_skills = list(rs_res.scalars().all())
 
         if skill is not None:
             skill_res = await session.execute(select(Skill).where(Skill.organization_id == org_id, Skill.code == skill))

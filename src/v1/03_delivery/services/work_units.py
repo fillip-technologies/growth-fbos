@@ -93,9 +93,67 @@ def _check_if_match(if_match: Optional[str], current_version: int) -> None:
 # --- Work unit types & templates -----------------------------------------
 
 
+async def _ensure_work_unit_types_and_templates(session: AsyncSession, org_id: uuid.UUID) -> None:
+    default_types = [
+        ("project", "Project", "project", True),
+        ("retainer", "Retainer", "retainer", True),
+        ("internal", "Internal Initiative", "internal", False),
+        ("milestone", "Milestone Deliverable", "milestone", True),
+    ]
+    type_map = {}
+    for code, name, category, req_client in default_types:
+        res = await session.execute(
+            select(WorkUnitType).where(WorkUnitType.organization_id == org_id, WorkUnitType.code == code)
+        )
+        wut = res.scalars().first()
+        if not wut:
+            wut = WorkUnitType(
+                id=uuid.uuid4(),
+                organization_id=org_id,
+                code=code,
+                name=name,
+                category=category,
+                requires_client=req_client,
+            )
+            session.add(wut)
+            await session.flush()
+        type_map[code] = wut
+
+    t_res = await session.execute(
+        select(WorkTemplate).where(WorkTemplate.organization_id == org_id, WorkTemplate.code == "STANDARD-PROJECT")
+    )
+    tmpl = t_res.scalars().first()
+    if not tmpl:
+        project_type = type_map.get("project")
+        if project_type:
+            tmpl = WorkTemplate(
+                id=uuid.uuid4(),
+                work_unit_type_id=project_type.id,
+                organization_id=org_id,
+                code="STANDARD-PROJECT",
+                name="Standard Project Template",
+                status="active",
+            )
+            session.add(tmpl)
+            await session.flush()
+
+            tmpl_ver = WorkTemplateVersion(
+                id=uuid.uuid4(),
+                template_id=tmpl.id,
+                version_no=1,
+                status="published",
+                structure={"phases": [], "milestones": []},
+                published_at=datetime.utcnow(),
+            )
+            session.add(tmpl_ver)
+            await session.flush()
+    await session.commit()
+
+
 async def list_work_unit_types(
     session: AsyncSession, org_id: uuid.UUID, limit: int, cursor: Optional[str]
 ) -> PageResponse[WorkUnitTypeResponse]:
+    await _ensure_work_unit_types_and_templates(session, org_id)
     query = select(WorkUnitType).where(WorkUnitType.organization_id == org_id)
     rows, page = await paginate_by_id(session, query, WorkUnitType, limit, cursor)
     return PageResponse(data=[WorkUnitTypeResponse.model_validate(r) for r in rows], page=page)
@@ -109,6 +167,7 @@ async def list_templates(
     limit: int,
     cursor: Optional[str],
 ) -> PageResponse[WorkTemplateResponse]:
+    await _ensure_work_unit_types_and_templates(session, org_id)
     query = select(WorkTemplate).where(WorkTemplate.organization_id == org_id)
     if vertical_id is not None:
         query = query.where(WorkTemplate.vertical_id == vertical_id)
@@ -120,6 +179,7 @@ async def list_templates(
 
 
 async def _get_template_by_code(session: AsyncSession, org_id: uuid.UUID, template_code: str) -> WorkTemplate:
+    await _ensure_work_unit_types_and_templates(session, org_id)
     res = await session.execute(
         select(WorkTemplate).where(WorkTemplate.organization_id == org_id, WorkTemplate.code == template_code)
     )
@@ -364,6 +424,8 @@ async def create_work_unit(session: AsyncSession, org_id: uuid.UUID, data: WorkU
         billable=data.billable if data.billable is not None else True,
         attributes=data.attributes or {},
         version=1,
+        created_at=datetime.now(timezone.utc),
+        updated_at=datetime.now(timezone.utc),
     )
     session.add(work_unit)
     await session.flush()
@@ -471,6 +533,7 @@ async def update_work_unit(
         merged.update(data.attributes)
         work_unit.attributes = merged
 
+    work_unit.updated_at = datetime.now(timezone.utc)
     work_unit.version += 1
     await session.flush()
     return await _build_work_unit_response(session, work_unit)
@@ -503,6 +566,7 @@ async def change_work_unit_status(
     if data.to_status in ("completed", "closed") and work_unit.actual_end is None:
         work_unit.actual_end = date.today()
 
+    work_unit.updated_at = datetime.now(timezone.utc)
     work_unit.version += 1
     await session.flush()
     return await _build_work_unit_response(session, work_unit)
@@ -827,6 +891,7 @@ async def replace_members(
             )
         )
 
+    work_unit.updated_at = datetime.now(timezone.utc)
     work_unit.version += 1
     await session.flush()
     return await _build_work_unit_response(session, work_unit)

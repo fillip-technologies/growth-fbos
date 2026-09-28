@@ -1,5 +1,5 @@
 import uuid
-from datetime import date, datetime
+from datetime import date, datetime, timezone
 from typing import Optional
 
 from sqlalchemy import (
@@ -178,7 +178,7 @@ class AllocationHistory(Base):
     after: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
     changed_by: Mapped[Optional[uuid.UUID]] = mapped_column(UUIDType, nullable=True)
     changed_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now(), nullable=False
+        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), server_default=func.now(), nullable=False
     )
 
 

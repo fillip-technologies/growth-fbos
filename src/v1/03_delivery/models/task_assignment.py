@@ -1,5 +1,5 @@
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional
 
 from sqlalchemy import DateTime, ForeignKey, String, Text, func
@@ -25,7 +25,9 @@ class TaskAssignment(Base):
     user_id: Mapped[Optional[uuid.UUID]] = mapped_column(UUIDType, nullable=True, index=True)
     assignment_role: Mapped[str] = mapped_column(String(100), nullable=False, default="assignee")
     assigned_by: Mapped[Optional[uuid.UUID]] = mapped_column(UUIDType, nullable=True)
-    assigned_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    assigned_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), server_default=func.now(), nullable=False
+    )
     accepted_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
     ended_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
     end_reason: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
@@ -54,4 +56,6 @@ class Handover(Base):
     responded_by: Mapped[Optional[uuid.UUID]] = mapped_column(UUIDType, nullable=True)
     responded_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
     rejection_reason: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), server_default=func.now(), nullable=False
+    )

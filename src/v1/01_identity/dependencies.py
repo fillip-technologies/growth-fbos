@@ -2,7 +2,7 @@ from collections.abc import AsyncGenerator
 from typing import Optional
 
 from fastapi import Depends, HTTPException, Request, status
-from fastapi.security import OAuth2PasswordBearer
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 import jwt
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -11,7 +11,7 @@ from exceptions import InvalidCredentialsError
 from schemas.token import TokenPayload
 from utils.security import decode_jwt_token
 
-oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/identity/v1/auth/login", auto_error=False)
+bearer_scheme = HTTPBearer(auto_error=False)
 
 
 def get_client_ip(request: Request) -> str:
@@ -27,10 +27,21 @@ def get_user_agent(request: Request) -> str:
     return request.headers.get("user-agent", "Unknown")
 
 
-async def get_current_user(token: Optional[str] = Depends(oauth2_scheme)) -> TokenPayload:
+async def get_current_user(
+    request: Request,
+    credentials: Optional[HTTPAuthorizationCredentials] = Depends(bearer_scheme),
+) -> TokenPayload:
     """
     Validate access token and return token payload for authenticated endpoints.
     """
+    token: Optional[str] = None
+    if credentials:
+        token = credentials.credentials
+    elif "authorization" in request.headers:
+        auth_header = request.headers["authorization"]
+        if auth_header.lower().startswith("bearer "):
+            token = auth_header[7:].strip()
+
     if not token:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,

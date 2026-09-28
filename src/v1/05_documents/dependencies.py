@@ -3,7 +3,7 @@ from typing import Annotated, Optional
 import uuid
 
 from fastapi import Depends, Header, HTTPException, Request, status
-from fastapi.security import OAuth2PasswordBearer
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 import jwt
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -14,7 +14,7 @@ DEFAULT_ORG_ID = uuid.UUID("0191f3a2-0011-7011-8077-0000001b2aa9")
 DEFAULT_USER_ID = uuid.UUID("0191f3a2-0012-7012-807e-0000001cc3c2")
 DEFAULT_USER_NAME = "Aarav Sharma"
 
-oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/identity/v1/auth/login", auto_error=False)
+bearer_scheme = HTTPBearer(auto_error=False)
 
 
 def get_client_ip(request: Request) -> str:
@@ -42,12 +42,19 @@ def decode_jwt_token(token: str) -> dict:
 
 async def get_current_user(
     request: Request,
-    token: Optional[str] = Depends(oauth2_scheme),
+    credentials: Optional[HTTPAuthorizationCredentials] = Depends(bearer_scheme),
 ) -> dict:
     """
     Validate access token or extract gateway identity headers.
     """
-    # 1. If Authorization Bearer token is provided, validate it
+    token: Optional[str] = None
+    if isinstance(credentials, HTTPAuthorizationCredentials):
+        token = credentials.credentials
+    elif "authorization" in request.headers:
+        hdr = request.headers["authorization"]
+        if hdr.lower().startswith("bearer "):
+            token = hdr[7:].strip()
+
     if token:
         try:
             payload = decode_jwt_token(token)
@@ -99,6 +106,7 @@ async def get_current_user(
 
 async def get_organization_id(
     request: Request,
+    current_user: Annotated[dict, Depends(get_current_user)],
     x_fbos_org_id: Optional[str] = Header(None, alias="X-FBOS-Org-Id"),
 ) -> uuid.UUID:
     if x_fbos_org_id:
@@ -106,12 +114,12 @@ async def get_organization_id(
             return uuid.UUID(x_fbos_org_id)
         except ValueError:
             pass
-    user = await get_current_user(request)
-    return user["org_id"]
+    return current_user["org_id"]
 
 
 async def get_current_user_id(
     request: Request,
+    current_user: Annotated[dict, Depends(get_current_user)],
     x_fbos_user_id: Optional[str] = Header(None, alias="X-FBOS-User-Id"),
 ) -> uuid.UUID:
     if x_fbos_user_id:
@@ -119,18 +127,17 @@ async def get_current_user_id(
             return uuid.UUID(x_fbos_user_id)
         except ValueError:
             pass
-    user = await get_current_user(request)
-    return user["user_id"]
+    return current_user["user_id"]
 
 
 async def get_current_user_name(
     request: Request,
+    current_user: Annotated[dict, Depends(get_current_user)],
     x_fbos_user_name: Optional[str] = Header(None, alias="X-FBOS-User-Name"),
 ) -> str:
     if x_fbos_user_name:
         return x_fbos_user_name
-    user = await get_current_user(request)
-    return user["name"]
+    return current_user["name"]
 
 
 DatabaseSession = Annotated[AsyncSession, Depends(get_db_session)]

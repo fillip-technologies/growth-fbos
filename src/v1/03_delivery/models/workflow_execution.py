@@ -1,5 +1,5 @@
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional
 
 from sqlalchemy import DateTime, ForeignKey, Integer, JSON, String, Text, func
@@ -33,7 +33,9 @@ class TransitionLog(Base):
     performed_by_type: Mapped[str] = mapped_column(String(50), nullable=False, default="user")
     reason: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     approval_request_id: Mapped[Optional[uuid.UUID]] = mapped_column(UUIDType, nullable=True)
-    performed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    performed_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), server_default=func.now(), nullable=False
+    )
 
 
 class ActionExecution(Base):
