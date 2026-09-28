@@ -3,7 +3,7 @@ from typing import Annotated, Optional
 import uuid
 
 from fastapi import Depends, Header, HTTPException, Request, status
-from fastapi.security import OAuth2PasswordBearer
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 import jwt
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -14,7 +14,7 @@ DEFAULT_ORG_ID = uuid.UUID("0191f3a2-0011-7011-8077-0000001b2aa9")
 DEFAULT_USER_ID = uuid.UUID("0191f3a2-0012-7012-807e-0000001cc3c2")
 DEFAULT_USER_NAME = "Aarav Sharma"
 
-oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/identity/v1/auth/login", auto_error=False)
+bearer_scheme = HTTPBearer(auto_error=False)
 
 
 def get_client_ip(request: Request) -> str:
@@ -42,13 +42,17 @@ def decode_jwt_token(token: str) -> dict:
 
 async def get_current_user(
     request: Request,
-    token: Optional[str] = Depends(oauth2_scheme),
+    credentials: Optional[HTTPAuthorizationCredentials] = Depends(bearer_scheme),
 ) -> dict:
     """
     Validate access token or extract gateway identity headers.
     """
-    # 1. If Authorization Bearer token is provided, validate it
-    if token:
+    token: Optional[str] = credentials.credentials if credentials else None
+    if not token and "authorization" in request.headers:
+        hdr = request.headers["authorization"]
+        if hdr.lower().startswith("bearer "):
+            token = hdr[7:].strip()
+
         try:
             payload = decode_jwt_token(token)
             return {
