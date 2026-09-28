@@ -18,16 +18,19 @@ def _build_connect_args() -> dict:
 
 
 def _build_engine() -> AsyncEngine:
-    return create_async_engine(
-        settings.database_url,
-        pool_size=settings.db_pool_size,
-        max_overflow=settings.db_max_overflow,
-        pool_timeout=settings.db_pool_timeout,
-        pool_pre_ping=True,       # drops stale connections before checkout
-        pool_recycle=settings.db_pool_recycle,
-        echo=settings.debug,
-        connect_args=_build_connect_args(),
-    )
+    kwargs = {
+        "echo": settings.debug,
+        "connect_args": _build_connect_args(),
+    }
+    if not settings.database_url.startswith("sqlite"):
+        kwargs.update({
+            "pool_size": settings.db_pool_size,
+            "max_overflow": settings.db_max_overflow,
+            "pool_timeout": settings.db_pool_timeout,
+            "pool_pre_ping": True,
+            "pool_recycle": settings.db_pool_recycle,
+        })
+    return create_async_engine(settings.database_url, **kwargs)
 
 
 engine = _build_engine()
@@ -37,6 +40,7 @@ _session_factory = async_sessionmaker(
     class_=AsyncSession,
     expire_on_commit=False,  # required for async; avoids implicit lazy loads after commit
 )
+async_session_factory = _session_factory
 
 
 async def get_db_session() -> AsyncGenerator[AsyncSession, None]:
