@@ -159,22 +159,36 @@ DATABASE_URL="mysql+aiomysql://root:fbos_root_password@localhost:3307/fbos_docum
 
 Verify that services and seeded data are accessible:
 
+### A. Via API Gateway (Port 8000 — Recommended Single Entrypoint)
 ```bash
 # 1. Gateway Health Check
 curl http://localhost:8000/health
 
-# 2. Identity Service Health Check
-curl http://localhost:8001/health
-
-# 3. Authenticate / Login (Identity Service)
-curl -X POST http://localhost:8001/api/identity/v1/auth/login \
+# 2. Authenticate / Login (proxied to Identity)
+curl -X POST http://localhost:8000/api/identity/v1/auth/login \
   -H "Content-Type: application/json" \
   -d '{"email": "aarav.sharma@example.com", "password": "Password@123"}'
 
-# 4. Retrieve Seeded Clients (Revenue Service)
+# 3. Retrieve Seeded Clients (proxied to Revenue)
+curl http://localhost:8000/api/revenue/v1/clients
+
+# 4. Retrieve Seeded Documents (proxied to Documents)
+curl http://localhost:8000/api/documents/v1/documents
+
+# 5. Retrieve JWKS Public Keys (proxied to Identity)
+curl http://localhost:8000/.well-known/jwks.json
+```
+
+### B. Direct Microservice Access (Isolated Ports for Debugging)
+You can also bypass the gateway to query any microservice directly on its exposed port:
+```bash
+# Identity Service directly
+curl http://localhost:8001/health
+
+# Revenue Service directly
 curl http://localhost:8002/api/revenue/v1/clients
 
-# 5. Retrieve Seeded Documents (Documents Service)
+# Documents Service directly
 curl http://localhost:8005/api/documents/v1/documents
 ```
 
