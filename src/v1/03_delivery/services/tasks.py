@@ -236,7 +236,34 @@ async def list_tasks(
     return PageResponse(data=data, page=page)
 
 
+async def _ensure_task_types(session: AsyncSession, org_id: uuid.UUID) -> None:
+    default_task_types = [
+        ("task", "Standard Task", "general", False, 60),
+        ("bug", "Bug Fix", "defect", True, 120),
+        ("feature", "Feature Delivery", "development", True, 240),
+        ("review", "Review Task", "review", False, 60),
+    ]
+    for code, name, category, req_rev, est in default_task_types:
+        res = await session.execute(
+            select(TaskType).where(TaskType.organization_id == org_id, TaskType.code == code)
+        )
+        if not res.scalars().first():
+            session.add(
+                TaskType(
+                    id=uuid.uuid4(),
+                    organization_id=org_id,
+                    code=code,
+                    name=name,
+                    category=category,
+                    requires_review=req_rev,
+                    default_estimate_minutes=est,
+                )
+            )
+    await session.commit()
+
+
 async def create_task(session: AsyncSession, org_id: uuid.UUID, user_id: uuid.UUID, data: TaskCreate) -> TaskResponse:
+    await _ensure_task_types(session, org_id)
     type_res = await session.execute(
         select(TaskType).where(TaskType.organization_id == org_id, TaskType.code == data.task_type_code)
     )
@@ -278,6 +305,8 @@ async def create_task(session: AsyncSession, org_id: uuid.UUID, user_id: uuid.UU
         attributes={**(data.attributes or {}), "labels": data.labels or []},
         created_by=user_id,
         version=1,
+        created_at=datetime.now(timezone.utc),
+        updated_at=datetime.now(timezone.utc),
     )
     session.add(task)
     await session.flush()
@@ -322,6 +351,7 @@ async def update_task(session: AsyncSession, org_id: uuid.UUID, task_id: uuid.UU
         attrs.update(data.attributes)
     task.attributes = attrs
 
+    task.updated_at = datetime.now(timezone.utc)
     task.version += 1
     await session.flush()
     return await _build_task_response(session, task)
@@ -364,6 +394,7 @@ async def assign_task(session: AsyncSession, org_id: uuid.UUID, user_id: uuid.UU
     if task.status != from_status:
         await _record_status_history(session, task, from_status, task.status, user_id, data.note)
 
+    task.updated_at = datetime.now(timezone.utc)
     task.version += 1
     await session.flush()
     return await _build_task_response(session, task)
@@ -390,6 +421,7 @@ async def start_task(session: AsyncSession, org_id: uuid.UUID, user_id: uuid.UUI
         task.start_at = datetime.now(timezone.utc)
     await _record_status_history(session, task, from_status, task.status, user_id)
 
+    task.updated_at = datetime.now(timezone.utc)
     task.version += 1
     await session.flush()
     return await _build_task_response(session, task)
@@ -411,6 +443,7 @@ async def block_task(session: AsyncSession, org_id: uuid.UUID, user_id: uuid.UUI
     task.attributes = attrs
     await _record_status_history(session, task, from_status, task.status, user_id, data.reason)
 
+    task.updated_at = datetime.now(timezone.utc)
     task.version += 1
     await session.flush()
     return await _build_task_response(session, task)
@@ -426,6 +459,7 @@ async def unblock_task(session: AsyncSession, org_id: uuid.UUID, user_id: uuid.U
     task.status = "in_progress"
     await _record_status_history(session, task, "blocked", task.status, user_id)
 
+    task.updated_at = datetime.now(timezone.utc)
     task.version += 1
     await session.flush()
     return await _build_task_response(session, task)
@@ -457,6 +491,7 @@ async def submit_task(session: AsyncSession, org_id: uuid.UUID, user_id: uuid.UU
 
     await _record_status_history(session, task, from_status, task.status, user_id, data.note)
 
+    task.updated_at = datetime.now(timezone.utc)
     task.version += 1
     await session.flush()
     return await _build_task_response(session, task)
@@ -488,10 +523,12 @@ async def review_task(session: AsyncSession, org_id: uuid.UUID, user_id: uuid.UU
         result=data.result,
         rating=data.rating,
         feedback=data.feedback,
+        reviewed_at=datetime.now(timezone.utc),
     )
     session.add(review)
     await _record_status_history(session, task, from_status, task.status, user_id, data.feedback)
 
+    task.updated_at = datetime.now(timezone.utc)
     task.version += 1
     await session.flush()
     await session.refresh(review)
@@ -518,6 +555,7 @@ async def cancel_task(session: AsyncSession, org_id: uuid.UUID, user_id: uuid.UU
     task.status = "cancelled"
     await _record_status_history(session, task, from_status, task.status, user_id, data.reason)
 
+    task.updated_at = datetime.now(timezone.utc)
     task.version += 1
     await session.flush()
     return await _build_task_response(session, task)
@@ -650,6 +688,7 @@ async def add_comment(session: AsyncSession, org_id: uuid.UUID, user_id: uuid.UU
         author_id=user_id,
         body=body,
         mentions=(data.mention_user_ids or [None])[0],
+        created_at=datetime.now(timezone.utc),
     )
     session.add(comment)
     await session.flush()
@@ -759,6 +798,7 @@ async def request_handover(session: AsyncSession, org_id: uuid.UUID, user_id: uu
         reason=data.reason,
         notes=data.notes,
         status="requested",
+        created_at=datetime.now(timezone.utc),
     )
     session.add(handover)
     await session.flush()

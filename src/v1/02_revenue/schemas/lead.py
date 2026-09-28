@@ -51,7 +51,7 @@ class LeadResponse(BaseModel):
     id: uuid.UUID
     code: str
     deal_id: Optional[uuid.UUID] = None
-    vertical: VerticalRef
+    vertical: Optional[VerticalRef] = None
     status: str
     source: Optional[str] = None
     campaign_ref: Optional[str] = None
@@ -59,7 +59,7 @@ class LeadResponse(BaseModel):
     contact_email: Optional[str] = None
     contact_phone: Optional[str] = None
     company_name: Optional[str] = None
-    owner: UserRef
+    owner: Optional[UserRef] = None
     score: Optional[int] = None
     client_id: Optional[uuid.UUID] = None
     attributes: dict = Field(default_factory=dict)

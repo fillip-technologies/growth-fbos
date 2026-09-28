@@ -107,6 +107,7 @@ class ShareService:
             created_at=now,
         )
         session.add(share)
+        await session.flush()
 
         access_log = DocumentAccessLog(
             id=uuid.uuid4(),

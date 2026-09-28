@@ -38,7 +38,7 @@ def _build_forward_headers(request: Request) -> dict[str, str]:
     headers: dict[str, str] = {}
     for key, value in request.headers.items():
         if key.lower() not in ("host", "content-length"):
-            headers[key] = value
+            headers[key] = value.strip()
 
     client_host = request.client.host if request.client else "unknown"
     existing_forwarded = headers.get("x-forwarded-for")
@@ -107,6 +107,19 @@ async def _forward_request(
                 "detail": f"Downstream service at '{target_base_url}' timed out.",
                 "instance": str(request.url.path),
                 "retryable": True,
+            },
+        )
+    except httpx.RequestError as exc:
+        return JSONResponse(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            content={
+                "type": "https://docs.fbos.example.com/errors/BAD_REQUEST",
+                "title": "Bad Request",
+                "status": 400,
+                "code": "BAD_REQUEST",
+                "detail": f"Gateway could not forward request: {str(exc)}",
+                "instance": str(request.url.path),
+                "retryable": False,
             },
         )
 

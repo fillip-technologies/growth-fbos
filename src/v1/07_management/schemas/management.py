@@ -2,7 +2,7 @@ import uuid
 from datetime import date, datetime
 from typing import Any, Optional
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from schemas.common import SubjectRef, SubjectRefInput, UnitRef, UserRef
 
@@ -52,7 +52,7 @@ class KpiTargetResponse(BaseModel):
 class KpiTargetCreate(BaseModel):
     kpi_code: str
     period_id: uuid.UUID
-    scope: KpiScope
+    scope: Optional[KpiScope] = Field(default_factory=KpiScope)
     target_value: float
     stretch_value: Optional[float] = None
     goal_id: Optional[uuid.UUID] = None
@@ -105,7 +105,7 @@ class ManualMeasurementCreate(BaseModel):
     measured_on: date
     value: float
     dimensions: Optional[dict[str, Any]] = None
-    note: str
+    note: Optional[str] = None
     evidence_document_id: Optional[uuid.UUID] = None
 
 
@@ -130,7 +130,7 @@ class CorrectiveActionResponse(BaseModel):
 class CorrectiveActionCreate(BaseModel):
     kpi_code: str
     period_id: uuid.UUID
-    scope: KpiScope
+    scope: Optional[KpiScope] = Field(default_factory=KpiScope)
     title: str
     owner_user_id: uuid.UUID
     due_date: date

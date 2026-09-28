@@ -291,8 +291,19 @@ async def make_decision(
     if not active_step:
         raise StepNotActiveError()
 
-    # Caller must be self-approval check
-    if caller_user_id == req.requested_by:
+    # Check if policy step allows self-approval
+    policy_step_res = await session.execute(
+        select(ApprovalPolicyStep).where(
+            ApprovalPolicyStep.policy_id == req.policy_id,
+            ApprovalPolicyStep.seq == active_step.seq,
+        )
+    )
+    policy_step = policy_step_res.scalars().first()
+    allow_self = False
+    if policy_step and policy_step.approver_selector:
+        allow_self = bool(policy_step.approver_selector.get("allow_self_approval", False))
+
+    if caller_user_id == req.requested_by and not allow_self:
         raise SelfApprovalNotAllowedError()
 
     # Find assignee record for caller

@@ -1,5 +1,5 @@
 import uuid
-from datetime import date, datetime
+from datetime import date, datetime, timezone
 from typing import Optional
 
 from sqlalchemy import Date, DateTime, ForeignKey, Integer, JSON, Numeric, String, Text, func
@@ -23,7 +23,9 @@ class Baseline(Base):
     baseline_no: Mapped[int] = mapped_column(Integer, nullable=False)
     snapshot: Mapped[dict] = mapped_column(JSON, nullable=False)
     approved_by: Mapped[Optional[uuid.UUID]] = mapped_column(UUIDType, nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), server_default=func.now(), nullable=False
+    )
 
 
 class ProgressSnapshot(Base):
@@ -64,4 +66,6 @@ class StatusHistory(Base):
     to_status: Mapped[str] = mapped_column(String(50), nullable=False)
     changed_by: Mapped[Optional[uuid.UUID]] = mapped_column(UUIDType, nullable=True)
     reason: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
-    changed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    changed_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), server_default=func.now(), nullable=False
+    )

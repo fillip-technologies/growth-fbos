@@ -129,7 +129,7 @@ async def seed_revenue():
         offerings_data = [
             (OFFERING_DEV_ID, "DEV-SVC-01", "Custom Software Development", "recurring", 250000.00, "month"),
             (OFFERING_CLOUD_ID, "CLOUD-DEVOPS", "Managed Cloud & DevOps", "recurring", 120000.00, "month"),
-            (OFFERING_AI_ID, "AI-CONSULT", "Enterprise AI Architecture", "fixed_fee", 500000.00, "milestone"),
+            (OFFERING_AI_ID, "AI-CONSULT", "Enterprise AI Architecture", "milestone", 500000.00, "project"),
         ]
         for off_id, off_code, off_name, off_model, off_price, off_unit in offerings_data:
             off_res = await session.execute(select(Offering).where(Offering.code == off_code))

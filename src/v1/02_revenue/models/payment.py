@@ -54,7 +54,7 @@ class PaymentAllocation(Base):
         UUIDType, ForeignKey("invoices.id", ondelete="RESTRICT"), nullable=False, index=True
     )
     amount: Mapped[float] = mapped_column(Numeric(15, 2), nullable=False)
-    allocated_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), nullable=False)
+    allocated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, server_default=func.now(), nullable=False)
 
 
 class Refund(Base):

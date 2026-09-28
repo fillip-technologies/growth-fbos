@@ -47,12 +47,15 @@ async def get_current_user(
     """
     Validate access token or extract gateway identity headers.
     """
-    token: Optional[str] = credentials.credentials if credentials else None
-    if not token and "authorization" in request.headers:
+    token: Optional[str] = None
+    if isinstance(credentials, HTTPAuthorizationCredentials):
+        token = credentials.credentials
+    elif "authorization" in request.headers:
         hdr = request.headers["authorization"]
         if hdr.lower().startswith("bearer "):
             token = hdr[7:].strip()
 
+    if token:
         try:
             payload = decode_jwt_token(token)
             return {
@@ -103,6 +106,7 @@ async def get_current_user(
 
 async def get_organization_id(
     request: Request,
+    current_user: Annotated[dict, Depends(get_current_user)],
     x_fbos_org_id: Optional[str] = Header(None, alias="X-FBOS-Org-Id"),
 ) -> uuid.UUID:
     if x_fbos_org_id:
@@ -110,12 +114,12 @@ async def get_organization_id(
             return uuid.UUID(x_fbos_org_id)
         except ValueError:
             pass
-    user = await get_current_user(request)
-    return user["org_id"]
+    return current_user["org_id"]
 
 
 async def get_current_user_id(
     request: Request,
+    current_user: Annotated[dict, Depends(get_current_user)],
     x_fbos_user_id: Optional[str] = Header(None, alias="X-FBOS-User-Id"),
 ) -> uuid.UUID:
     if x_fbos_user_id:
@@ -123,18 +127,17 @@ async def get_current_user_id(
             return uuid.UUID(x_fbos_user_id)
         except ValueError:
             pass
-    user = await get_current_user(request)
-    return user["user_id"]
+    return current_user["user_id"]
 
 
 async def get_current_user_name(
     request: Request,
+    current_user: Annotated[dict, Depends(get_current_user)],
     x_fbos_user_name: Optional[str] = Header(None, alias="X-FBOS-User-Name"),
 ) -> str:
     if x_fbos_user_name:
         return x_fbos_user_name
-    user = await get_current_user(request)
-    return user["name"]
+    return current_user["name"]
 
 
 DatabaseSession = Annotated[AsyncSession, Depends(get_db_session)]

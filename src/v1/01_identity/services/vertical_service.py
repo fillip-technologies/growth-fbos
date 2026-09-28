@@ -37,6 +37,8 @@ DEFAULT_OBJECT_TYPES = [
     ("workflow.definition", "workflow", "Workflow definition"),
     ("document.document", "document", "Document"),
     ("revenue.contract", "revenue", "Contract"),
+    ("revenue.deal", "revenue", "Deal"),
+    ("revenue.lead", "revenue", "Lead"),
     ("billing.invoice", "billing", "Invoice"),
     ("approval.request", "approval", "Approval request"),
 ]
@@ -44,11 +46,11 @@ DEFAULT_OBJECT_TYPES = [
 
 class VerticalService:
     async def _ensure_object_types(self, session: AsyncSession) -> None:
-        count = await session.execute(select(func.count(ObjectType.code)))
-        if count.scalar_one() == 0:
-            for code, svc, name in DEFAULT_OBJECT_TYPES:
+        for code, svc, name in DEFAULT_OBJECT_TYPES:
+            existing = await session.get(ObjectType, code)
+            if not existing:
                 session.add(ObjectType(code=code, owning_service=svc, display_name=name))
-            await session.commit()
+        await session.commit()
 
     def _build_field_definition_response(self, fd: FieldDefinition) -> FieldDefinitionResponse:
         return FieldDefinitionResponse(
@@ -192,6 +194,10 @@ class VerticalService:
             raise FieldSchemaInvalidError("Schema must be a valid JSON Schema object with a 'type' property")
 
         await self._ensure_object_types(session)
+
+        obj_type = await session.get(ObjectType, data.object_type)
+        if not obj_type:
+            raise FieldSchemaInvalidError(f"Object type '{data.object_type}' is not registered.")
 
         fd = FieldDefinition(
             id=uuid.uuid4(),
