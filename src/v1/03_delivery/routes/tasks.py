@@ -94,6 +94,16 @@ async def create_task(
     return task
 
 
+@router.get("/tasks/summary")
+async def get_tasks_summary(
+    session: DatabaseSession,
+    org_id: OrgId,
+    caller_user_id: UserId,
+) -> dict:
+    """Get tasks summary for current user / organization."""
+    return await service.get_tasks_summary(session, org_id, caller_user_id)
+
+
 @router.get("/tasks/{task_id}", response_model=TaskResponse)
 async def get_task(
     task_id: uuid.UUID,

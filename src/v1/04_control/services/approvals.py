@@ -19,7 +19,7 @@ import uuid
 from datetime import datetime, timezone
 from typing import Optional
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from exceptions import (
@@ -581,3 +581,40 @@ async def create_approval_policy(
         )
     await session.flush()
     return await _to_policy_response(session, policy)
+
+
+# --- Approval Requests Summary for Home/Gateway ------------------------------
+
+
+async def get_approvals_summary(
+    session: AsyncSession,
+    org_id: uuid.UUID,
+    caller_user_id: uuid.UUID,
+) -> dict:
+    from models.sla import SlaEscalation, SlaInstance
+
+    # Pending approvals in the organization
+    app_res = await session.execute(
+        select(func.count(ApprovalRequest.id)).where(
+            ApprovalRequest.organization_id == org_id,
+            ApprovalRequest.status == "pending",
+        )
+    )
+    approvals_pending = int(app_res.scalar_one() or 0)
+
+    # Open escalations
+    esc_res = await session.execute(
+        select(func.count(SlaEscalation.id))
+        .join(SlaInstance, SlaEscalation.instance_id == SlaInstance.id)
+        .where(
+            SlaInstance.organization_id == org_id,
+            SlaEscalation.status == "open",
+        )
+    )
+    escalations_open = int(esc_res.scalar_one() or 0)
+
+    return {
+        "approvals_pending": approvals_pending,
+        "escalations_open": escalations_open,
+    }
+

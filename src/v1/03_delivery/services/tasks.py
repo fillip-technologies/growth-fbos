@@ -25,7 +25,7 @@ import uuid
 from datetime import date, datetime, timezone
 from typing import Optional
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from exceptions import (
@@ -919,3 +919,48 @@ async def create_recurring_rule(session: AsyncSession, org_id: uuid.UUID, data: 
     session.add(rule)
     await session.flush()
     return _to_recurring_rule_response(rule, template.code)
+
+
+# --- Tasks Summary for Home/Gateway ------------------------------------------
+
+
+async def get_tasks_summary(session: AsyncSession, org_id: uuid.UUID, caller_user_id: uuid.UUID) -> dict:
+    now = datetime.now(timezone.utc)
+    today_start = datetime(now.year, now.month, now.day, 0, 0, 0, tzinfo=timezone.utc)
+    today_end = datetime(now.year, now.month, now.day, 23, 59, 59, 999999, tzinfo=timezone.utc)
+
+    open_statuses = ["todo", "in_progress", "in_review", "blocked"]
+
+    open_q = select(func.count(Task.id)).where(
+        Task.organization_id == org_id,
+        Task.assignee_user_id == caller_user_id,
+        Task.status.in_(open_statuses),
+    )
+    open_res = await session.execute(open_q)
+    assigned_open = int(open_res.scalar_one() or 0)
+
+    due_today_q = select(func.count(Task.id)).where(
+        Task.organization_id == org_id,
+        Task.assignee_user_id == caller_user_id,
+        Task.status.in_(open_statuses),
+        Task.due_at >= today_start,
+        Task.due_at <= today_end,
+    )
+    due_today_res = await session.execute(due_today_q)
+    due_today = int(due_today_res.scalar_one() or 0)
+
+    overdue_q = select(func.count(Task.id)).where(
+        Task.organization_id == org_id,
+        Task.assignee_user_id == caller_user_id,
+        Task.status.in_(open_statuses),
+        Task.due_at < now,
+    )
+    overdue_res = await session.execute(overdue_q)
+    overdue = int(overdue_res.scalar_one() or 0)
+
+    return {
+        "assigned_open": assigned_open,
+        "due_today": due_today,
+        "overdue": overdue,
+    }
+
