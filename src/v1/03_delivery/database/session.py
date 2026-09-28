@@ -16,6 +16,12 @@ def _build_connect_args() -> dict:
 
 
 def _build_engine() -> AsyncEngine:
+    if settings.database_url.startswith("sqlite"):
+        return create_async_engine(
+            settings.database_url,
+            echo=settings.debug,
+            connect_args=_build_connect_args(),
+        )
     return create_async_engine(
         settings.database_url,
         pool_size=settings.db_pool_size,

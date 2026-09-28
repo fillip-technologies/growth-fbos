@@ -12,15 +12,30 @@ def _build_connect_args() -> dict:
     return connect_args
 
 
-engine = create_async_engine(
-    settings.database_url,
-    connect_args=_build_connect_args(),
-    pool_size=settings.db_pool_size,
-    max_overflow=settings.db_max_overflow,
-    pool_timeout=settings.db_pool_timeout,
-    pool_recycle=settings.db_pool_recycle,
-    echo=settings.debug,
-)
+def _build_engine():
+    if settings.database_url.startswith("sqlite"):
+        return create_async_engine(
+            settings.database_url,
+            connect_args=_build_connect_args(),
+            echo=settings.debug,
+        )
+    return create_async_engine(
+        settings.database_url,
+        connect_args=_build_connect_args(),
+        pool_size=settings.db_pool_size,
+        max_overflow=settings.db_max_overflow,
+        pool_timeout=settings.db_pool_timeout,
+        pool_recycle=settings.db_pool_recycle,
+        echo=settings.debug,
+    )
+
+
+engine = _build_engine()
+
+
+async def dispose_engine() -> None:
+    await engine.dispose()
+
 
 AsyncSessionLocal = async_sessionmaker(
     bind=engine,
