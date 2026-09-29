@@ -7,9 +7,7 @@ from pydantic import BaseModel, ConfigDict, EmailStr
 class OrganizationCreateRequest(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
-    # Required when the caller is a platform admin; ignored for client admins,
-    # whose client_id is taken from their token.
-    client_id: Optional[uuid.UUID] = None
+    # The owning client is always taken from the caller's token, never the body.
     name: str
     code: str  # unique slug, e.g. "ACME-IN"
     base_currency: str
