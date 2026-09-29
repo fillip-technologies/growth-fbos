@@ -33,6 +33,7 @@ class UploadInitResult(BaseModel):
     document_id: uuid.UUID
     version_no: int
     upload_url: str
-    upload_method: str = "PUT"
+    upload_method: str = "POST"
     upload_headers: dict[str, str] = Field(default_factory=dict)
+    upload_fields: dict[str, str] = Field(default_factory=dict)
     expires_at: str

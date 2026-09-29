@@ -163,7 +163,7 @@ class Suppression(Base):
 
 class NotificationChannel(Base):
     """
-    Configured delivery provider gateway (SendGrid, SES, Twilio, Firebase FCM, Slack).
+    Configured delivery provider gateway (SendGrid, Twilio, Firebase FCM, Slack).
     """
 
     __tablename__ = "notification_channels"

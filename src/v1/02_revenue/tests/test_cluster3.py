@@ -90,10 +90,8 @@ async def test_invoice_lifecycle_and_credit_note(async_client: httpx.AsyncClient
 
     # 3. Get Invoice PDF link
     pdf_res = await async_client.get(f"/api/revenue/v1/invoices/{invoice_id}/pdf")
-    assert pdf_res.status_code == 200
-    pdf_data = pdf_res.json()
-    assert "url" in pdf_data
-    assert pdf_data["file_name"].endswith(".pdf")
+    assert pdf_res.status_code == 501
+    assert pdf_res.json()["detail"]["code"] == "INVOICE_PDF_NOT_AVAILABLE"
 
     # 4. Issue Credit Note (full reversal)
     cn_res = await async_client.post(

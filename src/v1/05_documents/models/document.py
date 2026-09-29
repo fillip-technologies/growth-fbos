@@ -111,13 +111,13 @@ class Document(Base):
 
 class StorageObject(Base):
     """
-    Physical storage pointer to a raw blob in S3/GCS/Azure with SHA256 integrity and antivirus status.
+    Physical storage pointer to a raw blob in the storage provider (ImageKit) with SHA256 integrity and antivirus status.
     """
 
     __tablename__ = "storage_objects"
 
     id: Mapped[uuid.UUID] = mapped_column(UUIDType, primary_key=True, default=uuid.uuid4)
-    provider: Mapped[str] = mapped_column(String(50), nullable=False, default="s3")
+    provider: Mapped[str] = mapped_column(String(50), nullable=False, default="imagekit")
     bucket: Mapped[str] = mapped_column(String(255), nullable=False)
     object_key: Mapped[str] = mapped_column(String(500), nullable=False, unique=True, index=True)
     size_bytes: Mapped[int] = mapped_column(BigInteger, nullable=False)
@@ -287,6 +287,7 @@ class UploadSession(Base):
     link_subject_id: Mapped[Optional[uuid.UUID]] = mapped_column(UUIDType, nullable=True)
     link_role: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
     upload_url: Mapped[str] = mapped_column(String(1024), nullable=False)
+    object_key: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     status: Mapped[str] = mapped_column(String(50), nullable=False, default="initiated")
     created_by: Mapped[Optional[uuid.UUID]] = mapped_column(UUIDType, nullable=True)
