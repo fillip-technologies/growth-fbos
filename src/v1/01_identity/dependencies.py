@@ -7,7 +7,12 @@ import jwt
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from database.session import get_db_session
-from exceptions import InvalidCredentialsError
+from exceptions import (
+    ClientAdminRequiredError,
+    InvalidCredentialsError,
+    PlatformAdminRequiredError,
+)
+from models.user import User
 from schemas.token import TokenPayload
 from utils.security import decode_jwt_token
 
@@ -75,3 +80,42 @@ async def get_current_user(
         family_id=payload.get("family_id"),
         token_type=payload.get("type"),
     )
+
+
+async def require_platform_admin(
+    current_user: TokenPayload = Depends(get_current_user),
+    session: AsyncSession = Depends(get_db_session),
+) -> TokenPayload:
+    """
+    Allow only platform super-admins.
+
+    DB-verified rather than token-only: this grants cross-tenant reach, so a
+    demoted admin must lose access immediately instead of retaining it until the
+    short-lived access token expires.
+    """
+    if not current_user.is_platform_admin:
+        raise PlatformAdminRequiredError()
+
+    user = await session.get(User, current_user.user_id)
+    if not user or user.status != "active" or user.user_type != "platform_admin":
+        raise PlatformAdminRequiredError()
+
+    return current_user
+
+
+async def require_client_admin(
+    current_user: TokenPayload = Depends(get_current_user),
+    session: AsyncSession = Depends(get_db_session),
+) -> TokenPayload:
+    """
+    Allow client admins and platform admins (a platform admin can do anything a
+    client admin can). DB-verified for the same reason as require_platform_admin.
+    """
+    if not (current_user.is_client_admin or current_user.is_platform_admin):
+        raise ClientAdminRequiredError()
+
+    user = await session.get(User, current_user.user_id)
+    if not user or user.status != "active" or user.user_type not in ("client_admin", "platform_admin"):
+        raise ClientAdminRequiredError()
+
+    return current_user

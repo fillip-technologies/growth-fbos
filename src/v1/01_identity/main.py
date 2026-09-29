@@ -16,6 +16,8 @@ _PROBLEM_META: dict[str, tuple[str, bool]] = {
     "INVALID_CREDENTIALS": ("Email or password is incorrect", False),
     "ACCOUNT_LOCKED": ("Account is locked", False),
     "ACCOUNT_NOT_ACTIVE": ("Account is not active", False),
+    "PLATFORM_ADMIN_REQUIRED": ("Platform administrator access required", False),
+    "CLIENT_ADMIN_REQUIRED": ("Client administrator access required", False),
     "ORGANIZATION_AMBIGUOUS": ("Multiple organizations found for this email", False),
     "MFA_CODE_INVALID": ("The verification code is incorrect", False),
     "MFA_TOKEN_EXPIRED": ("MFA session expired", False),

@@ -99,7 +99,8 @@ Two new FastAPI dependencies in `dependencies.py`:
   demoted admin must lose access immediately rather than retaining it until the 15-min
   access token expires.
 - `require_client_admin` — allows client admins **and** platform admins (a platform
-  admin can do anything a client admin can).
+  admin can do anything a client admin can). Also DB-verified, for the same reason —
+  it grants privileged org management, so a stale token must not keep working.
 
 ### 3.4 Org bootstrap (critical correctness step)
 
@@ -230,8 +231,14 @@ created via the API.
   with `user_type="platform_admin"` in the `PLATFORM` org.
 - **Additive JWT claims.** `extra="ignore"` keeps existing tokens and downstream
   services working unchanged.
-- **DB-verified platform-admin guard.** Chosen over token-only to avoid a demoted
-  admin keeping super-user access until token expiry.
+- **DB-verified admin guards.** Both `require_platform_admin` and
+  `require_client_admin` re-check the caller's `user_type`/`status` in the DB (a cheap
+  PK lookup) rather than trusting the token claim alone, so a demoted admin loses
+  access immediately instead of at token expiry.
+- **Guard exceptions landed in Phase 4, not Phase 6.** `PLATFORM_ADMIN_REQUIRED` and
+  `CLIENT_ADMIN_REQUIRED` were added with the guards (they can't function without
+  them) and registered in `_PROBLEM_META`. The remaining four service-layer errors
+  (client/org not-found and code-exists) still land in Phase 6.
 - **`client_id` nullable on `organizations`.** Keeps existing/seed orgs valid and lets
   the platform org exist outside any Client.
 - **Organization `version` / ETag.** `organizations` currently has no `version`

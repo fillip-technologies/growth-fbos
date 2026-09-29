@@ -66,6 +66,28 @@ class AccountNotActiveError(IdentityServiceError):
         )
 
 
+class PlatformAdminRequiredError(IdentityServiceError):
+    """403: The caller is not a platform super-admin."""
+
+    def __init__(self) -> None:
+        super().__init__(
+            status_code=status.HTTP_403_FORBIDDEN,
+            code="PLATFORM_ADMIN_REQUIRED",
+            message="Platform administrator access is required for this action",
+        )
+
+
+class ClientAdminRequiredError(IdentityServiceError):
+    """403: The caller is not a client or platform admin."""
+
+    def __init__(self) -> None:
+        super().__init__(
+            status_code=status.HTTP_403_FORBIDDEN,
+            code="CLIENT_ADMIN_REQUIRED",
+            message="Client administrator access is required for this action",
+        )
+
+
 class OrganizationAmbiguousError(IdentityServiceError):
     """409: The email exists in several organizations."""
 
