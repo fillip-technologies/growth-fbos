@@ -70,6 +70,8 @@ async def get_current_user(
         sub=payload["sub"],
         email=payload.get("email"),
         org_id=payload.get("org_id"),
+        user_type=payload.get("user_type"),
+        client_id=payload.get("client_id"),
         family_id=payload.get("family_id"),
         token_type=payload.get("type"),
     )

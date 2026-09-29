@@ -62,6 +62,8 @@ def create_access_token(
     user_id: uuid.UUID,
     organization_id: uuid.UUID,
     email: str,
+    user_type: str = "employee",
+    client_id: Optional[uuid.UUID] = None,
     family_id: Optional[uuid.UUID] = None,
     expires_delta: Optional[timedelta] = None,
 ) -> str:
@@ -72,11 +74,14 @@ def create_access_token(
         "sub": str(user_id),
         "email": email,
         "org_id": str(organization_id),
+        "user_type": user_type,
         "type": "access",
         "iat": int(now.timestamp()),
         "exp": int((now + delta).timestamp()),
         "jti": str(uuid.uuid4()),
     }
+    if client_id is not None:
+        payload["client_id"] = str(client_id)
     if family_id is not None:
         payload["family_id"] = str(family_id)
     return jwt.encode(payload, settings.jwt_secret, algorithm=settings.jwt_algorithm)
