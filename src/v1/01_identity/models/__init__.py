@@ -1,3 +1,4 @@
+from models.client import Client
 from models.organization import Organization
 from models.calendar import Calendar, CalendarHoliday
 from models.org_unit import OrgUnit, OrgUnitVertical
@@ -10,6 +11,7 @@ from models.legal import LegalEntity, TaxRegistration
 from models.audit import SecurityAuditLog
 
 __all__ = [
+    "Client",
     "Organization",
     "Calendar",
     "CalendarHoliday",

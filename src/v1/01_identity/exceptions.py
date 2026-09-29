@@ -66,6 +66,28 @@ class AccountNotActiveError(IdentityServiceError):
         )
 
 
+class PlatformAdminRequiredError(IdentityServiceError):
+    """403: The caller is not a platform super-admin."""
+
+    def __init__(self) -> None:
+        super().__init__(
+            status_code=status.HTTP_403_FORBIDDEN,
+            code="PLATFORM_ADMIN_REQUIRED",
+            message="Platform administrator access is required for this action",
+        )
+
+
+class ClientAdminRequiredError(IdentityServiceError):
+    """403: The caller is not a client or platform admin."""
+
+    def __init__(self) -> None:
+        super().__init__(
+            status_code=status.HTTP_403_FORBIDDEN,
+            code="CLIENT_ADMIN_REQUIRED",
+            message="Client administrator access is required for this action",
+        )
+
+
 class OrganizationAmbiguousError(IdentityServiceError):
     """409: The email exists in several organizations."""
 
@@ -362,4 +384,48 @@ class ClientCredentialsInvalidError(IdentityServiceError):
             status_code=status.HTTP_401_UNAUTHORIZED,
             code="CLIENT_CREDENTIALS_INVALID",
             message=message,
+        )
+
+
+class ClientNotFoundError(IdentityServiceError):
+    """404: Tenancy client (customer account) not found."""
+
+    def __init__(self) -> None:
+        super().__init__(
+            status_code=status.HTTP_404_NOT_FOUND,
+            code="CLIENT_NOT_FOUND",
+            message="Client not found",
+        )
+
+
+class ClientCodeAlreadyExistsError(IdentityServiceError):
+    """409: A client with this code already exists."""
+
+    def __init__(self, code_val: str) -> None:
+        super().__init__(
+            status_code=status.HTTP_409_CONFLICT,
+            code="CLIENT_CODE_EXISTS",
+            message=f"A client with code '{code_val}' already exists",
+        )
+
+
+class OrganizationNotFoundError(IdentityServiceError):
+    """404: Organization not found."""
+
+    def __init__(self) -> None:
+        super().__init__(
+            status_code=status.HTTP_404_NOT_FOUND,
+            code="ORGANIZATION_NOT_FOUND",
+            message="Organization not found",
+        )
+
+
+class OrgCodeAlreadyExistsError(IdentityServiceError):
+    """409: An organization with this code already exists."""
+
+    def __init__(self, code_val: str) -> None:
+        super().__init__(
+            status_code=status.HTTP_409_CONFLICT,
+            code="ORGANIZATION_CODE_EXISTS",
+            message=f"An organization with code '{code_val}' already exists",
         )
