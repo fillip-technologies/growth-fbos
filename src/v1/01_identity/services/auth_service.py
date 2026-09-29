@@ -144,6 +144,8 @@ class AuthService:
             id=user.id,
             name=user.name,
             email=user.email,
+            user_type=user.user_type,
+            client_id=org.client_id if org else None,
             organization=org_ref,
             home_unit=home_unit_ref,
             roles=role_items,
@@ -151,6 +153,21 @@ class AuthService:
             mfa_enabled=mfa_enabled,
             timezone=tz,
             locale=None,
+        )
+
+    async def _access_token_for(
+        self, session: AsyncSession, user: User, family_id: uuid.UUID
+    ) -> str:
+        """Mint an access token carrying the user's tenancy claims (user_type, client_id)."""
+        org = await session.get(Organization, user.organization_id)
+        client_id = org.client_id if org else None
+        return create_access_token(
+            user_id=user.id,
+            organization_id=user.organization_id,
+            email=user.email,
+            user_type=user.user_type,
+            client_id=client_id,
+            family_id=family_id,
         )
 
     async def login(
@@ -487,12 +504,7 @@ class AuthService:
             user_id=user.id,
             family_id=family_id,
         )
-        access_token_str = create_access_token(
-            user_id=user.id,
-            organization_id=user.organization_id,
-            email=user.email,
-            family_id=family_id,
-        )
+        access_token_str = await self._access_token_for(session, user, family_id)
 
         db_refresh_token = RefreshToken(
             id=token_id,
@@ -634,12 +646,7 @@ class AuthService:
             user_id=user.id,
             family_id=family_id,
         )
-        access_token_str = create_access_token(
-            user_id=user.id,
-            organization_id=user.organization_id,
-            email=user.email,
-            family_id=family_id,
-        )
+        access_token_str = await self._access_token_for(session, user, family_id)
 
         db_refresh_token = RefreshToken(
             id=token_id,
@@ -770,12 +777,7 @@ class AuthService:
             user_id=user.id,
             family_id=token_record.family_id,
         )
-        new_access_token_str = create_access_token(
-            user_id=user.id,
-            organization_id=user.organization_id,
-            email=user.email,
-            family_id=token_record.family_id,
-        )
+        new_access_token_str = await self._access_token_for(session, user, token_record.family_id)
 
         new_token_record = RefreshToken(
             id=new_token_id,

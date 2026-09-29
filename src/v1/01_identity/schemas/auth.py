@@ -44,6 +44,8 @@ class Me(BaseModel):
     id: uuid.UUID
     name: str
     email: str
+    user_type: str
+    client_id: Optional[uuid.UUID] = None
     organization: OrganizationRef
     home_unit: Optional[HomeUnitRef] = None
     roles: list[MeRoleItem]
