@@ -292,10 +292,15 @@ async def test_auth_extended_flows(async_client: httpx.AsyncClient):
     assert enroll_res.status_code == 200
     assert "otpauth_uri" in enroll_res.json()
 
-    # 3. Confirm MFA enrollment
+    # 3. Confirm MFA enrollment — derive the real TOTP from the enrolled secret,
+    # which the server embeds in the otpauth_uri returned above.
+    import pyotp
+    from urllib.parse import parse_qs, urlparse
+
+    secret = parse_qs(urlparse(enroll_res.json()["otpauth_uri"]).query)["secret"][0]
     confirm_res = await async_client.post(
         "/api/identity/v1/auth/mfa/enroll/confirm",
-        json={"code": "123456"},
+        json={"code": pyotp.TOTP(secret).now()},
     )
     assert confirm_res.status_code == 200
     assert "codes" in confirm_res.json()
