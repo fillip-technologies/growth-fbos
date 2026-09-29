@@ -98,8 +98,9 @@ Two new FastAPI dependencies in `dependencies.py`:
   **DB-verified**, not token-only: this is a cross-tenant super-user privilege, so a
   demoted admin must lose access immediately rather than retaining it until the 15-min
   access token expires.
-- `require_client_admin` — allows client admins **and** platform admins (a platform
-  admin can do anything a client admin can). Also DB-verified, for the same reason —
+- `require_client_admin` — allows **only** client admins. Organization-level actions
+  belong exclusively to the client; the platform super-admin manages clients, not
+  their organizations (strict separation). Also DB-verified, for the same reason —
   it grants privileged org management, so a stale token must not keep working.
 
 ### 3.4 Org bootstrap (critical correctness step)
@@ -134,17 +135,27 @@ All under the Identity base path (`/v1` and `/api/identity/v1`).
 | GET | `/clients/{client_id}` | platform admin | 200 |
 | PATCH | `/clients/{client_id}` | platform admin | 200 |
 
-### Organizations — client admin or platform admin
+### Organizations — client admin only
+
+The platform super-admin cannot reach these endpoints (strict separation). The
+`client_id` is always taken from the caller's token, never from the request body.
 
 | Method | Path | Guard | Notes |
 |---|---|---|---|
-| POST | `/organizations` | client admin | platform admin passes `client_id` in body; client admin's is taken from token |
-| GET | `/organizations` | client admin | platform admin sees all (optional `?client_id=` filter); client admin auto-scoped to own client |
-| GET | `/organizations/{org_id}` | client admin | ownership-checked |
-| PATCH | `/organizations/{org_id}` | client admin | ownership-checked |
+| POST | `/organizations` | client admin | new org is created under the caller's own client |
+| GET | `/organizations` | client admin | auto-scoped to the caller's client |
+| GET | `/organizations/{org_id}` | client admin | ownership-checked against caller's client |
+| PATCH | `/organizations/{org_id}` | client admin | ownership-checked against caller's client |
 
 Creating a Client auto-creates its first Organization (same name/code) and, if an
-`admin_email` is supplied, invites the first `client_admin` user into that org.
+`admin_email` is supplied, invites the first `client_admin` user into that org. This
+bootstrap happens inside the client service (a server-side call), so it is unaffected
+by the `require_client_admin` guard on the public `POST /organizations` endpoint.
+
+> Responsibility split: **superuser → clients only**; **client admin → organizations,
+> users, roles**. A client's first org + first client_admin are provisioned
+> automatically when the superuser creates the client, so the client is
+> self-sufficient from then on.
 
 ---
 
@@ -231,6 +242,11 @@ created via the API.
   with `user_type="platform_admin"` in the `PLATFORM` org.
 - **Additive JWT claims.** `extra="ignore"` keeps existing tokens and downstream
   services working unchanged.
+- **Strict superuser/client separation.** The platform super-admin manages Clients
+  only and cannot act on organizations; `require_client_admin` therefore admits
+  `client_admin` alone (not `platform_admin`). A client's first org and first
+  client_admin are bootstrapped server-side at client-creation time, so the client is
+  self-sufficient without the superuser reaching into org endpoints.
 - **DB-verified admin guards.** Both `require_platform_admin` and
   `require_client_admin` re-check the caller's `user_type`/`status` in the DB (a cheap
   PK lookup) rather than trusting the token claim alone, so a demoted admin loses

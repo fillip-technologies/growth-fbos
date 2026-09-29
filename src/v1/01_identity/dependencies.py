@@ -108,14 +108,15 @@ async def require_client_admin(
     session: AsyncSession = Depends(get_db_session),
 ) -> TokenPayload:
     """
-    Allow client admins and platform admins (a platform admin can do anything a
-    client admin can). DB-verified for the same reason as require_platform_admin.
+    Allow only client admins. Organization-level actions belong exclusively to the
+    client; the platform super-admin manages clients, not their organizations.
+    DB-verified for the same reason as require_platform_admin.
     """
-    if not (current_user.is_client_admin or current_user.is_platform_admin):
+    if not current_user.is_client_admin:
         raise ClientAdminRequiredError()
 
     user = await session.get(User, current_user.user_id)
-    if not user or user.status != "active" or user.user_type not in ("client_admin", "platform_admin"):
+    if not user or user.status != "active" or user.user_type != "client_admin":
         raise ClientAdminRequiredError()
 
     return current_user

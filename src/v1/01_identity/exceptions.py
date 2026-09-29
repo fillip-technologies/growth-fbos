@@ -385,3 +385,47 @@ class ClientCredentialsInvalidError(IdentityServiceError):
             code="CLIENT_CREDENTIALS_INVALID",
             message=message,
         )
+
+
+class ClientNotFoundError(IdentityServiceError):
+    """404: Tenancy client (customer account) not found."""
+
+    def __init__(self) -> None:
+        super().__init__(
+            status_code=status.HTTP_404_NOT_FOUND,
+            code="CLIENT_NOT_FOUND",
+            message="Client not found",
+        )
+
+
+class ClientCodeAlreadyExistsError(IdentityServiceError):
+    """409: A client with this code already exists."""
+
+    def __init__(self, code_val: str) -> None:
+        super().__init__(
+            status_code=status.HTTP_409_CONFLICT,
+            code="CLIENT_CODE_EXISTS",
+            message=f"A client with code '{code_val}' already exists",
+        )
+
+
+class OrganizationNotFoundError(IdentityServiceError):
+    """404: Organization not found."""
+
+    def __init__(self) -> None:
+        super().__init__(
+            status_code=status.HTTP_404_NOT_FOUND,
+            code="ORGANIZATION_NOT_FOUND",
+            message="Organization not found",
+        )
+
+
+class OrgCodeAlreadyExistsError(IdentityServiceError):
+    """409: An organization with this code already exists."""
+
+    def __init__(self, code_val: str) -> None:
+        super().__init__(
+            status_code=status.HTTP_409_CONFLICT,
+            code="ORGANIZATION_CODE_EXISTS",
+            message=f"An organization with code '{code_val}' already exists",
+        )
