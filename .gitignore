@@ -51,3 +51,10 @@ Thumbs.db
 *.log
 
 ref
+
+
+scratch_all_management_details.txt
+scratch_management_endpoints_raw.txt
+scratch_management_spec.txt
+scratch_management_summary.txt
+scratch_schemas.txt
