@@ -211,6 +211,17 @@ class InvoiceAlreadyIssuedError(RevenueServiceError):
         )
 
 
+class InvoicePdfNotAvailableError(RevenueServiceError):
+    """501: Invoice PDF generation and storage is not implemented yet."""
+
+    def __init__(self) -> None:
+        super().__init__(
+            status.HTTP_501_NOT_IMPLEMENTED,
+            "INVOICE_PDF_NOT_AVAILABLE",
+            "Invoice PDF generation is not available yet.",
+        )
+
+
 class InvoiceNotIssuedError(RevenueServiceError):
     """409: Action requires the invoice to be issued."""
 

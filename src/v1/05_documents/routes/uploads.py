@@ -23,7 +23,7 @@ router = APIRouter(tags=["uploads"])
     response_model=UploadInitResult,
     status_code=status.HTTP_201_CREATED,
     summary="Start an upload (get a presigned URL)",
-    description="Step 1 of 3. Declares the file, validates its category and limits, and returns a presigned S3 PUT URL.",
+    description="Step 1 of 3. Declares the file, validates its category and limits, and returns signed ImageKit upload parameters (multipart POST).",
 )
 async def start_upload(
     data: UploadInit,

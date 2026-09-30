@@ -129,7 +129,7 @@ async def seed_documents():
             session.add(
                 StorageObject(
                     id=STORAGE_MSA_ID,
-                    provider="s3",
+                    provider="imagekit",
                     bucket="fbos-documents",
                     object_key=f"org/{DEFAULT_ORG_ID.hex[:8]}/contracts/msa-acme-2026.pdf",
                     size_bytes=245760,
@@ -149,7 +149,7 @@ async def seed_documents():
             session.add(
                 StorageObject(
                     id=STORAGE_ARCH_ID,
-                    provider="s3",
+                    provider="imagekit",
                     bucket="fbos-documents",
                     object_key=f"org/{DEFAULT_ORG_ID.hex[:8]}/deliverables/arch-spec-v1.pdf",
                     size_bytes=512000,

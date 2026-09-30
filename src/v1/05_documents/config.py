@@ -12,10 +12,11 @@ class Settings(BaseSettings):
     jwt_secret: str = "fbos-local-secret-key-change-in-production"
     jwt_algorithm: str = "HS256"
 
-    # Physical / Presigned Storage Settings
-    s3_bucket: str = "fbos-documents"
-    s3_region: str = "ap-south-1"
-    s3_endpoint_url: str = ""
+    # File storage (ImageKit.io). Leave the private key empty for local stub mode.
+    imagekit_public_key: str = ""
+    imagekit_private_key: str = ""
+    imagekit_url_endpoint: str = ""
+    imagekit_folder: str = "fbos-documents"
     public_share_base_url: str = "https://share.fbos.example.com/s"
     max_upload_size_bytes: int = 104857600  # 100 MB default max
 
