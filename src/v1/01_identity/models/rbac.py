@@ -2,7 +2,7 @@ import uuid
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Optional
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, String, Text, UniqueConstraint
+from sqlalchemy import Boolean, DateTime, ForeignKey, Index, Integer, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from database.base import Base
@@ -60,6 +60,11 @@ class RoleAssignment(Base):
     """
 
     __tablename__ = "role_assignments"
+    __table_args__ = (
+        # Prefix index: `scope_path` (up to 2048 chars) exceeds InnoDB's 3072-byte
+        # index limit under utf8mb4. Index the first 255 chars instead.
+        Index("ix_role_assignments_scope_path", "scope_path", mysql_length=255),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(UUIDType, primary_key=True, default=uuid.uuid4)
     organization_id: Mapped[uuid.UUID] = mapped_column(
@@ -77,7 +82,8 @@ class RoleAssignment(Base):
     scope_vertical_id: Mapped[Optional[uuid.UUID]] = mapped_column(
         UUIDType, ForeignKey("verticals.id", ondelete="CASCADE"), nullable=True, index=True
     )
-    scope_path: Mapped[Optional[str]] = mapped_column(String(2048), nullable=True, index=True)
+    # Indexed via a prefix index in __table_args__ (see note there).
+    scope_path: Mapped[Optional[str]] = mapped_column(String(2048), nullable=True)
     self_only: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     valid_from: Mapped[datetime] = mapped_column(
         DateTime, default=lambda: datetime.now(timezone.utc), nullable=False

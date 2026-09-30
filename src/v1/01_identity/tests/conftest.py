@@ -14,6 +14,7 @@ from dependencies import get_current_user
 import httpx
 from main import app
 import models  # loads all models into Base.metadata
+from models.client import Client
 from models.organization import Organization
 from models.user import User
 import pytest
@@ -22,6 +23,7 @@ from schemas.token import TokenPayload
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from utils.security import create_access_token
 
+TEST_CLIENT_ID = uuid.UUID("0191f3a2-0013-7013-8079-0000001b2aab")
 TEST_ORG_ID = uuid.UUID("0191f3a2-0011-7011-8077-0000001b2aa9")
 TEST_USER_ID = uuid.UUID("0191f3a2-0015-7015-8093-000000218f0d")
 
@@ -48,9 +50,15 @@ async def db_session(test_engine) -> AsyncGenerator[AsyncSession, None]:
         expire_on_commit=False,
     )
     async with session_factory() as session:
-        # Seed test organization and user
+        # Seed test client, organization and user. The org must have a client
+        # parent to satisfy the client-required constraint (only the platform
+        # system org may be parentless).
+        client = Client(id=TEST_CLIENT_ID, name="Test Client", code="TEST-CLIENT")
+        session.add(client)
+        await session.flush()
         org = Organization(
             id=TEST_ORG_ID,
+            client_id=TEST_CLIENT_ID,
             name="Test Corp",
             code="TEST",
             base_currency="USD",

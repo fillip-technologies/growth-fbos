@@ -1,5 +1,6 @@
 from models.client import Client
 from models.organization import Organization
+from models.platform_admin import PlatformAdmin
 from models.calendar import Calendar, CalendarHoliday
 from models.org_unit import OrgUnit, OrgUnitVertical
 from models.vertical import Vertical, VerticalPack, ObjectType, FieldDefinition
@@ -13,6 +14,7 @@ from models.audit import SecurityAuditLog
 __all__ = [
     "Client",
     "Organization",
+    "PlatformAdmin",
     "Calendar",
     "CalendarHoliday",
     "OrgUnit",
