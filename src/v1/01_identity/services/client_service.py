@@ -7,6 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from exceptions import ClientCodeAlreadyExistsError, ClientNotFoundError
 from models.client import Client
+from models.organization import Organization
 from schemas.client import ClientCreateRequest, ClientResponse, ClientUpdateRequest
 from schemas.common import PageInfo, PaginatedResponse
 from schemas.organization import OrganizationCreateRequest
@@ -17,13 +18,18 @@ logger = logging.getLogger("identity.client_service")
 
 
 class ClientService:
-    def _build_response(self, client: Client) -> ClientResponse:
+    def _build_response(
+        self, client: Client, active_organizations_count: Optional[int] = None
+    ) -> ClientResponse:
         return ClientResponse(
             id=client.id,
             name=client.name,
             code=client.code,
             contact_email=client.contact_email,
             status=client.status,
+            max_organizations=client.max_organizations,
+            max_users_per_org=client.max_users_per_org,
+            active_organizations_count=active_organizations_count,
             created_at=client.created_at.isoformat() if client.created_at else None,
         )
 
@@ -50,6 +56,8 @@ class ClientService:
             code=data.code,
             contact_email=data.contact_email,
             status="active",
+            max_organizations=data.max_organizations if data.max_organizations is not None else 2,
+            max_users_per_org=data.max_users_per_org if data.max_users_per_org is not None else 50,
         )
         session.add(client)
         await session.flush()
@@ -86,7 +94,7 @@ class ClientService:
         for topic, payload in org_events:
             await event_publisher.publish(topic, payload)
 
-        return self._build_response(client)
+        return self._build_response(client, active_organizations_count=1)
 
     async def list_clients(
         self,
@@ -122,7 +130,19 @@ class ClientService:
         client = await session.get(Client, client_id)
         if not client:
             raise ClientNotFoundError()
-        return self._build_response(client)
+
+        active_orgs_count = (
+            await session.execute(
+                select(func.count())
+                .select_from(Organization)
+                .where(
+                    Organization.client_id == client.id,
+                    Organization.status != "deleted",
+                )
+            )
+        ).scalar_one()
+
+        return self._build_response(client, active_organizations_count=active_orgs_count)
 
     async def update_client(
         self,
@@ -140,6 +160,10 @@ class ClientService:
             client.contact_email = data.contact_email
         if data.status is not None:
             client.status = data.status
+        if data.max_organizations is not None:
+            client.max_organizations = data.max_organizations
+        if data.max_users_per_org is not None:
+            client.max_users_per_org = data.max_users_per_org
 
         await session.commit()
         await session.refresh(client)
@@ -148,7 +172,20 @@ class ClientService:
             "identity.client.updated.v1",
             {"client_id": str(client.id)},
         )
-        return self._build_response(client)
+
+        active_orgs_count = (
+            await session.execute(
+                select(func.count())
+                .select_from(Organization)
+                .where(
+                    Organization.client_id == client.id,
+                    Organization.status != "deleted",
+                )
+            )
+        ).scalar_one()
+
+        return self._build_response(client, active_organizations_count=active_orgs_count)
+
 
 
 client_service = ClientService()

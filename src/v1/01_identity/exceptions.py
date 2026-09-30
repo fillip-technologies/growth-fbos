@@ -429,3 +429,28 @@ class OrgCodeAlreadyExistsError(IdentityServiceError):
             code="ORGANIZATION_CODE_EXISTS",
             message=f"An organization with code '{code_val}' already exists",
         )
+
+
+class ClientOrganizationLimitReachedError(IdentityServiceError):
+    """403: Client has reached its maximum organization quota."""
+
+    def __init__(self, limit: int, current: int) -> None:
+        super().__init__(
+            status_code=status.HTTP_403_FORBIDDEN,
+            code="CLIENT_ORGANIZATION_LIMIT_REACHED",
+            message=f"Client has reached the maximum allowed limit of {limit} organizations",
+            meta={"limit": limit, "current": current},
+        )
+
+
+class OrganizationUserLimitReachedError(IdentityServiceError):
+    """403: Organization has reached its maximum user quota."""
+
+    def __init__(self, limit: int, current: int) -> None:
+        super().__init__(
+            status_code=status.HTTP_403_FORBIDDEN,
+            code="ORGANIZATION_USER_LIMIT_REACHED",
+            message=f"Organization has reached the maximum allowed limit of {limit} users",
+            meta={"limit": limit, "current": current},
+        )
+
