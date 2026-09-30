@@ -44,7 +44,10 @@ _PROBLEM_META: dict[str, tuple[str, bool]] = {
     "INVITATION_INVALID": ("Invitation is invalid or expired", False),
     "PASSWORD_TOO_WEAK": ("Password does not meet complexity requirements", False),
     "CLIENT_CREDENTIALS_INVALID": ("Client authentication failed", False),
+    "CLIENT_ORGANIZATION_LIMIT_REACHED": ("Organization limit reached", False),
+    "ORGANIZATION_USER_LIMIT_REACHED": ("User limit reached", False),
 }
+
 
 
 @asynccontextmanager

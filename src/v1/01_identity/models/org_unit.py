@@ -3,7 +3,7 @@ from typing import TYPE_CHECKING, Optional
 import uuid
 
 
-from sqlalchemy import DateTime, ForeignKey, Integer, String, UniqueConstraint
+from sqlalchemy import DateTime, ForeignKey, Index, Integer, String, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from database.base import Base
@@ -15,7 +15,12 @@ if TYPE_CHECKING:
 
 class OrgUnit(Base):
     __tablename__ = "org_units"
-    __table_args__ = (UniqueConstraint("organization_id", "code", name="uq_org_unit_org_code"),)
+    __table_args__ = (
+        UniqueConstraint("organization_id", "code", name="uq_org_unit_org_code"),
+        # Prefix index: `path` is up to 2048 chars, which under utf8mb4 (4 bytes/char)
+        # exceeds InnoDB's 3072-byte index limit. Index the first 255 chars instead.
+        Index("ix_org_units_path", "path", mysql_length=255),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(UUIDType, primary_key=True, default=uuid.uuid4)
     organization_id: Mapped[uuid.UUID] = mapped_column(
@@ -27,8 +32,9 @@ class OrgUnit(Base):
     parent_id: Mapped[Optional[uuid.UUID]] = mapped_column(
         UUIDType, ForeignKey("org_units.id", ondelete="RESTRICT"), nullable=True, index=True
     )
-    # Materialized path (e.g. "/root_id/dept_id/team_id/")
-    path: Mapped[str] = mapped_column(String(2048), nullable=False, index=True)
+    # Materialized path (e.g. "/root_id/dept_id/team_id/"). Indexed via a prefix
+    # index in __table_args__ (see note there), not a full-column index.
+    path: Mapped[str] = mapped_column(String(2048), nullable=False)
     # users.home_unit_id points back here; use_alter breaks the create-order cycle
     head_user_id: Mapped[Optional[uuid.UUID]] = mapped_column(
         UUIDType,

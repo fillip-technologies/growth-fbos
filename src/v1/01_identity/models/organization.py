@@ -13,8 +13,10 @@ class Organization(Base):
     __tablename__ = "organizations"
 
     id: Mapped[uuid.UUID] = mapped_column(UUIDType, primary_key=True, default=uuid.uuid4)
-    client_id: Mapped[Optional[uuid.UUID]] = mapped_column(
-        UUIDType, ForeignKey("clients.id", ondelete="SET NULL"), nullable=True, index=True
+    # Every organization belongs to a client. The super-admin is independent (its own
+    # table) and never owns an org, so there is no parentless-org exemption.
+    client_id: Mapped[uuid.UUID] = mapped_column(
+        UUIDType, ForeignKey("clients.id", ondelete="RESTRICT"), nullable=False, index=True
     )
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     code: Mapped[Optional[str]] = mapped_column(String(100), unique=True, nullable=True, index=True)

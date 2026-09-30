@@ -60,26 +60,32 @@ def verify_dummy_password(password: str) -> None:
 # ---------------------------------------------------------------------------
 def create_access_token(
     user_id: uuid.UUID,
-    organization_id: uuid.UUID,
-    email: str,
+    organization_id: Optional[uuid.UUID] = None,
+    email: str = "",
     user_type: str = "employee",
     client_id: Optional[uuid.UUID] = None,
     family_id: Optional[uuid.UUID] = None,
     expires_delta: Optional[timedelta] = None,
 ) -> str:
-    """Create a signed JWT access token (15-minute default validity)."""
+    """
+    Create a signed JWT access token (15-minute default validity).
+
+    `organization_id` is optional: the independent platform super-admin belongs to no
+    organization, so its token omits the `org_id` claim entirely.
+    """
     now = datetime.now(timezone.utc)
     delta = expires_delta or timedelta(minutes=15)
     payload: dict[str, Any] = {
         "sub": str(user_id),
         "email": email,
-        "org_id": str(organization_id),
         "user_type": user_type,
         "type": "access",
         "iat": int(now.timestamp()),
         "exp": int((now + delta).timestamp()),
         "jti": str(uuid.uuid4()),
     }
+    if organization_id is not None:
+        payload["org_id"] = str(organization_id)
     if client_id is not None:
         payload["client_id"] = str(client_id)
     if family_id is not None:

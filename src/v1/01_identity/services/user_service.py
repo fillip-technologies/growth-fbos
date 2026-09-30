@@ -9,14 +9,17 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from exceptions import (
     DuplicateCodeError,
+    OrganizationUserLimitReachedError,
     PreconditionFailedError,
     PreconditionRequiredError,
     UserAlreadyExistsError,
     UserNotFoundError,
 )
 from models.auth import RefreshToken, UserCredential
+from models.client import Client
 from models.membership import UnitMembership
 from models.org_unit import OrgUnit
+from models.organization import Organization
 from models.rbac import Role, RoleAssignment
 from models.user import User
 from schemas.common import PageInfo, PaginatedResponse
@@ -154,6 +157,26 @@ class UserService:
         data: UserInviteRequest,
         actor_id: Optional[uuid.UUID] = None,
     ) -> UserResponse:
+        # 0. Quota check: if organization belongs to a client, enforce max_users_per_org
+        org = await session.get(Organization, organization_id)
+        if org and org.client_id:
+            client = await session.get(Client, org.client_id)
+            if client and client.max_users_per_org is not None:
+                active_users_count = (
+                    await session.execute(
+                        select(func.count())
+                        .select_from(User)
+                        .where(
+                            User.organization_id == organization_id,
+                            User.status.in_(["active", "invited"]),
+                        )
+                    )
+                ).scalar_one()
+                if active_users_count >= client.max_users_per_org:
+                    raise OrganizationUserLimitReachedError(
+                        limit=client.max_users_per_org, current=active_users_count
+                    )
+
         # 1. Unique email check within organization
         existing_email = await session.execute(
             select(User).where(

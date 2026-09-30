@@ -9,6 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from exceptions import (
     ClientNotFoundError,
+    ClientOrganizationLimitReachedError,
     OrganizationNotFoundError,
     OrgCodeAlreadyExistsError,
     UserAlreadyExistsError,
@@ -165,6 +166,23 @@ class OrganizationService:
         client = await session.get(Client, client_id)
         if not client:
             raise ClientNotFoundError()
+
+        # Quota check: ensure client has not exceeded max_organizations
+        if client.max_organizations is not None:
+            active_orgs_count = (
+                await session.execute(
+                    select(func.count())
+                    .select_from(Organization)
+                    .where(
+                        Organization.client_id == client_id,
+                        Organization.status != "deleted",
+                    )
+                )
+            ).scalar_one()
+            if active_orgs_count >= client.max_organizations:
+                raise ClientOrganizationLimitReachedError(
+                    limit=client.max_organizations, current=active_orgs_count
+                )
 
         duplicate = await session.execute(
             select(Organization).where(func.lower(Organization.code) == data.code.lower())

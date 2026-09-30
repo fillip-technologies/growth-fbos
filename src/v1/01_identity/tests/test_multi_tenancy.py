@@ -12,23 +12,32 @@ import uuid
 
 import pytest
 from sqlalchemy import func, select
+from sqlalchemy.exc import IntegrityError
 
 from dependencies import require_client_admin, require_platform_admin
 from exceptions import (
     ClientCodeAlreadyExistsError,
+    ClientOrganizationLimitReachedError,
+    InvalidCredentialsError,
     OrganizationNotFoundError,
+    OrganizationUserLimitReachedError,
     OrgCodeAlreadyExistsError,
 )
 from main import app
 from models.organization import Organization
+from models.platform_admin import PlatformAdmin
 from models.rbac import Role, RoleAssignment
 from models.user import User
 from schemas.client import ClientCreateRequest, ClientUpdateRequest
 from schemas.organization import OrganizationCreateRequest
 from schemas.token import TokenPayload
+from schemas.user import UserInviteRequest
 from services.client_service import client_service
 from services.organization_service import organization_service
+from services.platform_auth_service import platform_auth_service
+from services.user_service import user_service
 from tests.conftest import TEST_USER_ID
+from utils.security import decode_jwt_token, hash_password
 
 
 # --------------------------------------------------------------------------- #
@@ -156,6 +165,58 @@ async def test_get_organization_is_client_scoped(db_session):
 
 
 @pytest.mark.asyncio
+async def test_parentless_org_is_rejected(db_session):
+    """
+    Every organization must belong to a client: `organizations.client_id` is NOT
+    NULL, so a parentless insert is rejected at the DB (even the seed can't do it).
+    """
+    db_session.add(
+        Organization(
+            id=uuid.uuid4(),
+            client_id=None,  # mandatory -> must be rejected
+            name="Orphan Org",
+            code="ORPHAN",
+            base_currency="USD",
+            fiscal_year_start="01-01",
+            timezone="UTC",
+            status="active",
+        )
+    )
+    with pytest.raises(IntegrityError):
+        await db_session.flush()
+
+
+@pytest.mark.asyncio
+async def test_platform_admin_login_issues_independent_token(db_session):
+    """
+    The super-admin authenticates against its own `platform_admins` table and gets
+    an access token with no org/client claims (it is independent of the hierarchy).
+    """
+    db_session.add(
+        PlatformAdmin(
+            id=uuid.uuid4(),
+            email="root@fbos.platform",
+            name="Root",
+            password_hash=hash_password("Secret@123"),
+            status="active",
+        )
+    )
+    await db_session.commit()
+
+    resp = await platform_auth_service.login(
+        session=db_session, email="root@fbos.platform", password="Secret@123"
+    )
+    claims = decode_jwt_token(resp.access_token)
+    assert claims["user_type"] == "platform_admin"
+    assert "org_id" not in claims and "client_id" not in claims
+
+    with pytest.raises(InvalidCredentialsError):
+        await platform_auth_service.login(
+            session=db_session, email="root@fbos.platform", password="wrong"
+        )
+
+
+@pytest.mark.asyncio
 async def test_update_client(db_session):
     client = await client_service.create_client(
         session=db_session, data=ClientCreateRequest(name="Acme", code="ACME")
@@ -239,3 +300,91 @@ async def test_org_endpoint_rejects_admin_without_client_scope(async_client):
     assert res.status_code == 403
     # RFC 7807 problem+json envelope (see main.py _PROBLEM_META).
     assert res.json()["code"] == "CLIENT_ADMIN_REQUIRED"
+
+
+@pytest.mark.asyncio
+async def test_client_organization_limit_enforced(db_session):
+    # 1. Create client with max_organizations = 2 (default)
+    client = await client_service.create_client(
+        session=db_session,
+        data=ClientCreateRequest(
+            name="Quota Corp",
+            code="QUOTA",
+            admin_email="admin@quota.example.com",
+            max_organizations=2,
+        ),
+    )
+    # First org was auto-created, count = 1
+    # 2. Create 2nd organization -> succeeds
+    second_org = await organization_service.create_organization(
+        session=db_session,
+        client_id=client.id,
+        data=OrganizationCreateRequest(name="Quota Sub 1", code="QUOTA-SUB1"),
+    )
+    assert second_org.code == "QUOTA-SUB1"
+
+    # 3. Create 3rd organization -> blocked by max_organizations=2
+    with pytest.raises(ClientOrganizationLimitReachedError) as exc_info:
+        await organization_service.create_organization(
+            session=db_session,
+            client_id=client.id,
+            data=OrganizationCreateRequest(name="Quota Sub 2", code="QUOTA-SUB2"),
+        )
+    assert exc_info.value.code == "CLIENT_ORGANIZATION_LIMIT_REACHED"
+    assert exc_info.value.meta["limit"] == 2
+    assert exc_info.value.meta["current"] == 2
+
+    # 4. Platform admin increases limit to 3
+    await client_service.update_client(
+        session=db_session,
+        client_id=client.id,
+        data=ClientUpdateRequest(max_organizations=3),
+    )
+
+    # 5. Creating 3rd organization now succeeds immediately
+    third_org = await organization_service.create_organization(
+        session=db_session,
+        client_id=client.id,
+        data=OrganizationCreateRequest(name="Quota Sub 2", code="QUOTA-SUB2"),
+    )
+    assert third_org.code == "QUOTA-SUB2"
+
+
+@pytest.mark.asyncio
+async def test_organization_user_limit_enforced(db_session):
+    # Create client with max_users_per_org = 2
+    client = await client_service.create_client(
+        session=db_session,
+        data=ClientCreateRequest(
+            name="UserQuota Corp",
+            code="UQUOTA",
+            admin_email="admin@uquota.example.com",
+            max_users_per_org=2,
+        ),
+    )
+    # First admin user was already invited, count = 1
+    org = (
+        await db_session.execute(
+            select(Organization).where(Organization.client_id == client.id)
+        )
+    ).scalar_one()
+
+    # Invite 2nd user -> succeeds (count = 2)
+    user2 = await user_service.invite_user(
+        session=db_session,
+        organization_id=org.id,
+        data=UserInviteRequest(name="User Two", email="user2@uquota.example.com"),
+    )
+    assert user2.email == "user2@uquota.example.com"
+
+    # Invite 3rd user -> blocked by max_users_per_org=2
+    with pytest.raises(OrganizationUserLimitReachedError) as exc_info:
+        await user_service.invite_user(
+            session=db_session,
+            organization_id=org.id,
+            data=UserInviteRequest(name="User Three", email="user3@uquota.example.com"),
+        )
+    assert exc_info.value.code == "ORGANIZATION_USER_LIMIT_REACHED"
+    assert exc_info.value.meta["limit"] == 2
+    assert exc_info.value.meta["current"] == 2
+
