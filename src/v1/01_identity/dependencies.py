@@ -12,6 +12,7 @@ from exceptions import (
     InvalidCredentialsError,
     PlatformAdminRequiredError,
 )
+from models.platform_admin import PlatformAdmin
 from models.user import User
 from schemas.token import TokenPayload
 from utils.security import decode_jwt_token
@@ -87,17 +88,18 @@ async def require_platform_admin(
     session: AsyncSession = Depends(get_db_session),
 ) -> TokenPayload:
     """
-    Allow only platform super-admins.
+    Allow only the independent platform super-admin (its own `platform_admins`
+    table — not a `User`).
 
     DB-verified rather than token-only: this grants cross-tenant reach, so a
-    demoted admin must lose access immediately instead of retaining it until the
+    revoked admin must lose access immediately instead of retaining it until the
     short-lived access token expires.
     """
     if not current_user.is_platform_admin:
         raise PlatformAdminRequiredError()
 
-    user = await session.get(User, current_user.user_id)
-    if not user or user.status != "active" or user.user_type != "platform_admin":
+    admin = await session.get(PlatformAdmin, current_user.user_id)
+    if not admin or admin.status != "active":
         raise PlatformAdminRequiredError()
 
     return current_user

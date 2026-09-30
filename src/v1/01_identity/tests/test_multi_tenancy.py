@@ -12,15 +12,18 @@ import uuid
 
 import pytest
 from sqlalchemy import func, select
+from sqlalchemy.exc import IntegrityError
 
 from dependencies import require_client_admin, require_platform_admin
 from exceptions import (
     ClientCodeAlreadyExistsError,
+    InvalidCredentialsError,
     OrganizationNotFoundError,
     OrgCodeAlreadyExistsError,
 )
 from main import app
 from models.organization import Organization
+from models.platform_admin import PlatformAdmin
 from models.rbac import Role, RoleAssignment
 from models.user import User
 from schemas.client import ClientCreateRequest, ClientUpdateRequest
@@ -28,7 +31,9 @@ from schemas.organization import OrganizationCreateRequest
 from schemas.token import TokenPayload
 from services.client_service import client_service
 from services.organization_service import organization_service
+from services.platform_auth_service import platform_auth_service
 from tests.conftest import TEST_USER_ID
+from utils.security import decode_jwt_token, hash_password
 
 
 # --------------------------------------------------------------------------- #
@@ -152,6 +157,58 @@ async def test_get_organization_is_client_scoped(db_session):
     with pytest.raises(OrganizationNotFoundError):
         await organization_service.get_organization(
             session=db_session, organization_id=org.id, client_id=uuid.uuid4()
+        )
+
+
+@pytest.mark.asyncio
+async def test_parentless_org_is_rejected(db_session):
+    """
+    Every organization must belong to a client: `organizations.client_id` is NOT
+    NULL, so a parentless insert is rejected at the DB (even the seed can't do it).
+    """
+    db_session.add(
+        Organization(
+            id=uuid.uuid4(),
+            client_id=None,  # mandatory -> must be rejected
+            name="Orphan Org",
+            code="ORPHAN",
+            base_currency="USD",
+            fiscal_year_start="01-01",
+            timezone="UTC",
+            status="active",
+        )
+    )
+    with pytest.raises(IntegrityError):
+        await db_session.flush()
+
+
+@pytest.mark.asyncio
+async def test_platform_admin_login_issues_independent_token(db_session):
+    """
+    The super-admin authenticates against its own `platform_admins` table and gets
+    an access token with no org/client claims (it is independent of the hierarchy).
+    """
+    db_session.add(
+        PlatformAdmin(
+            id=uuid.uuid4(),
+            email="root@fbos.platform",
+            name="Root",
+            password_hash=hash_password("Secret@123"),
+            status="active",
+        )
+    )
+    await db_session.commit()
+
+    resp = await platform_auth_service.login(
+        session=db_session, email="root@fbos.platform", password="Secret@123"
+    )
+    claims = decode_jwt_token(resp.access_token)
+    assert claims["user_type"] == "platform_admin"
+    assert "org_id" not in claims and "client_id" not in claims
+
+    with pytest.raises(InvalidCredentialsError):
+        await platform_auth_service.login(
+            session=db_session, email="root@fbos.platform", password="wrong"
         )
 
 

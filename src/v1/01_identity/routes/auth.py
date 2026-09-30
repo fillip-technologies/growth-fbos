@@ -23,8 +23,10 @@ from schemas.auth import (
     RefreshRequest,
     TokenResponse,
 )
+from schemas.platform_auth import PlatformLoginRequest, PlatformLoginResponse
 from schemas.token import TokenPayload
 from services.auth_service import auth_service
+from services.platform_auth_service import platform_auth_service
 from utils.security import (
     COOKIE_REFRESH_TOKEN,
     clear_auth_cookies,
@@ -65,6 +67,22 @@ async def login(
         set_auth_cookies(response=response, refresh_token=raw_refresh_token)
 
     return login_response
+
+
+@router.post(
+    "/platform/login",
+    response_model=PlatformLoginResponse,
+    status_code=status.HTTP_200_OK,
+    summary="Platform Super-Admin Login",
+    description="Authenticates the independent platform super-admin (platform_admins table, access-token-only) and returns an access token.",
+)
+async def platform_login(
+    request_data: PlatformLoginRequest,
+    session: AsyncSession = Depends(get_db_session),
+) -> PlatformLoginResponse:
+    return await platform_auth_service.login(
+        session=session, email=request_data.email, password=request_data.password
+    )
 
 
 @router.post(
