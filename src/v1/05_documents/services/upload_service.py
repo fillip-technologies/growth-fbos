@@ -101,7 +101,7 @@ def serialize_document(doc: Document) -> DocumentResponse:
 
 
 class UploadService:
-    """Service handling multi-step presigned upload workflows."""
+    """Service handling multi-step direct upload workflows."""
 
     async def get_or_create_category(
         self,
@@ -172,14 +172,14 @@ class UploadService:
             target_doc_id = uuid.uuid4()
 
         # 4. Generate presigned upload URL
-        object_key = f"org/{org_id.hex[:8]}/{data.sha256[:16]}-{int(datetime.now(timezone.utc).timestamp())}"
-        upload_url, headers, expires_at = storage_service.generate_upload_url(
+        object_key = f"org/{org_id.hex[:8]}/{data.sha256[:16]}-{uuid.uuid4().hex[:8]}"
+        target = storage_service.generate_upload_target(
             org_id=org_id,
             object_key=object_key,
             mime_type=data.mime_type,
-            sha256_hex=data.sha256,
             expires_minutes=15,
         )
+        expires_at = target.expires_at
 
         # 5. Record upload session
         session_id = uuid.uuid4()
@@ -197,7 +197,8 @@ class UploadService:
             link_subject_type=data.link.subject.type if data.link else None,
             link_subject_id=data.link.subject.id if data.link else None,
             link_role=data.link.link_role if data.link else None,
-            upload_url=upload_url,
+            upload_url=target.url,
+            object_key=object_key,
             expires_at=expires_at,
             status="initiated",
             created_by=user_id,
@@ -209,9 +210,10 @@ class UploadService:
             upload_id=upload_session.id,
             document_id=target_doc_id,
             version_no=version_no,
-            upload_url=upload_url,
-            upload_method="PUT",
-            upload_headers=headers,
+            upload_url=target.url,
+            upload_method=target.method,
+            upload_headers=target.headers,
+            upload_fields=target.fields,
             expires_at=expires_at.strftime("%Y-%m-%dT%H:%M:%SZ"),
         )
 
@@ -274,12 +276,16 @@ class UploadService:
             session.add(doc)
             await session.flush()
 
+        # The file must actually be in storage before we record it.
+        object_key = upload_session.object_key or f"org/{org_id.hex[:8]}/{upload_session.sha256[:16]}-{uuid.uuid4().hex[:8]}"
+        await storage_service.verify_object(object_key, upload_session.size_bytes)
+
         # Create StorageObject
         storage_obj = StorageObject(
             id=uuid.uuid4(),
-            provider="s3",
-            bucket=settings.s3_bucket,
-            object_key=f"org/{org_id.hex[:8]}/{upload_session.sha256[:16]}-{uuid.uuid4().hex[:8]}",
+            provider=storage_service.provider_name,
+            bucket=settings.imagekit_folder,
+            object_key=object_key,
             size_bytes=upload_session.size_bytes,
             mime_type=upload_session.mime_type,
             sha256=upload_session.sha256,

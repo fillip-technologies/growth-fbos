@@ -35,6 +35,10 @@ SALES_UNIT_ID = uuid.UUID("0191f3a2-0021-7021-80a1-000000234a11")
 ROLE_ADMIN_ID = uuid.UUID("0191f3a2-0025-7025-80b0-000000256b20")
 ROLE_MEMBER_ID = uuid.UUID("0191f3a2-0026-7026-80b1-000000256b21")
 
+# Platform tenant: the cross-tenant super-admin and the system org that hosts it.
+PLATFORM_ORG_ID = uuid.UUID("0191f3a2-0012-7012-8078-0000001b2aaa")
+PLATFORM_ADMIN_USER_ID = uuid.UUID("0191f3a2-0017-7017-8095-000000218f0f")
+
 hasher = PasswordHasher()
 DEFAULT_PASSWORD_HASH = hasher.hash("Password@123")
 
@@ -230,6 +234,62 @@ async def seed_identity():
                 )
             )
             print("   ✅ Assigned 'member' role to Sarah Connor")
+
+        # 7. Seed Platform tenant (cross-tenant super-admin)
+        # The PLATFORM org has no owning client (client_id=NULL) and exists solely to
+        # host the platform_admin, the single entry point from which all Clients and
+        # their Organizations are created via the API.
+        platform_org_res = await session.execute(
+            select(Organization).where(Organization.id == PLATFORM_ORG_ID)
+        )
+        if not platform_org_res.scalar_one_or_none():
+            session.add(
+                Organization(
+                    id=PLATFORM_ORG_ID,
+                    client_id=None,
+                    name="FBOS Platform",
+                    code="PLATFORM",
+                    base_currency="INR",
+                    fiscal_year_start="04-01",
+                    timezone="Asia/Kolkata",
+                    status="active",
+                )
+            )
+            await session.flush()
+            print("   ✅ Created Organization: FBOS Platform (PLATFORM)")
+        else:
+            print("   ℹ️ Organization already exists: FBOS Platform")
+
+        platform_admin_res = await session.execute(
+            select(User).where(User.id == PLATFORM_ADMIN_USER_ID)
+        )
+        if not platform_admin_res.scalar_one_or_none():
+            session.add(
+                User(
+                    id=PLATFORM_ADMIN_USER_ID,
+                    organization_id=PLATFORM_ORG_ID,
+                    email="superadmin@fbos.platform",
+                    name="Platform Super Admin",
+                    user_type="platform_admin",
+                    status="active",
+                    version=1,
+                    created_at=datetime.now(timezone.utc),
+                )
+            )
+            await session.flush()
+            session.add(
+                UserCredential(
+                    user_id=PLATFORM_ADMIN_USER_ID,
+                    password_hash=DEFAULT_PASSWORD_HASH,
+                )
+            )
+            await session.flush()
+            print(
+                "   ✅ Created User: Platform Super Admin "
+                "(superadmin@fbos.platform / Password@123)"
+            )
+        else:
+            print("   ℹ️ User already exists: Platform Super Admin")
 
         await session.commit()
         print("🎉 [01_identity] Seed completed successfully!")

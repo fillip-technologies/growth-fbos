@@ -5,7 +5,7 @@ Simplifications:
   3 chars of the type code uppercased. A production implementation would use a
   proper sequence table.
 - Credential reveal returns a placeholder value; a real implementation would
-  call a secrets manager (Vault, AWS Secrets Manager, etc.) via secret_ref.
+  call a secrets manager (Vault or similar) via secret_ref.
 - If-Match / ETag concurrency is enforced: version must match.
 """
 

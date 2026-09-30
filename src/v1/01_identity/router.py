@@ -1,6 +1,8 @@
 from fastapi import APIRouter
 from routes.auth import router as auth_router
 from routes.calendars import router as calendars_router
+from routes.clients import router as clients_router
+from routes.organizations import router as organizations_router
 from routes.org_units import router as org_units_router
 from routes.rbac import (
     internal_router,
@@ -17,6 +19,8 @@ from routes.verticals import (
 
 core_router = APIRouter()
 core_router.include_router(auth_router, prefix="/auth", tags=["auth"])
+core_router.include_router(clients_router, prefix="/clients", tags=["clients"])
+core_router.include_router(organizations_router, prefix="/organizations", tags=["organizations"])
 core_router.include_router(users_router, prefix="/users", tags=["users"])
 core_router.include_router(org_units_router, prefix="/org-units", tags=["org-units"])
 core_router.include_router(roles_router, prefix="/roles", tags=["roles"])

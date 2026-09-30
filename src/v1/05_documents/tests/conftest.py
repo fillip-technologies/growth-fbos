@@ -1,3 +1,4 @@
+import os
 from pathlib import Path
 import sys
 from typing import AsyncGenerator
@@ -7,6 +8,11 @@ import uuid
 SERVICE_DIR = Path(__file__).resolve().parent.parent
 if str(SERVICE_DIR) not in sys.path:
     sys.path.insert(0, str(SERVICE_DIR))
+
+# Unit tests run against the storage stub; never hit real ImageKit with the keys in .env.
+# (Set before `main`/`config` import; env vars outrank the .env file. IMAGEKIT_LIVE=1 opts out.)
+if os.environ.get("IMAGEKIT_LIVE") != "1":
+    os.environ["IMAGEKIT_PRIVATE_KEY"] = ""
 
 from database.base import Base
 from database.session import get_db_session

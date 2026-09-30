@@ -13,6 +13,7 @@ from exceptions import (
     InvoiceAlreadyIssuedError,
     InvoiceNotFoundError,
     InvoiceNotIssuedError,
+    InvoicePdfNotAvailableError,
     PreconditionRequiredError,
     VersionConflictError,
 )
@@ -492,9 +493,5 @@ class InvoiceService:
         if not inv or inv.organization_id != org_id:
             raise InvoiceNotFoundError(str(invoice_id))
 
-        safe_no = (inv.invoice_no or str(inv.id)).replace("/", "-")
-        return DownloadUrl(
-            url=f"https://fbos-documents.s3.ap-south-1.amazonaws.com/invoices/{safe_no}.pdf",
-            expires_at=datetime.now(timezone.utc) + timedelta(minutes=60),
-            file_name=f"{safe_no}.pdf",
-        )
+        # PDFs are not generated or stored yet; never hand out a link to a file that does not exist.
+        raise InvoicePdfNotAvailableError()

@@ -34,7 +34,10 @@ class UserInviteRequest(BaseModel):
     phone: Optional[str] = None
     employee_code: Optional[str] = None
     user_type: str = "employee"  # employee, contractor, client_user
-    home_unit_id: uuid.UUID
+    # Optional: a user can be invited before being placed in an org unit. Matches the
+    # nullable model column and the invite service, which only wires up a UnitMembership
+    # when a home unit is supplied.
+    home_unit_id: Optional[uuid.UUID] = None
     manager_user_id: Optional[uuid.UUID] = None
     role_assignments: Optional[list[dict[str, Any]]] = None
 

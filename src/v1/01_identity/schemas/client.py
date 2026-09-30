@@ -13,6 +13,11 @@ class ClientCreateRequest(BaseModel):
     # When provided, a first client_admin user is invited into the auto-created org.
     admin_email: Optional[EmailStr] = None
     admin_name: Optional[str] = None
+    # Settings for the client's auto-created first organization. Defaults match the
+    # platform's home region; the client admin can change them later via PATCH.
+    base_currency: str = "INR"
+    fiscal_year_start: str = "04-01"
+    timezone: str = "Asia/Kolkata"
 
 
 class ClientUpdateRequest(BaseModel):

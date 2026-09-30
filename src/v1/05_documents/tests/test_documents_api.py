@@ -42,10 +42,10 @@ async def test_start_upload_success(async_client):
     assert "upload_id" in data
     assert "document_id" in data
     assert data["version_no"] == 1
-    assert data["upload_method"] == "PUT"
+    assert data["upload_method"] == "POST"
     assert "upload_url" in data
-    assert "upload_headers" in data
-    assert data["upload_headers"]["Content-Type"] == "application/pdf"
+    assert data["upload_fields"]["isPrivateFile"] == "true"
+    assert data["upload_fields"]["fileName"]
     assert "expires_at" in data
 
 
