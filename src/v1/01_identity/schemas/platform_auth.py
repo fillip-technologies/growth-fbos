@@ -1,3 +1,5 @@
+from typing import Optional
+
 from pydantic import BaseModel, ConfigDict, EmailStr, field_validator
 
 
@@ -21,3 +23,11 @@ class PlatformLoginResponse(BaseModel):
     access_token: str
     token_type: str = "bearer"
     expires_in: int
+    # Only for non-browser clients; browsers get it as the HttpOnly `fbos_prt` cookie.
+    refresh_token: Optional[str] = None
+
+
+class PlatformRefreshRequest(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
+    refresh_token: Optional[str] = None

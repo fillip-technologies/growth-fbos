@@ -2,12 +2,20 @@ import logging
 from typing import Optional
 import uuid
 
-from sqlalchemy import func, select
+from sqlalchemy import delete, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from exceptions import ClientCodeAlreadyExistsError, ClientNotFoundError, InvalidSubscriptionWindowError
+from models.auth import ApiClient, RefreshToken, UserCredential
+from models.calendar import Calendar, CalendarHoliday
 from models.client import Client
+from models.legal import LegalEntity, TaxRegistration
+from models.membership import UnitMembership
+from models.org_unit import OrgUnit, OrgUnitVertical
 from models.organization import Organization
+from models.rbac import Role, RoleAssignment, RolePermission
+from models.user import User
+from models.vertical import FieldDefinition, VerticalPack
 from schemas.client import ClientCreateRequest, ClientResponse, ClientUpdateRequest
 from schemas.common import PageInfo, PaginatedResponse
 from schemas.organization import DEFAULT_FISCAL_YEAR_START, OrganizationCreateRequest
@@ -104,9 +112,84 @@ class ClientService:
             },
         )
         for topic, payload in org_events:
+            if topic == "identity.user.invited.v1":
+                payload = {
+                    **payload,
+                    "client_name": client.name,
+                    "subscription_start": client.subscription_start.isoformat(),
+                    "subscription_end": client.subscription_end.isoformat(),
+                }
             await event_publisher.publish(topic, payload)
 
         return self._build_response(client, active_organizations_count=1)
+
+    async def delete_client(
+        self,
+        session: AsyncSession,
+        client_id: uuid.UUID,
+        actor_id: Optional[uuid.UUID] = None,
+    ) -> None:
+        """
+        Permanently delete a client with all of its organizations, users, roles, units and
+        credentials, in one transaction (all or nothing). Security audit logs are kept.
+        Data other services hold for these organizations is NOT removed.
+        """
+        client = await session.get(Client, client_id)
+        if not client:
+            raise ClientNotFoundError()
+
+        async def ids(stmt) -> list[uuid.UUID]:
+            return list((await session.execute(stmt)).scalars().all())
+
+        org_ids = await ids(select(Organization.id).where(Organization.client_id == client_id))
+        user_ids = await ids(select(User.id).where(User.organization_id.in_(org_ids))) if org_ids else []
+        role_ids = await ids(select(Role.id).where(Role.organization_id.in_(org_ids))) if org_ids else []
+        unit_ids = await ids(select(OrgUnit.id).where(OrgUnit.organization_id.in_(org_ids))) if org_ids else []
+        entity_ids = await ids(select(LegalEntity.id).where(LegalEntity.organization_id.in_(org_ids))) if org_ids else []
+        calendar_ids = await ids(select(Calendar.id).where(Calendar.organization_id.in_(org_ids))) if org_ids else []
+
+        if org_ids:
+            # Children first; break the self/cross references before deleting their targets.
+            await session.execute(delete(RoleAssignment).where(
+                (RoleAssignment.organization_id.in_(org_ids)) | (RoleAssignment.user_id.in_(user_ids))
+            ))
+            await session.execute(delete(RolePermission).where(RolePermission.role_id.in_(role_ids)))
+            await session.execute(delete(UnitMembership).where(
+                (UnitMembership.user_id.in_(user_ids)) | (UnitMembership.unit_id.in_(unit_ids))
+            ))
+            await session.execute(delete(TaxRegistration).where(
+                (TaxRegistration.legal_entity_id.in_(entity_ids)) | (TaxRegistration.branch_unit_id.in_(unit_ids))
+            ))
+            await session.execute(delete(LegalEntity).where(LegalEntity.organization_id.in_(org_ids)))
+            await session.execute(delete(OrgUnitVertical).where(OrgUnitVertical.org_unit_id.in_(unit_ids)))
+            await session.execute(update(User).where(User.organization_id.in_(org_ids)).values(
+                home_unit_id=None, manager_user_id=None))
+            await session.execute(update(OrgUnit).where(OrgUnit.organization_id.in_(org_ids)).values(
+                head_user_id=None, parent_id=None))
+            await session.execute(delete(OrgUnit).where(OrgUnit.organization_id.in_(org_ids)))
+            await session.execute(delete(CalendarHoliday).where(CalendarHoliday.calendar_id.in_(calendar_ids)))
+            await session.execute(delete(Calendar).where(Calendar.organization_id.in_(org_ids)))
+            await session.execute(delete(FieldDefinition).where(FieldDefinition.organization_id.in_(org_ids)))
+            await session.execute(delete(VerticalPack).where(VerticalPack.organization_id.in_(org_ids)))
+            await session.execute(delete(ApiClient).where(ApiClient.organization_id.in_(org_ids)))
+            await session.execute(delete(RefreshToken).where(RefreshToken.user_id.in_(user_ids)))
+            await session.execute(delete(UserCredential).where(UserCredential.user_id.in_(user_ids)))
+            await session.execute(delete(User).where(User.organization_id.in_(org_ids)))
+            await session.execute(delete(Role).where(Role.organization_id.in_(org_ids)))
+            await session.execute(delete(Organization).where(Organization.client_id == client_id))
+
+        await session.execute(delete(Client).where(Client.id == client_id))
+        await session.commit()
+
+        await event_publisher.publish(
+            "identity.client.deleted.v1",
+            {
+                "client_id": str(client_id),
+                "code": client.code,
+                "organization_ids": [str(o) for o in org_ids],
+                "actor_id": str(actor_id) if actor_id else None,
+            },
+        )
 
     async def list_clients(
         self,

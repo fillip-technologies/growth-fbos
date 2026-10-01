@@ -34,6 +34,10 @@ class Settings(BaseSettings):
     lockout_window_minutes: int = 15  # within 15 minutes
     lockout_duration_minutes: int = 15  # locks account for 15 minutes
 
+    # Shared secret other services send as X-FBOS-Internal-Token on /internal/* calls.
+    # Empty is accepted only when app_env is "development".
+    internal_service_token: str = ""
+
     # Rate Limiting
     auth_rate_limit_per_minute: int = 60
 
@@ -55,9 +59,9 @@ class Settings(BaseSettings):
     mail_password: str = ""
     mail_from_address: str = ""
     mail_from_name: str = "FBOS"
-    # Frontend pages the email links point to (token is appended as ?token=...)
-    invite_accept_url: str = "http://localhost:5174/accept-invitation"
-    password_reset_url: str = "http://localhost:5174/reset-password"
+    # Base URL of the client-admin frontend. Every link in outgoing emails (activate
+    # account, reset password, sign in) is built from it: change it here for staging/prod.
+    client_admin_base_url: str = "http://localhost:5174"
 
 
 settings = Settings()

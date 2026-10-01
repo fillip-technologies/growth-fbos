@@ -11,7 +11,7 @@ The platform consists of **10 specialized microservices** plus a shared MySQL da
 | Port | Service Name | Directory | Responsibilities |
 |:---:|:---|:---|:---|
 | **8000** | **00_gateway** | `src/v1/00_gateway` | API Gateway, Backend-For-Frontend (BFF), Home screen aggregation |
-| **8001** | **01_identity** | `src/v1/01_identity` | Authentication, RBAC, Users, OrgUnits, Calendars |
+| **8001** | **01_identity** | `src/v1/01_identity` | Authentication, user-based access control, Users, OrgUnits, Calendars |
 | **8002** | **02_revenue** | `src/v1/02_revenue` | Commercial CRM, Clients, Deals, Offerings, Invoices, Payments |
 | **8003** | **03_delivery** | `src/v1/03_delivery` | Work Units, Workflow definitions, Tasks, Time tracking |
 | **8004** | **04_control** | `src/v1/04_control` | Approval requests, Delegations, SLA policies, Breaches |

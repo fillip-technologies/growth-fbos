@@ -94,3 +94,17 @@ async def update_client(
     db: AsyncSession = Depends(get_db_session),
 ) -> ClientResponse:
     return await client_service.update_client(session=db, client_id=client_id, data=body)
+
+
+@router.delete(
+    "/{client_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    summary="Permanently delete a client and everything it owns",
+)
+async def delete_client(
+    client_id: uuid.UUID,
+    current_user: TokenPayload = Depends(require_platform_admin),
+    db: AsyncSession = Depends(get_db_session),
+) -> Response:
+    await client_service.delete_client(session=db, client_id=client_id, actor_id=current_user.user_id)
+    return Response(status_code=status.HTTP_204_NO_CONTENT)

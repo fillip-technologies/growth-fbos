@@ -1,23 +1,27 @@
-from collections.abc import AsyncGenerator
+from collections.abc import Awaitable, Callable
 import uuid
 from typing import Optional
 
-from fastapi import Depends, HTTPException, Request, status
+from fastapi import Depends, Header, HTTPException, Request, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 import jwt
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from database.session import get_db_session
 from exceptions import (
+    AccountNotActiveError,
     ClientAdminRequiredError,
-    InvalidCredentialsError,
+    OrganizationNotFoundError,
+    PermissionDeniedError,
     PlatformAdminRequiredError,
     SubscriptionExpiredError,
 )
 from models.client import Client
+from models.organization import Organization
 from models.platform_admin import PlatformAdmin
 from models.user import User
 from schemas.token import TokenPayload
+from services.access_control import Actor, load_grants
 from services.subscription import is_client_usable
 from utils.security import decode_jwt_token
 
@@ -134,3 +138,73 @@ async def require_client_admin(
         raise ClientAdminRequiredError()
 
     return current_user
+
+
+async def _resolve_organization(
+    session: AsyncSession, user: User, requested_org_id: Optional[uuid.UUID]
+) -> uuid.UUID:
+    """
+    The organization the request acts in. Defaults to the user's own organization; a
+    client admin may target any organization of their client via `X-Organization-Id`.
+    Anything else is answered 404 so other tenants' organizations are never confirmed.
+    """
+    if requested_org_id is None or requested_org_id == user.organization_id:
+        return user.organization_id
+
+    if user.user_type != "client_admin":
+        raise OrganizationNotFoundError()
+
+    home_org = await session.get(Organization, user.organization_id)
+    target_org = await session.get(Organization, requested_org_id)
+    if not home_org or not target_org or target_org.client_id != home_org.client_id:
+        raise OrganizationNotFoundError()
+    return target_org.id
+
+
+async def get_actor(
+    current_user: TokenPayload = Depends(get_current_user),
+    x_organization_id: Optional[uuid.UUID] = Header(None, alias="X-Organization-Id"),
+    session: AsyncSession = Depends(get_db_session),
+) -> Actor:
+    """
+    The signed-in user with their effective grants, re-read from the database on every
+    request so a revoked permission or a deactivation takes effect immediately.
+    """
+    if current_user.is_platform_admin:
+        # The platform super-admin manages clients, never the inside of an organization.
+        raise PermissionDeniedError("organization access", "Platform administrators can't act inside organizations")
+
+    user = await session.get(User, current_user.user_id)
+    if not user or str(user.organization_id) != str(current_user.org_id):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail={"code": "INVALID_TOKEN", "message": "Invalid access token", "status": 401},
+        )
+    if user.status != "active":
+        raise AccountNotActiveError()
+
+    organization_id = await _resolve_organization(session, user, x_organization_id)
+    if user.user_type == "client_admin":
+        return Actor(
+            user_id=user.id, organization_id=organization_id, user_type=user.user_type,
+            name=user.name, is_superuser=True,
+        )
+
+    return Actor(
+        user_id=user.id, organization_id=organization_id, user_type=user.user_type,
+        name=user.name, grants=await load_grants(session, user.id),
+    )
+
+
+def require_permission(permission: str) -> Callable[..., Awaitable[Actor]]:
+    """
+    Route guard: the actor must hold `permission` in at least one scope. Record-level
+    scope checks (is *this* record inside one of those scopes?) happen in the service.
+    """
+
+    async def guard(actor: Actor = Depends(get_actor)) -> Actor:
+        actor.require(permission)
+        return actor
+
+    guard.__name__ = f"require_{permission.replace('.', '_')}"
+    return guard

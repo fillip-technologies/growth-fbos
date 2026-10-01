@@ -57,6 +57,7 @@ class RoleResponse(BaseModel):
     name: str
     is_system: bool
     permissions: list[str] = Field(default_factory=list)
+    version: int = 1
 
 
 class PermissionResponse(BaseModel):

@@ -46,7 +46,7 @@ class EventPublisher:
         data = event.data
         coro = None
         if event.event_type == "identity.user.invited.v1" and data.get("invitation_token") and data.get("email"):
-            coro = email_service.send_invitation(data["email"], data["invitation_token"], data.get("user_type"))
+            coro = email_service.send_invitation(data)
         elif event.event_type == "identity.password.reset_requested.v1" and data.get("token") and data.get("email"):
             coro = email_service.send_password_reset(data["email"], data["token"])
         if coro is None:
