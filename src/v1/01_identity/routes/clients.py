@@ -5,7 +5,8 @@ from fastapi import APIRouter, Depends, Header, Query, Response, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from database.session import get_db_session
-from dependencies import require_platform_admin
+from exceptions import ClientAdminRequiredError
+from dependencies import require_client_admin, require_platform_admin
 from schemas.client import ClientCreateRequest, ClientResponse, ClientUpdateRequest
 from schemas.common import PaginatedResponse
 from schemas.token import TokenPayload
@@ -47,6 +48,23 @@ async def list_clients(
     db: AsyncSession = Depends(get_db_session),
 ) -> PaginatedResponse[ClientResponse]:
     return await client_service.list_clients(session=db, limit=limit, cursor=cursor)
+
+
+@router.get(
+    "/me",
+    response_model=ClientResponse,
+    status_code=status.HTTP_200_OK,
+    summary="Get the caller's own client (subscription window, quotas)",
+)
+async def get_my_client(
+    current_user: TokenPayload = Depends(require_client_admin),
+    db: AsyncSession = Depends(get_db_session),
+) -> ClientResponse:
+    # Declared before "/{client_id}" so "me" is not parsed as a UUID. The client comes
+    # from the token, never from the URL, so a client admin can only ever see their own.
+    if current_user.client_id is None:
+        raise ClientAdminRequiredError()
+    return await client_service.get_client(session=db, client_id=current_user.client_uuid)
 
 
 @router.get(

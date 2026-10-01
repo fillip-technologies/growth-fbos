@@ -459,3 +459,21 @@ async def test_expired_client_is_locked_out_until_renewed(db_session):
         data=ClientUpdateRequest(subscription_end=date.today() + timedelta(days=365)),
     )
     await auth_service._assert_subscription_active(db_session, user)  # no longer raises
+
+
+@pytest.mark.asyncio
+async def test_client_admin_reads_only_own_client(async_client, db_session):
+    from tests.conftest import TEST_CLIENT_ID
+
+    app.dependency_overrides[require_client_admin] = lambda: TokenPayload(
+        sub=str(TEST_USER_ID), user_type="client_admin", client_id=str(TEST_CLIENT_ID), type="access",
+    )
+    try:
+        res = await async_client.get("/api/identity/v1/clients/me")
+    finally:
+        app.dependency_overrides.pop(require_client_admin, None)
+    assert res.status_code == 200
+    body = res.json()
+    assert body["id"] == str(TEST_CLIENT_ID)
+    assert body["subscription_state"] == "active"
+    assert body["subscription_end"]

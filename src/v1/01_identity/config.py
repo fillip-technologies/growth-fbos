@@ -56,8 +56,8 @@ class Settings(BaseSettings):
     mail_from_address: str = ""
     mail_from_name: str = "FBOS"
     # Frontend pages the email links point to (token is appended as ?token=...)
-    invite_accept_url: str = "http://localhost:5173/accept-invitation"
-    password_reset_url: str = "http://localhost:5173/reset-password"
+    invite_accept_url: str = "http://localhost:5174/accept-invitation"
+    password_reset_url: str = "http://localhost:5174/reset-password"
 
 
 settings = Settings()
