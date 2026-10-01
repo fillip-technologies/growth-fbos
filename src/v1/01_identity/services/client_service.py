@@ -5,14 +5,15 @@ import uuid
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from exceptions import ClientCodeAlreadyExistsError, ClientNotFoundError
+from exceptions import ClientCodeAlreadyExistsError, ClientNotFoundError, InvalidSubscriptionWindowError
 from models.client import Client
 from models.organization import Organization
 from schemas.client import ClientCreateRequest, ClientResponse, ClientUpdateRequest
 from schemas.common import PageInfo, PaginatedResponse
-from schemas.organization import OrganizationCreateRequest
+from schemas.organization import DEFAULT_FISCAL_YEAR_START, OrganizationCreateRequest
 from services.event_publisher import event_publisher
 from services.organization_service import organization_service
+from services.subscription import add_one_year, subscription_state, today_utc
 
 logger = logging.getLogger("identity.client_service")
 
@@ -29,6 +30,9 @@ class ClientService:
             status=client.status,
             max_organizations=client.max_organizations,
             max_users_per_org=client.max_users_per_org,
+            subscription_start=client.subscription_start,
+            subscription_end=client.subscription_end,
+            subscription_state=subscription_state(client),
             active_organizations_count=active_organizations_count,
             created_at=client.created_at.isoformat() if client.created_at else None,
         )
@@ -50,6 +54,11 @@ class ClientService:
         if duplicate.scalar_one_or_none():
             raise ClientCodeAlreadyExistsError(data.code)
 
+        start = data.subscription_start or today_utc()
+        end = data.subscription_end or add_one_year(start)
+        if end < start:
+            raise InvalidSubscriptionWindowError()
+
         client = Client(
             id=uuid.uuid4(),
             name=data.name,
@@ -58,6 +67,8 @@ class ClientService:
             status="active",
             max_organizations=data.max_organizations if data.max_organizations is not None else 2,
             max_users_per_org=data.max_users_per_org if data.max_users_per_org is not None else 50,
+            subscription_start=start,
+            subscription_end=end,
         )
         session.add(client)
         await session.flush()
@@ -67,7 +78,7 @@ class ClientService:
             code=data.code,
             email=data.contact_email,
             base_currency=data.base_currency,
-            fiscal_year_start=data.fiscal_year_start,
+            fiscal_year_start=DEFAULT_FISCAL_YEAR_START,
             timezone=data.timezone,
             admin_email=data.admin_email,
             admin_name=data.admin_name,
@@ -165,6 +176,13 @@ class ClientService:
             client.max_organizations = data.max_organizations
         if data.max_users_per_org is not None:
             client.max_users_per_org = data.max_users_per_org
+        if data.subscription_start is not None:
+            client.subscription_start = data.subscription_start
+        if data.subscription_end is not None:
+            client.subscription_end = data.subscription_end
+        if client.subscription_end < client.subscription_start:
+            await session.rollback()
+            raise InvalidSubscriptionWindowError()
 
         await session.commit()
         await session.refresh(client)

@@ -1,4 +1,5 @@
 from collections.abc import AsyncGenerator
+import uuid
 from typing import Optional
 
 from fastapi import Depends, HTTPException, Request, status
@@ -11,10 +12,13 @@ from exceptions import (
     ClientAdminRequiredError,
     InvalidCredentialsError,
     PlatformAdminRequiredError,
+    SubscriptionExpiredError,
 )
+from models.client import Client
 from models.platform_admin import PlatformAdmin
 from models.user import User
 from schemas.token import TokenPayload
+from services.subscription import is_client_usable
 from utils.security import decode_jwt_token
 
 bearer_scheme = HTTPBearer(auto_error=False)
@@ -36,6 +40,7 @@ def get_user_agent(request: Request) -> str:
 async def get_current_user(
     request: Request,
     credentials: Optional[HTTPAuthorizationCredentials] = Depends(bearer_scheme),
+    session: AsyncSession = Depends(get_db_session),
 ) -> TokenPayload:
     """
     Validate access token and return token payload for authenticated endpoints.
@@ -71,6 +76,13 @@ async def get_current_user(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail={"code": "INVALID_TOKEN", "message": "Token is not an access token", "status": 401},
         )
+
+    # Total lock: a client outside its service window is rejected even with a still-valid
+    # access token. Platform admins carry no client_id and are never locked out.
+    if payload.get("client_id"):
+        client = await session.get(Client, uuid.UUID(str(payload["client_id"])))
+        if not is_client_usable(client):
+            raise SubscriptionExpiredError()
 
     return TokenPayload(
         sub=payload["sub"],

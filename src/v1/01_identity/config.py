@@ -45,5 +45,19 @@ class Settings(BaseSettings):
     db_pool_timeout: int = 30
     db_pool_recycle: int = 1800
 
+    # Mail (SMTP)
+    mail_enabled: bool = False  # explicit opt-in so tests/dev never send real mail
+    mail_mailer: str = "smtp"
+    mail_host: str = ""
+    mail_port: int = 587
+    mail_encryption: str = "tls"
+    mail_username: str = ""
+    mail_password: str = ""
+    mail_from_address: str = ""
+    mail_from_name: str = "FBOS"
+    # Frontend pages the email links point to (token is appended as ?token=...)
+    invite_accept_url: str = "http://localhost:5173/accept-invitation"
+    password_reset_url: str = "http://localhost:5173/reset-password"
+
 
 settings = Settings()

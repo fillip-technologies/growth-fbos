@@ -409,6 +409,28 @@ class ClientCodeAlreadyExistsError(IdentityServiceError):
         )
 
 
+class SubscriptionExpiredError(IdentityServiceError):
+    """403: The client's service window has ended (or not started), or the client is not active."""
+
+    def __init__(self, message: str = "Your organization's subscription is not active. Please contact support to renew.") -> None:
+        super().__init__(
+            status_code=status.HTTP_403_FORBIDDEN,
+            code="SUBSCRIPTION_EXPIRED",
+            message=message,
+        )
+
+
+class InvalidSubscriptionWindowError(IdentityServiceError):
+    """422: subscription_end is before subscription_start."""
+
+    def __init__(self) -> None:
+        super().__init__(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            code="INVALID_SUBSCRIPTION_WINDOW",
+            message="subscription_end must be on or after subscription_start",
+        )
+
+
 class OrganizationNotFoundError(IdentityServiceError):
     """404: Organization not found."""
 

@@ -122,7 +122,7 @@ async def test_client_admin_creates_and_scopes_second_org(db_session):
             name="Acme India",
             code="ACME-IN", email="org@acme-in.example.com",
             base_currency="INR",
-            fiscal_year_start="04-01",
+            fiscal_year_start="01-04",
             timezone="Asia/Kolkata",
         ),
     )
@@ -141,7 +141,7 @@ async def test_client_admin_creates_and_scopes_second_org(db_session):
             client_id=client.id,
             data=OrganizationCreateRequest(
                 name="Dup", code="acme-in", email="org@acme-in.example.com", base_currency="INR",
-                fiscal_year_start="04-01", timezone="Asia/Kolkata",
+                fiscal_year_start="01-04", timezone="Asia/Kolkata",
             ),
         )
 
@@ -178,7 +178,7 @@ async def test_parentless_org_is_rejected(db_session):
             code="ORPHAN",
             email="orphan@example.com",
             base_currency="USD",
-            fiscal_year_start="01-01",
+            fiscal_year_start="01-04",
             timezone="UTC",
             status="active",
         )
@@ -266,7 +266,7 @@ async def test_client_and_org_endpoints_end_to_end(async_client, db_session):
             "code": "GLOBEX-US",
             "email": "org@globex-us.example.com",
             "base_currency": "USD",
-            "fiscal_year_start": "01-01",
+            "fiscal_year_start": "01-04",
             "timezone": "America/New_York",
         },
     )
@@ -296,7 +296,7 @@ async def test_org_endpoint_rejects_admin_without_client_scope(async_client):
             "code": "ORPHAN",
             "email": "orphan@example.com",
             "base_currency": "USD",
-            "fiscal_year_start": "01-01",
+            "fiscal_year_start": "01-04",
             "timezone": "UTC",
         },
     )
@@ -391,3 +391,71 @@ async def test_organization_user_limit_enforced(db_session):
     assert exc_info.value.meta["limit"] == 2
     assert exc_info.value.meta["current"] == 2
 
+
+
+# --------------------------------------------------------------------------- #
+# Subscription window & fiscal-year ownership
+# --------------------------------------------------------------------------- #
+
+@pytest.mark.asyncio
+async def test_create_client_defaults_subscription_window_and_fiscal_year(db_session):
+    from datetime import date
+
+    client = await client_service.create_client(
+        session=db_session,
+        data=ClientCreateRequest(name="Acme", code="ACME", contact_email="ops@acme.example.com"),
+    )
+    assert client.subscription_start == date.today()
+    assert client.subscription_end.year == client.subscription_start.year + 1
+    assert client.subscription_state == "active"
+
+    org = (await db_session.execute(select(Organization).where(Organization.client_id == client.id))).scalar_one()
+    assert org.fiscal_year_start == "01-04"  # DD-MM, set by default; client admin owns changes
+
+
+@pytest.mark.asyncio
+async def test_invalid_subscription_window_rejected(db_session):
+    from datetime import date, timedelta
+
+    from exceptions import InvalidSubscriptionWindowError
+
+    client = await client_service.create_client(
+        session=db_session,
+        data=ClientCreateRequest(name="Acme", code="ACME", contact_email="ops@acme.example.com"),
+    )
+    with pytest.raises(InvalidSubscriptionWindowError):
+        await client_service.update_client(
+            session=db_session,
+            client_id=client.id,
+            data=ClientUpdateRequest(subscription_end=date.today() - timedelta(days=5)),
+        )
+
+
+@pytest.mark.asyncio
+async def test_expired_client_is_locked_out_until_renewed(db_session):
+    from datetime import date, timedelta
+
+    from exceptions import SubscriptionExpiredError
+    from services.auth_service import auth_service
+
+    client = await client_service.create_client(
+        session=db_session,
+        data=ClientCreateRequest(
+            name="Acme", code="ACME", contact_email="ops@acme.example.com",
+            admin_email="admin@acme.example.com",
+            subscription_start=date.today() - timedelta(days=400),
+            subscription_end=date.today() - timedelta(days=35),
+        ),
+    )
+    assert client.subscription_state == "expired"
+    user = (await db_session.execute(select(User).where(User.email == "admin@acme.example.com"))).scalar_one()
+
+    with pytest.raises(SubscriptionExpiredError):
+        await auth_service._assert_subscription_active(db_session, user)
+
+    await client_service.update_client(
+        session=db_session,
+        client_id=client.id,
+        data=ClientUpdateRequest(subscription_end=date.today() + timedelta(days=365)),
+    )
+    await auth_service._assert_subscription_active(db_session, user)  # no longer raises

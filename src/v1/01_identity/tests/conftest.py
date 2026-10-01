@@ -1,7 +1,12 @@
+from datetime import date, timedelta
+import os
 from pathlib import Path
 import sys
 from typing import AsyncGenerator
 import uuid
+
+# Never send real mail from tests, whatever .env says.
+os.environ["MAIL_ENABLED"] = "false"
 
 # Ensure 01_identity is in Python path
 SERVICE_DIR = Path(__file__).resolve().parent.parent
@@ -56,6 +61,8 @@ async def db_session(test_engine) -> AsyncGenerator[AsyncSession, None]:
         client = Client(
             id=TEST_CLIENT_ID, name="Test Client", code="TEST-CLIENT",
             contact_email="ops@test-client.example.com",
+            subscription_start=date.today() - timedelta(days=1),
+            subscription_end=date.today() + timedelta(days=365),
         )
         session.add(client)
         await session.flush()
@@ -66,7 +73,7 @@ async def db_session(test_engine) -> AsyncGenerator[AsyncSession, None]:
             code="TEST",
             email="org@test.example.com",
             base_currency="USD",
-            fiscal_year_start="01-01",
+            fiscal_year_start="01-04",
             timezone="UTC",
             status="active",
         )

@@ -12,6 +12,7 @@ import pyotp
 
 from config import settings
 from exceptions import (
+    SubscriptionExpiredError,
     AccountLockedError,
     AccountNotActiveError,
     ClientCredentialsInvalidError,
@@ -26,6 +27,7 @@ from exceptions import (
     ResetTokenInvalidError,
     UserNotFoundError,
 )
+from models.client import Client
 from models.auth import ApiClient, RefreshToken, UserCredential
 from models.org_unit import OrgUnit
 from models.organization import Organization
@@ -60,6 +62,7 @@ from services.alert_service import alert_service
 from services.audit_service import audit_service
 from services.event_publisher import event_publisher
 from services.rate_limiter import rate_limiter
+from services.subscription import is_client_usable
 from utils.security import (
     create_access_token,
     create_mfa_token,
@@ -155,6 +158,13 @@ class AuthService:
             timezone=tz,
             locale=None,
         )
+
+    async def _assert_subscription_active(self, session: AsyncSession, user: User) -> None:
+        """Total lock: users of a client that is inactive or outside its service window cannot sign in."""
+        org = await session.get(Organization, user.organization_id)
+        client = await session.get(Client, org.client_id) if org else None
+        if not is_client_usable(client):
+            raise SubscriptionExpiredError()
 
     async def _access_token_for(
         self, session: AsyncSession, user: User, family_id: uuid.UUID
@@ -296,6 +306,9 @@ class AuthService:
                     )
                     await session.commit()
                     raise InvalidCredentialsError()
+
+        # 2b. Client subscription window (expired / inactive client -> 403 SUBSCRIPTION_EXPIRED)
+        await self._assert_subscription_active(session, user)
 
         # 3. Check account active status (invited, suspended, deactivated -> 403)
         user_status = getattr(user, "status", "active")
@@ -573,6 +586,8 @@ class AuthService:
         if user_status != "active" or user.user_type in ("invited", "suspended", "deactivated"):
             raise AccountNotActiveError()
 
+        await self._assert_subscription_active(session, user)
+
         credential = await session.get(UserCredential, user_id)
         if not credential or not credential.otp_secret_enc:
             raise MfaCodeInvalidError()
@@ -771,6 +786,8 @@ class AuthService:
         user_status = getattr(user, "status", "active")
         if user_status != "active" or user.user_type in ("invited", "suspended", "deactivated"):
             raise AccountNotActiveError()
+
+        await self._assert_subscription_active(session, user)
 
         new_token_id = uuid.uuid4()
         new_refresh_token_str = create_refresh_token(
