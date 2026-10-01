@@ -20,8 +20,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from sqlalchemy import select
 
-from database.base import Base
-from database.session import async_session_factory, dispose_engine, engine
+from database.session import async_session_factory, dispose_engine
 from models.platform_admin import PlatformAdmin
 from models.rbac import Permission
 from utils.security import hash_password
@@ -44,10 +43,7 @@ SAMPLE_PERMS = [
 async def seed_identity():
     print("🌱 [01_identity] Starting seed process...")
 
-    # 1. Ensure tables exist
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
-
+    # 1. Tables come from Alembic migrations — run `alembic upgrade head` first.
     async with async_session_factory() as session:
         # 2. Permission catalog (global; consumed by org bootstrap via the API)
         for p_code, p_svc, p_desc in SAMPLE_PERMS:

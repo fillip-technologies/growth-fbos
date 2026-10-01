@@ -46,7 +46,8 @@ class Me(BaseModel):
     email: str
     user_type: str
     client_id: Optional[uuid.UUID] = None
-    organization: OrganizationRef
+    # None only for the platform super-admin, which belongs to no organization.
+    organization: Optional[OrganizationRef] = None
     home_unit: Optional[HomeUnitRef] = None
     roles: list[MeRoleItem]
     permissions: list[str]

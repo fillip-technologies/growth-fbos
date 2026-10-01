@@ -65,6 +65,7 @@ class ClientService:
         first_org = OrganizationCreateRequest(
             name=data.name,
             code=data.code,
+            email=data.contact_email,
             base_currency=data.base_currency,
             fiscal_year_start=data.fiscal_year_start,
             timezone=data.timezone,

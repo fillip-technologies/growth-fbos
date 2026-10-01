@@ -132,6 +132,9 @@ docker compose exec documents python seed.py
 
 ### Method D: Seed Directly from Host Machine (via Exposed Port 3307)
 ```bash
+# Identity tables come from Alembic only — migrate before seeding.
+(cd src/v1/01_identity && DATABASE_URL="mysql+aiomysql://root:fbos_root_password@localhost:3307/fbos_identity" \
+  python3 -m alembic upgrade head)
 DATABASE_URL="mysql+aiomysql://root:fbos_root_password@localhost:3307/fbos_identity" \
   PYTHONPATH=src/v1/01_identity python3 src/v1/01_identity/seed.py
 

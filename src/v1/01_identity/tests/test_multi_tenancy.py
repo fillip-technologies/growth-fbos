@@ -101,18 +101,18 @@ async def test_create_client_provisions_org_admin_and_roles(db_session):
 @pytest.mark.asyncio
 async def test_create_client_duplicate_code_rejected(db_session):
     await client_service.create_client(
-        session=db_session, data=ClientCreateRequest(name="Acme", code="ACME")
+        session=db_session, data=ClientCreateRequest(name="Acme", code="ACME", contact_email="ops@acme.example.com")
     )
     with pytest.raises(ClientCodeAlreadyExistsError):
         await client_service.create_client(
-            session=db_session, data=ClientCreateRequest(name="Acme 2", code="acme")
+            session=db_session, data=ClientCreateRequest(name="Acme 2", code="acme", contact_email="ops@acme.example.com")
         )
 
 
 @pytest.mark.asyncio
 async def test_client_admin_creates_and_scopes_second_org(db_session):
     client = await client_service.create_client(
-        session=db_session, data=ClientCreateRequest(name="Acme", code="ACME")
+        session=db_session, data=ClientCreateRequest(name="Acme", code="ACME", contact_email="ops@acme.example.com")
     )
 
     org = await organization_service.create_organization(
@@ -120,7 +120,7 @@ async def test_client_admin_creates_and_scopes_second_org(db_session):
         client_id=client.id,
         data=OrganizationCreateRequest(
             name="Acme India",
-            code="ACME-IN",
+            code="ACME-IN", email="org@acme-in.example.com",
             base_currency="INR",
             fiscal_year_start="04-01",
             timezone="Asia/Kolkata",
@@ -140,7 +140,7 @@ async def test_client_admin_creates_and_scopes_second_org(db_session):
             session=db_session,
             client_id=client.id,
             data=OrganizationCreateRequest(
-                name="Dup", code="acme-in", base_currency="INR",
+                name="Dup", code="acme-in", email="org@acme-in.example.com", base_currency="INR",
                 fiscal_year_start="04-01", timezone="Asia/Kolkata",
             ),
         )
@@ -149,7 +149,7 @@ async def test_client_admin_creates_and_scopes_second_org(db_session):
 @pytest.mark.asyncio
 async def test_get_organization_is_client_scoped(db_session):
     client = await client_service.create_client(
-        session=db_session, data=ClientCreateRequest(name="Acme", code="ACME")
+        session=db_session, data=ClientCreateRequest(name="Acme", code="ACME", contact_email="ops@acme.example.com")
     )
     org = (
         await db_session.execute(
@@ -176,6 +176,7 @@ async def test_parentless_org_is_rejected(db_session):
             client_id=None,  # mandatory -> must be rejected
             name="Orphan Org",
             code="ORPHAN",
+            email="orphan@example.com",
             base_currency="USD",
             fiscal_year_start="01-01",
             timezone="UTC",
@@ -219,7 +220,7 @@ async def test_platform_admin_login_issues_independent_token(db_session):
 @pytest.mark.asyncio
 async def test_update_client(db_session):
     client = await client_service.create_client(
-        session=db_session, data=ClientCreateRequest(name="Acme", code="ACME")
+        session=db_session, data=ClientCreateRequest(name="Acme", code="ACME", contact_email="ops@acme.example.com")
     )
     updated = await client_service.update_client(
         session=db_session,
@@ -243,7 +244,7 @@ async def test_client_and_org_endpoints_end_to_end(async_client, db_session):
 
     create_res = await async_client.post(
         "/api/identity/v1/clients",
-        json={"name": "Globex", "code": "GLOBEX", "admin_email": "admin@globex.example.com"},
+        json={"name": "Globex", "code": "GLOBEX", "contact_email": "ops@globex.example.com", "admin_email": "admin@globex.example.com"},
     )
     assert create_res.status_code == 201
     assert "Location" in create_res.headers
@@ -263,6 +264,7 @@ async def test_client_and_org_endpoints_end_to_end(async_client, db_session):
         json={
             "name": "Globex US",
             "code": "GLOBEX-US",
+            "email": "org@globex-us.example.com",
             "base_currency": "USD",
             "fiscal_year_start": "01-01",
             "timezone": "America/New_York",
@@ -292,6 +294,7 @@ async def test_org_endpoint_rejects_admin_without_client_scope(async_client):
         json={
             "name": "Orphan",
             "code": "ORPHAN",
+            "email": "orphan@example.com",
             "base_currency": "USD",
             "fiscal_year_start": "01-01",
             "timezone": "UTC",
@@ -309,7 +312,7 @@ async def test_client_organization_limit_enforced(db_session):
         session=db_session,
         data=ClientCreateRequest(
             name="Quota Corp",
-            code="QUOTA",
+            code="QUOTA", contact_email="ops@quota.example.com",
             admin_email="admin@quota.example.com",
             max_organizations=2,
         ),
@@ -319,7 +322,7 @@ async def test_client_organization_limit_enforced(db_session):
     second_org = await organization_service.create_organization(
         session=db_session,
         client_id=client.id,
-        data=OrganizationCreateRequest(name="Quota Sub 1", code="QUOTA-SUB1"),
+        data=OrganizationCreateRequest(name="Quota Sub 1", code="QUOTA-SUB1", email="org@quota-sub1.example.com"),
     )
     assert second_org.code == "QUOTA-SUB1"
 
@@ -328,7 +331,7 @@ async def test_client_organization_limit_enforced(db_session):
         await organization_service.create_organization(
             session=db_session,
             client_id=client.id,
-            data=OrganizationCreateRequest(name="Quota Sub 2", code="QUOTA-SUB2"),
+            data=OrganizationCreateRequest(name="Quota Sub 2", code="QUOTA-SUB2", email="org@quota-sub2.example.com"),
         )
     assert exc_info.value.code == "CLIENT_ORGANIZATION_LIMIT_REACHED"
     assert exc_info.value.meta["limit"] == 2
@@ -345,7 +348,7 @@ async def test_client_organization_limit_enforced(db_session):
     third_org = await organization_service.create_organization(
         session=db_session,
         client_id=client.id,
-        data=OrganizationCreateRequest(name="Quota Sub 2", code="QUOTA-SUB2"),
+        data=OrganizationCreateRequest(name="Quota Sub 2", code="QUOTA-SUB2", email="org@quota-sub2.example.com"),
     )
     assert third_org.code == "QUOTA-SUB2"
 
@@ -357,7 +360,7 @@ async def test_organization_user_limit_enforced(db_session):
         session=db_session,
         data=ClientCreateRequest(
             name="UserQuota Corp",
-            code="UQUOTA",
+            code="UQUOTA", contact_email="ops@uquota.example.com",
             admin_email="admin@uquota.example.com",
             max_users_per_org=2,
         ),

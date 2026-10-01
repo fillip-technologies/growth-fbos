@@ -10,6 +10,7 @@ class OrganizationCreateRequest(BaseModel):
     # The owning client is always taken from the caller's token, never the body.
     name: str
     code: str  # unique slug, e.g. "ACME-IN"
+    email: EmailStr
     base_currency: str
     fiscal_year_start: str  # e.g. "04-01"
     timezone: str
@@ -22,6 +23,7 @@ class OrganizationUpdateRequest(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
     name: Optional[str] = None
+    email: Optional[EmailStr] = None
     base_currency: Optional[str] = None
     fiscal_year_start: Optional[str] = None
     timezone: Optional[str] = None
@@ -35,6 +37,7 @@ class OrganizationResponse(BaseModel):
     client_id: Optional[uuid.UUID] = None
     name: str
     code: Optional[str] = None
+    email: str
     base_currency: str
     fiscal_year_start: str
     timezone: str

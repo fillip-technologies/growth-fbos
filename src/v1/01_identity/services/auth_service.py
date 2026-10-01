@@ -29,6 +29,7 @@ from exceptions import (
 from models.auth import ApiClient, RefreshToken, UserCredential
 from models.org_unit import OrgUnit
 from models.organization import Organization
+from models.platform_admin import PlatformAdmin
 from models.rbac import Role, RoleAssignment, RolePermission
 from models.user import User
 from models.vertical import Vertical
@@ -886,6 +887,23 @@ class AuthService:
         rate_limiter.check(f"{current_user.sub}:me", rate_class="standard")
 
         user_id = uuid.UUID(current_user.sub)
+
+        # The platform super-admin lives in `platform_admins`, not `users`.
+        if current_user.is_platform_admin:
+            admin = await session.get(PlatformAdmin, user_id)
+            if not admin or admin.status != "active":
+                raise UserNotFoundError()
+            return Me(
+                id=admin.id,
+                name=admin.name,
+                email=admin.email,
+                user_type="platform_admin",
+                organization=None,
+                roles=[],
+                permissions=[],
+                mfa_enabled=False,
+            )
+
         user = await session.get(User, user_id)
         if not user:
             raise UserNotFoundError()

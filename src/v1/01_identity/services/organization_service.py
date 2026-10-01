@@ -44,6 +44,7 @@ class OrganizationService:
             client_id=org.client_id,
             name=org.name,
             code=org.code,
+            email=org.email,
             base_currency=org.base_currency,
             fiscal_year_start=org.fiscal_year_start,
             timezone=org.timezone,
@@ -195,6 +196,7 @@ class OrganizationService:
             client_id=client_id,
             name=data.name,
             code=data.code,
+            email=data.email,
             base_currency=data.base_currency,
             fiscal_year_start=data.fiscal_year_start,
             timezone=data.timezone,
@@ -319,6 +321,8 @@ class OrganizationService:
 
         if data.name is not None:
             org.name = data.name
+        if data.email is not None:
+            org.email = data.email
         if data.base_currency is not None:
             org.base_currency = data.base_currency
         if data.fiscal_year_start is not None:

@@ -9,7 +9,8 @@ class ClientCreateRequest(BaseModel):
 
     name: str
     code: str  # unique slug, e.g. "ACME"
-    contact_email: Optional[EmailStr] = None
+    # Required; also becomes the email of the client's auto-created first organization.
+    contact_email: EmailStr
     # When provided, a first client_admin user is invited into the auto-created org.
     admin_email: Optional[EmailStr] = None
     admin_name: Optional[str] = None
@@ -39,7 +40,7 @@ class ClientResponse(BaseModel):
     id: uuid.UUID
     name: str
     code: str
-    contact_email: Optional[str] = None
+    contact_email: str
     status: str
     max_organizations: int = 2
     max_users_per_org: int = 50

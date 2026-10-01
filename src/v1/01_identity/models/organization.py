@@ -20,6 +20,7 @@ class Organization(Base):
     )
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     code: Mapped[Optional[str]] = mapped_column(String(100), unique=True, nullable=True, index=True)
+    email: Mapped[str] = mapped_column(String(255), nullable=False)
     base_currency: Mapped[str] = mapped_column(String(10), nullable=False)
     fiscal_year_start: Mapped[str] = mapped_column(String(5), nullable=False)  # e.g. "01-01"
     timezone: Mapped[str] = mapped_column(String(100), nullable=False)

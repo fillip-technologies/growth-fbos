@@ -4,8 +4,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 
-from database.base import Base
-from database.session import dispose_engine, engine
+from database.session import dispose_engine
 from exceptions import IdentityServiceError
 import models  # noqa: F401 - Register all models with Base.metadata
 from router import router
@@ -52,8 +51,7 @@ _PROBLEM_META: dict[str, tuple[str, bool]] = {
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
+    # Schema is owned by Alembic (`alembic upgrade head` runs in start.sh).
     yield
     await dispose_engine()
 

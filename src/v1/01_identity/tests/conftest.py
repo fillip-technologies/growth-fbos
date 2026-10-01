@@ -53,7 +53,10 @@ async def db_session(test_engine) -> AsyncGenerator[AsyncSession, None]:
         # Seed test client, organization and user. The org must have a client
         # parent to satisfy the client-required constraint (only the platform
         # system org may be parentless).
-        client = Client(id=TEST_CLIENT_ID, name="Test Client", code="TEST-CLIENT")
+        client = Client(
+            id=TEST_CLIENT_ID, name="Test Client", code="TEST-CLIENT",
+            contact_email="ops@test-client.example.com",
+        )
         session.add(client)
         await session.flush()
         org = Organization(
@@ -61,6 +64,7 @@ async def db_session(test_engine) -> AsyncGenerator[AsyncSession, None]:
             client_id=TEST_CLIENT_ID,
             name="Test Corp",
             code="TEST",
+            email="org@test.example.com",
             base_currency="USD",
             fiscal_year_start="01-01",
             timezone="UTC",

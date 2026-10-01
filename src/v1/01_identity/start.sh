@@ -2,7 +2,7 @@
 set -e
 
 echo "Running Alembic migrations for identity service..."
-alembic upgrade head || true
+alembic upgrade head
 
 if [ -f "seed.py" ]; then
     echo "Running seed script for identity service..."

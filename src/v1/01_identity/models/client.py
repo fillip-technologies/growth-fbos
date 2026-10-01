@@ -17,7 +17,7 @@ class Client(Base):
     id: Mapped[uuid.UUID] = mapped_column(UUIDType, primary_key=True, default=uuid.uuid4)
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     code: Mapped[str] = mapped_column(String(100), unique=True, nullable=False, index=True)
-    contact_email: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    contact_email: Mapped[str] = mapped_column(String(255), nullable=False)
     status: Mapped[str] = mapped_column(String(50), nullable=False, default="active")
     max_organizations: Mapped[int] = mapped_column(Integer, nullable=False, default=2)
     max_users_per_org: Mapped[int] = mapped_column(Integer, nullable=False, default=50)
