@@ -312,6 +312,17 @@ async def test_auth_extended_flows(async_client: httpx.AsyncClient):
 
 
 @pytest.mark.asyncio
+async def test_logout_clears_session_cookies(async_client: httpx.AsyncClient):
+    res = await async_client.post("/api/identity/v1/auth/logout")
+    assert res.status_code == 204
+
+    # Both browser session cookies are expired on the returned response.
+    cleared = res.headers.get_list("set-cookie")
+    assert any(c.startswith("fbos_rt=") and "Max-Age=0" in c for c in cleared)
+    assert any(c.startswith("fbos_csrf=") and "Max-Age=0" in c for c in cleared)
+
+
+@pytest.mark.asyncio
 async def test_invitation_and_reset_password_flow(async_client: httpx.AsyncClient, db_session):
     # 1. Invite a user
     invite_res = await async_client.post(

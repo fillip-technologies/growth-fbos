@@ -175,7 +175,6 @@ async def refresh_token(
 )
 async def logout(
     request: Request,
-    response: Response,
     current_user: TokenPayload = Depends(get_current_user),
     session: AsyncSession = Depends(get_db_session),
 ) -> Response:
@@ -189,8 +188,12 @@ async def logout(
         user_agent=user_agent,
     )
 
-    clear_auth_cookies(response)
-    return Response(status_code=status.HTTP_204_NO_CONTENT)
+    # Clear the cookies on the response we actually return: FastAPI ignores
+    # headers set on an injected `response` when the handler returns its own.
+    
+    no_content = Response(status_code=status.HTTP_204_NO_CONTENT)
+    clear_auth_cookies(no_content)
+    return no_content
 
 
 @router.get(
