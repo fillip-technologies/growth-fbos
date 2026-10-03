@@ -102,6 +102,39 @@ docker compose down
 docker compose down -v
 ```
 
+### 7. Development Mode (Live Reload, No Rebuilds)
+
+By default the code is copied into each image at build time, so a code change only takes effect after `docker compose up -d --build <service>`. For day-to-day development, use the dev override instead: it mounts each service's source folder into its container and runs uvicorn with `--reload`, so **saving a `.py` file restarts that service within a couple of seconds**.
+
+```bash
+# Start (or switch) the whole stack in dev mode:
+docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d
+
+# Or just one service:
+docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d revenue
+```
+
+To avoid typing both files every time, set them once in your shell (or put `COMPOSE_FILE=docker-compose.yml:docker-compose.dev.yml` in the root `.env`):
+
+```bash
+export COMPOSE_FILE=docker-compose.yml:docker-compose.dev.yml   # bash/zsh
+set -x COMPOSE_FILE docker-compose.yml:docker-compose.dev.yml   # fish
+docker compose up -d
+```
+
+| You changed... | What to do |
+|---|---|
+| Python code (`routes/`, `services/`, `schemas/`, `models/`…) | Nothing — the service reloads automatically |
+| A new Alembic migration | `docker compose restart <service>` (migrations and seeds run on container start) |
+| `requirements.txt` or a `Dockerfile` | `docker compose up -d --build <service>` |
+| A service's `.env` | `docker compose up -d <service>` (recreates the container) |
+
+Check that a service reloaded with `docker compose logs -f <service>` — you'll see `WatchFiles detected changes ... Reloading...`.
+
+To go back to the normal (baked-in) mode, run `docker compose up -d` without the dev file (and unset `COMPOSE_FILE` if you set it).
+
+> Dev mode is for local development only — production uses `docker-compose.prod.yml` and never mounts source code.
+
 ---
 
 ## 🌱 Database Seeding Commands
