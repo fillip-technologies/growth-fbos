@@ -42,6 +42,59 @@ class ContactNotFoundError(RevenueServiceError):
         super().__init__(status.HTTP_404_NOT_FOUND, "CONTACT_NOT_FOUND", message)
 
 
+class ServiceCategoryNotFoundError(RevenueServiceError):
+    """404: Service category not found."""
+
+    def __init__(self, category_id: Optional[str] = None) -> None:
+        message = f"Service category '{category_id}' not found" if category_id else "Service category not found"
+        super().__init__(status.HTTP_404_NOT_FOUND, "SERVICE_CATEGORY_NOT_FOUND", message)
+
+
+class ServiceProviderNotFoundError(RevenueServiceError):
+    """404: Service provider not found."""
+
+    def __init__(self, provider_id: Optional[str] = None) -> None:
+        message = f"Service provider '{provider_id}' not found" if provider_id else "Service provider not found"
+        super().__init__(status.HTTP_404_NOT_FOUND, "SERVICE_PROVIDER_NOT_FOUND", message)
+
+
+class ClientServiceNotFoundError(RevenueServiceError):
+    """404: Client service record not found."""
+
+    def __init__(self, record_id: Optional[str] = None) -> None:
+        message = f"Client service '{record_id}' not found" if record_id else "Client service not found"
+        super().__init__(status.HTTP_404_NOT_FOUND, "CLIENT_SERVICE_NOT_FOUND", message)
+
+
+class DuplicateNameError(RevenueServiceError):
+    """409: A record with the same name already exists in this organization."""
+
+    def __init__(self, name: str) -> None:
+        super().__init__(
+            status.HTTP_409_CONFLICT,
+            "DUPLICATE_NAME",
+            f"A record named '{name}' already exists in this organization.",
+        )
+
+
+class InvalidDateRangeError(RevenueServiceError):
+    """422: An end date falls before its start date."""
+
+    def __init__(self, message: str = "end_date must be on or after start_date") -> None:
+        super().__init__(status.HTTP_422_UNPROCESSABLE_CONTENT, "INVALID_DATE_RANGE", message)
+
+
+class ProviderInUseError(RevenueServiceError):
+    """409: Provider still has client services attached."""
+
+    def __init__(self) -> None:
+        super().__init__(
+            status.HTTP_409_CONFLICT,
+            "PROVIDER_IN_USE",
+            "This provider is still used by client services and cannot be deleted.",
+        )
+
+
 class OfferingNotFoundError(RevenueServiceError):
     """404: Service offering not found."""
 

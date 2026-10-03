@@ -41,6 +41,8 @@ PERMISSION_CATALOG: list[tuple[str, str, str]] = [
     # Other services
     ("revenue.deal.read", "revenue", "View deals"),
     ("revenue.deal.create", "revenue", "Create deals"),
+    ("revenue.client_service.read", "revenue", "View the outside services clients use"),
+    ("revenue.client_service.write", "revenue", "Add, edit and delete client services, providers and categories"),
     ("document.read", "documents", "Read documents"),
     ("document.upload", "documents", "Upload documents"),
 ]
