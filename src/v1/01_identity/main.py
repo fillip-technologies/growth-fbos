@@ -1,7 +1,10 @@
+import logging
 import uuid
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request
+from fastapi.exception_handlers import request_validation_exception_handler
+from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
 from database.session import dispose_engine
@@ -10,6 +13,9 @@ import models  # noqa: F401 - Register all models with Base.metadata
 from router import router
 from schemas.auth import JwksResponse
 from services.auth_service import auth_service
+
+# Rejected requests are logged with their reason; uvicorn's access log only shows the status.
+logger = logging.getLogger("identity.errors")
 
 _PROBLEM_META: dict[str, tuple[str, bool]] = {
     "INVALID_CREDENTIALS": ("Email or password is incorrect", False),
@@ -81,7 +87,19 @@ async def identity_error_handler(request: Request, exc: IdentityServiceError) ->
         body["meta"] = exc.meta
     if exc.details:
         body["errors"] = exc.details
+    logger.warning(
+        "%s %s -> %s %s: %s%s",
+        request.method, request.url.path, exc.status_code, exc.code, exc.message,
+        f" {exc.details}" if exc.details else "",
+    )
     return JSONResponse(status_code=exc.status_code, content=body)
+
+
+@app.exception_handler(RequestValidationError)
+async def request_validation_handler(request: Request, exc: RequestValidationError) -> JSONResponse:
+    issues = "; ".join(f"{'.'.join(str(p) for p in e['loc'])}: {e['msg']}" for e in exc.errors())
+    logger.warning("%s %s -> 422 request validation: %s", request.method, request.url.path, issues)
+    return await request_validation_exception_handler(request, exc)
 
 
 @app.get("/health", tags=["health"])
