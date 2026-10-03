@@ -5,7 +5,7 @@ from fastapi import APIRouter, Depends, Header, Query, Response, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from database.session import get_db_session
-from dependencies import get_current_user
+from dependencies import get_current_user, require_permission
 from schemas.common import PaginatedResponse
 from schemas.token import TokenPayload
 from schemas.vertical import (
@@ -15,6 +15,7 @@ from schemas.vertical import (
     VerticalPackCreate,
     VerticalPackResponse,
 )
+from services.access_control import Actor
 from services.vertical_service import vertical_service
 
 object_types_router = APIRouter()
@@ -63,12 +64,12 @@ async def list_field_definitions(
     limit: int = Query(25, ge=1, le=100),
     cursor: Optional[str] = Query(None, description="Opaque pagination cursor"),
     sort: Optional[str] = Query(None, description="Comma-separated fields, - for descending"),
-    current_user: TokenPayload = Depends(get_current_user),
+    actor: Actor = Depends(require_permission("identity.field_definition.read")),
     db: AsyncSession = Depends(get_db_session),
 ) -> PaginatedResponse[FieldDefinitionResponse]:
     return await vertical_service.list_field_definitions(
         session=db,
-        organization_id=current_user.organization_id,
+        organization_id=actor.organization_id,
         object_type=object_type,
         vertical_id=vertical_id,
         limit=limit,
@@ -87,12 +88,12 @@ async def create_field_definition(
     body: FieldDefinitionCreate,
     response: Response,
     idempotency_key: Optional[str] = Header(None, alias="Idempotency-Key"),
-    current_user: TokenPayload = Depends(get_current_user),
+    actor: Actor = Depends(require_permission("identity.field_definition.create")),
     db: AsyncSession = Depends(get_db_session),
 ) -> FieldDefinitionResponse:
     fd = await vertical_service.create_field_definition(
         session=db,
-        organization_id=current_user.organization_id,
+        organization_id=actor.organization_id,
         data=body,
     )
     response.headers["Location"] = f"/api/identity/v1/field-definitions/{fd.id}"
@@ -109,12 +110,12 @@ async def publish_field_definition(
     field_definition_id: uuid.UUID,
     response: Response,
     if_match: Optional[str] = Header(None, alias="If-Match"),
-    current_user: TokenPayload = Depends(get_current_user),
+    actor: Actor = Depends(require_permission("identity.field_definition.publish")),
     db: AsyncSession = Depends(get_db_session),
 ) -> FieldDefinitionResponse:
     fd = await vertical_service.publish_field_definition(
         session=db,
-        organization_id=current_user.organization_id,
+        organization_id=actor.organization_id,
         field_definition_id=field_definition_id,
         if_match=if_match,
     )
@@ -136,12 +137,12 @@ async def create_vertical_pack(
     body: VerticalPackCreate,
     response: Response,
     idempotency_key: Optional[str] = Header(None, alias="Idempotency-Key"),
-    current_user: TokenPayload = Depends(get_current_user),
+    actor: Actor = Depends(require_permission("identity.vertical_pack.manage")),
     db: AsyncSession = Depends(get_db_session),
 ) -> VerticalPackResponse:
     pack = await vertical_service.create_vertical_pack(
         session=db,
-        organization_id=current_user.organization_id,
+        organization_id=actor.organization_id,
         data=body,
     )
     response.headers["Location"] = f"/api/identity/v1/vertical-packs/{pack.id}"
@@ -158,12 +159,12 @@ async def activate_vertical_pack(
     pack_id: uuid.UUID,
     response: Response,
     idempotency_key: Optional[str] = Header(None, alias="Idempotency-Key"),
-    current_user: TokenPayload = Depends(get_current_user),
+    actor: Actor = Depends(require_permission("identity.vertical_pack.manage")),
     db: AsyncSession = Depends(get_db_session),
 ) -> VerticalPackResponse:
     pack = await vertical_service.activate_vertical_pack(
         session=db,
-        organization_id=current_user.organization_id,
+        organization_id=actor.organization_id,
         pack_id=pack_id,
     )
     response.headers["Location"] = f"/api/identity/v1/vertical-packs/{pack.id}/activate"

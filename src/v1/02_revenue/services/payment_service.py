@@ -179,10 +179,12 @@ class PaymentService:
                     inv.status = "partially_paid"
                 inv.version += 1
 
+                # Allocations recorded with the payment default to its received date.
                 pa = PaymentAllocation(
                     payment_id=payment.id,
                     invoice_id=inv.id,
                     amount=alloc_amt,
+                    allocated_at=datetime.combine(alloc_in.allocated_on or payload.received_on, datetime.min.time()),
                 )
                 session.add(pa)
                 persisted_allocations.append((pa, inv.invoice_no))
@@ -242,7 +244,11 @@ class PaymentService:
                 payment_id=payment.id,
                 invoice_id=inv.id,
                 amount=alloc_amt,
-                allocated_at=datetime.utcnow(),
+                allocated_at=(
+                    datetime.combine(alloc_in.allocated_on, datetime.min.time())
+                    if alloc_in.allocated_on
+                    else datetime.utcnow()
+                ),
             )
             session.add(pa)
             existing_allocs.append((pa, inv.invoice_no))

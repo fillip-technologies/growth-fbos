@@ -114,8 +114,13 @@ def create_refresh_token(
     user_id: uuid.UUID,
     family_id: uuid.UUID,
     expires_days: Optional[int] = None,
+    token_type: str = "refresh",
 ) -> str:
-    """Create a signed JWT refresh token (30 days validity)."""
+    """
+    Create a signed JWT refresh token (30 days validity). Platform super-admin tokens use
+    `token_type="platform_refresh"` so a user token is never accepted for the platform
+    console and vice versa.
+    """
     now = datetime.now(timezone.utc)
     days = expires_days or settings.refresh_token_expire_days
     expires_at = now + timedelta(days=days)
@@ -123,11 +128,29 @@ def create_refresh_token(
         "jti": str(token_id),
         "sub": str(user_id),
         "family_id": str(family_id),
-        "type": "refresh",
+        "type": token_type,
         "iat": int(now.timestamp()),
         "exp": int(expires_at.timestamp()),
     }
     return jwt.encode(payload, settings.jwt_secret, algorithm=settings.jwt_algorithm)
+
+
+def decode_refresh_token(token: Optional[str], token_type: str = "refresh") -> Optional[dict[str, Any]]:
+    """Payload of a valid refresh token of `token_type`, or None for anything else."""
+    if not token:
+        return None
+    try:
+        payload = jwt.decode(
+            token,
+            settings.jwt_secret,
+            algorithms=[settings.jwt_algorithm],
+            options={"require": ["exp", "iat", "sub"]},
+        )
+    except jwt.PyJWTError:
+        return None
+    if payload.get("type") != token_type or not payload.get("jti") or not payload.get("family_id"):
+        return None
+    return payload
 
 
 def decode_jwt_token(token: str) -> dict[str, Any]:
@@ -143,6 +166,25 @@ def decode_jwt_token(token: str) -> dict[str, Any]:
         raise
     except jwt.InvalidTokenError:
         raise
+
+
+def decode_access_token_claims(token: Optional[str]) -> Optional[dict[str, Any]]:
+    """
+    Claims of a correctly signed access token even if it has expired, else None.
+    Only for logout, which must still identify the session after the 15-minute token ran out.
+    """
+    if not token:
+        return None
+    try:
+        payload = jwt.decode(
+            token,
+            settings.jwt_secret,
+            algorithms=[settings.jwt_algorithm],
+            options={"verify_exp": False, "require": ["sub"]},
+        )
+    except jwt.PyJWTError:
+        return None
+    return payload if payload.get("type") == "access" else None
 
 
 def decode_mfa_token(token: str) -> dict[str, Any]:
@@ -182,6 +224,12 @@ COOKIE_REFRESH_TOKEN = "fbos_rt"
 COOKIE_CSRF_TOKEN = "fbos_csrf"
 HEADER_CSRF_TOKEN = "x-csrf-token"
 
+# The platform super-admin console uses its own cookie pair. Browsers share cookies
+# across ports on the same host, so with one shared name signing in to the super-admin
+# console (:5173) would overwrite a client-admin session (:5174) and vice versa.
+COOKIE_PLATFORM_REFRESH_TOKEN = "fbos_prt"
+COOKIE_PLATFORM_CSRF_TOKEN = "fbos_pcsrf"
+
 
 def generate_csrf_token() -> str:
     """Generate a cryptographically secure random CSRF token string."""
@@ -200,7 +248,7 @@ def is_browser_client(request: Request) -> bool:
         return False
 
     # Presence of CSRF header or refresh cookie indicates browser flow
-    if COOKIE_REFRESH_TOKEN in request.cookies or HEADER_CSRF_TOKEN in request.headers:
+    if COOKIE_REFRESH_TOKEN in request.cookies or COOKIE_PLATFORM_REFRESH_TOKEN in request.cookies or HEADER_CSRF_TOKEN in request.headers:
         return True
 
     # Standard browser fetch metadata headers
@@ -216,12 +264,12 @@ def is_browser_client(request: Request) -> bool:
     return any(indicator in user_agent for indicator in browser_indicators)
 
 
-def validate_csrf(request: Request) -> None:
+def validate_csrf(request: Request, csrf_cookie_name: str = COOKIE_CSRF_TOKEN) -> None:
     """
     Validate double-submit CSRF protection for cookie-authenticated browser calls.
     Raises CsrfTokenInvalidError (HTTP 403) if headers/cookies do not match.
     """
-    csrf_cookie = request.cookies.get(COOKIE_CSRF_TOKEN)
+    csrf_cookie = request.cookies.get(csrf_cookie_name)
     csrf_header = request.headers.get(HEADER_CSRF_TOKEN)
 
     if not csrf_cookie or not csrf_header:
@@ -236,9 +284,11 @@ def set_auth_cookies(
     refresh_token: str,
     csrf_token: Optional[str] = None,
     max_age_days: Optional[int] = None,
+    refresh_cookie_name: str = COOKIE_REFRESH_TOKEN,
+    csrf_cookie_name: str = COOKIE_CSRF_TOKEN,
 ) -> None:
     """
-    Set HttpOnly fbos_rt cookie and readable fbos_csrf cookie on the response.
+    Set the HttpOnly refresh cookie and the readable CSRF cookie on the response.
     """
     days = max_age_days or settings.refresh_token_expire_days
     max_age_seconds = days * 24 * 3600
@@ -246,7 +296,7 @@ def set_auth_cookies(
 
     # HttpOnly refresh token cookie
     response.set_cookie(
-        key=COOKIE_REFRESH_TOKEN,
+        key=refresh_cookie_name,
         value=refresh_token,
         max_age=max_age_seconds,
         httponly=True,
@@ -258,7 +308,7 @@ def set_auth_cookies(
     # CSRF cookie (must be readable by JavaScript to copy into X-CSRF-Token header)
     token_csrf = csrf_token or generate_csrf_token()
     response.set_cookie(
-        key=COOKIE_CSRF_TOKEN,
+        key=csrf_cookie_name,
         value=token_csrf,
         max_age=max_age_seconds,
         httponly=False,
@@ -268,7 +318,11 @@ def set_auth_cookies(
     )
 
 
-def clear_auth_cookies(response: Response) -> None:
-    """Delete the fbos_rt and fbos_csrf cookies from client browser."""
-    response.delete_cookie(key=COOKIE_REFRESH_TOKEN, path="/")
-    response.delete_cookie(key=COOKIE_CSRF_TOKEN, path="/")
+def clear_auth_cookies(
+    response: Response,
+    refresh_cookie_name: str = COOKIE_REFRESH_TOKEN,
+    csrf_cookie_name: str = COOKIE_CSRF_TOKEN,
+) -> None:
+    """Delete the refresh and CSRF cookies from the client browser."""
+    response.delete_cookie(key=refresh_cookie_name, path="/")
+    response.delete_cookie(key=csrf_cookie_name, path="/")

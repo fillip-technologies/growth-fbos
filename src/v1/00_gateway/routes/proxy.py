@@ -47,13 +47,17 @@ def _build_forward_headers(request: Request) -> dict[str, str]:
     return headers
 
 
-def _filter_response_headers(upstream_headers: httpx.Headers) -> dict[str, str]:
-    """Filter out hop-by-hop headers from upstream response to avoid proxy protocol violations."""
-    return {
-        key: value
-        for key, value in upstream_headers.items()
-        if key.lower() not in HOP_BY_HOP_HEADERS
-    }
+def _filter_response_headers(upstream_headers: httpx.Headers) -> list[tuple[str, str]]:
+    """
+    Upstream response headers minus hop-by-hop ones, as a list so repeated headers
+    survive: a login sets two cookies (refresh + CSRF) and both must reach the browser.
+    Content-Type is left to the Response's media_type.
+    """
+    return [
+        (key, value)
+        for key, value in upstream_headers.multi_items()
+        if key.lower() not in HOP_BY_HOP_HEADERS and key.lower() != "content-type"
+    ]
 
 
 async def _forward_request(
@@ -123,13 +127,14 @@ async def _forward_request(
             },
         )
 
-    resp_headers = _filter_response_headers(upstream_resp.headers)
-    return Response(
+    response = Response(
         content=upstream_resp.content,
         status_code=upstream_resp.status_code,
-        headers=resp_headers,
         media_type=upstream_resp.headers.get("content-type"),
     )
+    for key, value in _filter_response_headers(upstream_resp.headers):
+        response.headers.append(key, value)
+    return response
 
 
 @router.get("/.well-known/jwks.json", tags=["auth"])

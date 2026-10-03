@@ -17,6 +17,7 @@ class SlidingWindowRateLimiter:
         self.limits: dict[str, tuple[int, int]] = {
             "auth": (60, 60),      # 60 requests per 60 seconds
             "standard": (300, 60), # 300 requests per 60 seconds
+            "invitation": (5, 3600),  # 5 invitation emails per invitee per hour
         }
 
     def check(self, key: str, rate_class: str = "standard") -> None:

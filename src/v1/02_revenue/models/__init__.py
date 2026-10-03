@@ -3,6 +3,7 @@ from models.accounting import AccountingExport
 from models.activity import Activity
 from models.billing import BillingSchedule, BillingScheduleLine
 from models.client import Client, ClientContact
+from models.client_service import ClientServiceRecord, ServiceCategory, ServiceProvider
 from models.collection import CollectionCase, CollectionCaseInvoice, CollectionFollowup
 from models.contract import Contract, ContractPaymentTerm, ContractTerm
 from models.deal import Deal
@@ -21,6 +22,9 @@ __all__ = [
     # Commercial (CRM) models
     "Client",
     "ClientContact",
+    "ServiceCategory",
+    "ServiceProvider",
+    "ClientServiceRecord",
     "Lead",
     "Deal",
     "Opportunity",

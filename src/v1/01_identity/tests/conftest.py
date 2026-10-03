@@ -1,7 +1,12 @@
+from datetime import date, timedelta
+import os
 from pathlib import Path
 import sys
 from typing import AsyncGenerator
 import uuid
+
+# Never send real mail from tests, whatever .env says.
+os.environ["MAIL_ENABLED"] = "false"
 
 # Ensure 01_identity is in Python path
 SERVICE_DIR = Path(__file__).resolve().parent.parent
@@ -16,10 +21,14 @@ from main import app
 import models  # loads all models into Base.metadata
 from models.client import Client
 from models.organization import Organization
+from models.rbac import Permission
 from models.user import User
+from models.user_permission import UserPermission
 import pytest
 import pytest_asyncio
 from schemas.token import TokenPayload
+from services.permission_catalog import ensure_permission_catalog
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from utils.security import create_access_token
 
@@ -53,7 +62,12 @@ async def db_session(test_engine) -> AsyncGenerator[AsyncSession, None]:
         # Seed test client, organization and user. The org must have a client
         # parent to satisfy the client-required constraint (only the platform
         # system org may be parentless).
-        client = Client(id=TEST_CLIENT_ID, name="Test Client", code="TEST-CLIENT")
+        client = Client(
+            id=TEST_CLIENT_ID, name="Test Client", code="TEST-CLIENT",
+            contact_email="ops@test-client.example.com",
+            subscription_start=date.today() - timedelta(days=1),
+            subscription_end=date.today() + timedelta(days=365),
+        )
         session.add(client)
         await session.flush()
         org = Organization(
@@ -61,8 +75,9 @@ async def db_session(test_engine) -> AsyncGenerator[AsyncSession, None]:
             client_id=TEST_CLIENT_ID,
             name="Test Corp",
             code="TEST",
+            email="org@test.example.com",
             base_currency="USD",
-            fiscal_year_start="01-01",
+            fiscal_year_start="01-04",
             timezone="UTC",
             status="active",
         )
@@ -77,6 +92,15 @@ async def db_session(test_engine) -> AsyncGenerator[AsyncSession, None]:
         )
         session.add(org)
         session.add(user)
+        await session.flush()
+
+        # Access is user-based: the default test user is an org-wide admin holding the
+        # whole permission catalog. Tests for limited/scoped users create their own.
+        await ensure_permission_catalog(session)
+        for code in (await session.execute(select(Permission.code))).scalars().all():
+            session.add(UserPermission(
+                organization_id=TEST_ORG_ID, user_id=TEST_USER_ID, permission_code=code, self_only=False,
+            ))
         await session.commit()
 
         yield session

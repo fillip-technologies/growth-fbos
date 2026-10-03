@@ -3,13 +3,15 @@ from datetime import date, datetime
 from typing import List, Literal, Optional
 from pydantic import BaseModel, ConfigDict
 
-from schemas.common import Money
+from schemas.common import Money, PastDate
 from schemas.opportunity import ClientRef
 
 
 class PaymentAllocationInput(BaseModel):
     invoice_id: uuid.UUID
     amount: Money
+    # Back-dating support: when omitted, the allocation is dated today.
+    allocated_on: Optional[PastDate] = None
 
 
 class PaymentAllocationResponse(BaseModel):

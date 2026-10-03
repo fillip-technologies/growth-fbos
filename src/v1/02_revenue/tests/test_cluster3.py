@@ -242,3 +242,29 @@ async def test_collections_and_razorpay_webhook(async_client: httpx.AsyncClient)
     case_list = await async_client.get(f"/api/revenue/v1/collection-cases?client_id={client_id}")
     assert case_list.status_code == 200
     assert isinstance(case_list.json()["data"], list)
+
+
+async def test_issue_invoice_back_dated(async_client: httpx.AsyncClient):
+    client_id, offering_id = await _setup_client_and_offering(async_client)
+    draft_payload = {
+        "client_id": client_id,
+        "lines": [
+            {
+                "offering_id": offering_id,
+                "description": "Migrated invoice",
+                "quantity": 1,
+                "unit_price": {"amount": 1000.0, "currency": "INR"},
+            }
+        ],
+    }
+    create_res = await async_client.post("/api/revenue/v1/invoices", json=draft_payload)
+    assert create_res.status_code == 201
+    invoice_id = create_res.json()["id"]
+
+    issue_res = await async_client.post(
+        f"/api/revenue/v1/invoices/{invoice_id}/issue",
+        json={"issue_date": "2025-03-10"},
+        headers={"If-Match": create_res.headers["ETag"], "Idempotency-Key": str(uuid.uuid4())},
+    )
+    assert issue_res.status_code == 200
+    assert issue_res.json()["issue_date"] == "2025-03-10"

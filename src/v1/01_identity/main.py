@@ -4,8 +4,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 
-from database.base import Base
-from database.session import dispose_engine, engine
+from database.session import dispose_engine
 from exceptions import IdentityServiceError
 import models  # noqa: F401 - Register all models with Base.metadata
 from router import router
@@ -46,14 +45,17 @@ _PROBLEM_META: dict[str, tuple[str, bool]] = {
     "CLIENT_CREDENTIALS_INVALID": ("Client authentication failed", False),
     "CLIENT_ORGANIZATION_LIMIT_REACHED": ("Organization limit reached", False),
     "ORGANIZATION_USER_LIMIT_REACHED": ("User limit reached", False),
+    "PERMISSION_DENIED": ("You don't have permission to do this", False),
+    "VALIDATION_FAILED": ("Some fields are invalid", False),
+    "USER_NOT_INVITED": ("The user is not awaiting an invitation", False),
+    "SELF_MODIFICATION_FORBIDDEN": ("You can't change your own access", False),
 }
 
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
+    # Schema is owned by Alembic (`alembic upgrade head` runs in start.sh).
     yield
     await dispose_engine()
 

@@ -20,8 +20,9 @@ class Organization(Base):
     )
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     code: Mapped[Optional[str]] = mapped_column(String(100), unique=True, nullable=True, index=True)
+    email: Mapped[str] = mapped_column(String(255), nullable=False)
     base_currency: Mapped[str] = mapped_column(String(10), nullable=False)
-    fiscal_year_start: Mapped[str] = mapped_column(String(5), nullable=False)  # e.g. "01-01"
+    fiscal_year_start: Mapped[str] = mapped_column(String(5), nullable=False)  # DD-MM, e.g. "01-04" (1 April)
     timezone: Mapped[str] = mapped_column(String(100), nullable=False)
     status: Mapped[str] = mapped_column(String(50), nullable=False, default="active")
     created_at: Mapped[datetime] = mapped_column(

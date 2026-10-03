@@ -19,6 +19,7 @@ from models.client import Client
 from models.organization import Organization
 from models.rbac import Permission, Role, RoleAssignment, RolePermission
 from models.user import User
+from models.user_permission import UserPermission
 from schemas.common import PageInfo, PaginatedResponse
 from schemas.organization import (
     OrganizationCreateRequest,
@@ -26,11 +27,10 @@ from schemas.organization import (
     OrganizationUpdateRequest,
 )
 from services.event_publisher import event_publisher
+from services.permission_catalog import ADMIN_ROLE_CODE, MEMBER_ROLE_CODE, member_permission_codes
 
 logger = logging.getLogger("identity.organization_service")
 
-# A member role gets read-only access; the admin role gets the full catalog.
-_MEMBER_PERMISSION_SUFFIX = ".read"
 _INVITATION_TTL_HOURS = 72
 
 # One pending event to publish once the surrounding transaction commits.
@@ -44,6 +44,7 @@ class OrganizationService:
             client_id=org.client_id,
             name=org.name,
             code=org.code,
+            email=org.email,
             base_currency=org.base_currency,
             fiscal_year_start=org.fiscal_year_start,
             timezone=org.timezone,
@@ -69,12 +70,12 @@ class OrganizationService:
         this never violates the RolePermission -> Permission foreign key.
         """
         catalog_codes = list((await session.execute(select(Permission.code))).scalars().all())
-        member_codes = [c for c in catalog_codes if c.endswith(_MEMBER_PERMISSION_SUFFIX)]
+        member_codes = member_permission_codes(catalog_codes)
 
         admin_role = Role(
             id=uuid.uuid4(),
             organization_id=organization_id,
-            code="admin",
+            code=ADMIN_ROLE_CODE,
             name="System Administrator",
             is_system=True,
             version=1,
@@ -82,7 +83,7 @@ class OrganizationService:
         member_role = Role(
             id=uuid.uuid4(),
             organization_id=organization_id,
-            code="member",
+            code=MEMBER_ROLE_CODE,
             name="Standard Member",
             is_system=False,
             version=1,
@@ -96,6 +97,8 @@ class OrganizationService:
             session.add(RolePermission(role_id=member_role.id, permission_code=code))
 
         if admin_user_id is not None:
+            # Access is user-based: the first admin receives the admin preset's
+            # permissions directly; the assignment records which preset was applied.
             session.add(
                 RoleAssignment(
                     id=uuid.uuid4(),
@@ -103,8 +106,18 @@ class OrganizationService:
                     user_id=admin_user_id,
                     role_id=admin_role.id,
                     granted_by_id=admin_user_id,
+                    reason="First administrator of the organization",
                 )
             )
+            for code in catalog_codes:
+                session.add(UserPermission(
+                    id=uuid.uuid4(),
+                    organization_id=organization_id,
+                    user_id=admin_user_id,
+                    permission_code=code,
+                    source_role_id=admin_role.id,
+                    self_only=False,
+                ))
         await session.flush()
 
     async def _invite_first_admin(
@@ -137,7 +150,7 @@ class OrganizationService:
         session.add(user)
         await session.flush()
 
-        invitation_token = f"inv_{secrets.token_urlsafe(16)}"
+        invitation_token = f"inv_{secrets.token_urlsafe(24)}"
         session.add(
             UserCredential(
                 user_id=user.id,
@@ -195,6 +208,7 @@ class OrganizationService:
             client_id=client_id,
             name=data.name,
             code=data.code,
+            email=data.email,
             base_currency=data.base_currency,
             fiscal_year_start=data.fiscal_year_start,
             timezone=data.timezone,
@@ -221,6 +235,8 @@ class OrganizationService:
                     "user_id": str(admin_user.id),
                     "organization_id": str(org.id),
                     "email": admin_user.email,
+                    "name": admin_user.name,
+                    "organization_name": org.name,
                     "invitation_token": invitation_token,
                     "user_type": admin_user.user_type,
                     "actor_id": str(actor_id) if actor_id else None,
@@ -319,6 +335,8 @@ class OrganizationService:
 
         if data.name is not None:
             org.name = data.name
+        if data.email is not None:
+            org.email = data.email
         if data.base_currency is not None:
             org.base_currency = data.base_currency
         if data.fiscal_year_start is not None:

@@ -1,4 +1,5 @@
 import uuid
+from datetime import date, timedelta
 import pytest
 import httpx
 
@@ -97,6 +98,31 @@ async def test_create_and_get_client(async_client: httpx.AsyncClient):
     )
     assert contact_res.status_code == 201
     assert contact_res.json()["name"] == "Jane Doe"
+
+
+async def test_create_client_back_dated(async_client: httpx.AsyncClient):
+    payload = {
+        "name": "Old Client",
+        "legal_name": "Old Client Pvt Ltd",
+        "client_type": "company",
+        "billing_address": {
+            "line1": "1 Old Road",
+            "city": "Bengaluru",
+            "state": "Karnataka",
+            "state_code": "29",
+            "postal_code": "560001",
+            "country": "IN",
+        },
+        "owner_user_id": str(uuid.uuid4()),
+    }
+
+    future = (date.today() + timedelta(days=1)).isoformat()
+    res = await async_client.post("/api/revenue/v1/clients", json={**payload, "created_on": future})
+    assert res.status_code == 422
+
+    res = await async_client.post("/api/revenue/v1/clients", json={**payload, "created_on": "2024-04-01"})
+    assert res.status_code == 201
+    assert res.json()["created_at"].startswith("2024-04-01")
 
 
 async def test_offerings_crud(async_client: httpx.AsyncClient):
@@ -227,3 +253,16 @@ async def test_lead_disqualify(async_client: httpx.AsyncClient):
     )
     assert disq_res.status_code == 200
     assert disq_res.json()["status"] == "disqualified"
+
+
+async def test_create_lead_back_dated(async_client: httpx.AsyncClient):
+    lead_payload = {
+        "vertical_id": str(uuid.uuid4()),
+        "source": "referral",
+        "contact_name": "Old Lead",
+        "consent": {"given": True, "text": "I agree to be contacted about my enquiry.", "channel": "phone_call"},
+        "created_on": "2024-06-15",
+    }
+    res = await async_client.post("/api/revenue/v1/leads", json=lead_payload)
+    assert res.status_code == 201
+    assert res.json()["created_at"].startswith("2024-06-15")

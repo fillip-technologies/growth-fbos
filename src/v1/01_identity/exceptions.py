@@ -178,13 +178,14 @@ class UserNotFoundError(IdentityServiceError):
 
 
 class UserAlreadyExistsError(IdentityServiceError):
-    """409: Email is unique per organization."""
+    """409: A user with this email already exists (emails are unique across the platform)."""
 
-    def __init__(self) -> None:
+    def __init__(self, existing_user_id: Optional[Any] = None) -> None:
         super().__init__(
             status_code=status.HTTP_409_CONFLICT,
             code="EMAIL_ALREADY_EXISTS",
             message="A user with this email already exists",
+            meta={"existing_user_id": str(existing_user_id)} if existing_user_id else None,
         )
 
 
@@ -409,6 +410,28 @@ class ClientCodeAlreadyExistsError(IdentityServiceError):
         )
 
 
+class SubscriptionExpiredError(IdentityServiceError):
+    """403: The client's service window has ended (or not started), or the client is not active."""
+
+    def __init__(self, message: str = "Your organization's subscription is not active. Please contact support to renew.") -> None:
+        super().__init__(
+            status_code=status.HTTP_403_FORBIDDEN,
+            code="SUBSCRIPTION_EXPIRED",
+            message=message,
+        )
+
+
+class InvalidSubscriptionWindowError(IdentityServiceError):
+    """422: subscription_end is before subscription_start."""
+
+    def __init__(self) -> None:
+        super().__init__(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            code="INVALID_SUBSCRIPTION_WINDOW",
+            message="subscription_end must be on or after subscription_start",
+        )
+
+
 class OrganizationNotFoundError(IdentityServiceError):
     """404: Organization not found."""
 
@@ -454,3 +477,54 @@ class OrganizationUserLimitReachedError(IdentityServiceError):
             meta={"limit": limit, "current": current},
         )
 
+
+
+class PermissionDeniedError(IdentityServiceError):
+    """403: The caller is authenticated but lacks the permission for this action."""
+
+    def __init__(self, required_permission: str, message: Optional[str] = None) -> None:
+        super().__init__(
+            status_code=status.HTTP_403_FORBIDDEN,
+            code="PERMISSION_DENIED",
+            message=message or f"You need the '{required_permission}' permission to do this",
+            meta={"required_permission": required_permission},
+        )
+
+
+class ValidationFailedError(IdentityServiceError):
+    """422: Field-level business rules failed. `errors` are [{field, issue}]."""
+
+    def __init__(self, errors: list[dict[str, Any]]) -> None:
+        super().__init__(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            code="VALIDATION_FAILED",
+            message="Some fields are invalid",
+            details=errors,
+        )
+
+    @classmethod
+    def for_field(cls, field: str, issue: str) -> "ValidationFailedError":
+        return cls([{"field": field, "issue": issue}])
+
+
+class UserNotInvitedError(IdentityServiceError):
+    """409: Invitations can only be (re)sent to users still in `invited` status."""
+
+    def __init__(self, current_status: str) -> None:
+        super().__init__(
+            status_code=status.HTTP_409_CONFLICT,
+            code="USER_NOT_INVITED",
+            message=f"The user is '{current_status}'; only invited users can be sent an invitation",
+            meta={"status": current_status},
+        )
+
+
+class SelfModificationError(IdentityServiceError):
+    """403: Users can't deactivate themselves or change their own permissions."""
+
+    def __init__(self, action: str) -> None:
+        super().__init__(
+            status_code=status.HTTP_403_FORBIDDEN,
+            code="SELF_MODIFICATION_FORBIDDEN",
+            message=f"You can't {action} your own account",
+        )

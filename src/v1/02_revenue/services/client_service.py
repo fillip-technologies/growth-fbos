@@ -1,6 +1,7 @@
 import json
 import re
 import uuid
+from datetime import datetime
 from typing import Optional
 
 from sqlalchemy import func, select
@@ -148,6 +149,8 @@ class ClientService:
             source=payload.source,
             version=1,
         )
+        if payload.created_on:
+            client.created_at = datetime.combine(payload.created_on, datetime.min.time())
         session.add(client)
         await session.flush()
         return format_client_response(client, [])

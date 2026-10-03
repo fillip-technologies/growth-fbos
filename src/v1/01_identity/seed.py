@@ -20,43 +20,24 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from sqlalchemy import select
 
-from database.base import Base
-from database.session import async_session_factory, dispose_engine, engine
+from database.session import async_session_factory, dispose_engine
 from models.platform_admin import PlatformAdmin
-from models.rbac import Permission
+from services.permission_catalog import ensure_permission_catalog
 from utils.security import hash_password
 
 # The cross-tenant super-admin. Independent of every client/org.
 PLATFORM_ADMIN_ID = uuid.UUID("0191f3a2-0017-7017-8095-000000218f0f")
 
-# Permission catalog. Global (not org-scoped); required so `bootstrap_org` can wire
-# an admin role to the full catalog when an org is provisioned through the API.
-SAMPLE_PERMS = [
-    ("identity.user.read", "identity", "Read user profiles"),
-    ("identity.user.create", "identity", "Create/invite users"),
-    ("revenue.deal.read", "revenue", "View deals"),
-    ("revenue.deal.create", "revenue", "Create deals"),
-    ("document.read", "documents", "Read documents"),
-    ("document.upload", "documents", "Upload documents"),
-]
-
 
 async def seed_identity():
     print("🌱 [01_identity] Starting seed process...")
 
-    # 1. Ensure tables exist
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
-
+    # 1. Tables come from Alembic migrations — run `alembic upgrade head` first.
     async with async_session_factory() as session:
-        # 2. Permission catalog (global; consumed by org bootstrap via the API)
-        for p_code, p_svc, p_desc in SAMPLE_PERMS:
-            existing = await session.execute(
-                select(Permission).where(Permission.code == p_code)
-            )
-            if not existing.scalar_one_or_none():
-                session.add(Permission(code=p_code, service=p_svc, description=p_desc))
-        await session.flush()
+        # 2. Permission catalog (global) — also tops up every org's `admin` preset
+        added = await ensure_permission_catalog(session)
+        if added:
+            print(f"   ✅ Added {len(added)} permission(s) to the catalog")
 
         # 3. Platform super-admin (independent — its own table, no org/client)
         admin_res = await session.execute(

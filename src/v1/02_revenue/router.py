@@ -1,6 +1,7 @@
 from fastapi import APIRouter
 
 from routes.activities import router as activities_router
+from routes.client_services import router as client_services_router
 from routes.clients import router as clients_router
 from routes.collections import router as collections_router
 from routes.contracts import router as contracts_router
@@ -14,6 +15,7 @@ from routes.webhooks import router as webhooks_router
 
 core_router = APIRouter()
 core_router.include_router(clients_router)
+core_router.include_router(client_services_router)
 core_router.include_router(offerings_router)
 core_router.include_router(leads_router)
 core_router.include_router(opportunities_router)

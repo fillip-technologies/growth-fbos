@@ -1,0 +1,69 @@
+# Development override: live-reload backend code without rebuilding images.
+#
+#   docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d
+#
+# Each service's source folder is mounted over /app and uvicorn runs with
+# --reload (via UVICORN_RELOAD in start.sh), so saving a .py file restarts that
+# service in a second or two. Rebuild only when requirements.txt or a
+# Dockerfile changes. Migrations and seeds still run once on container start;
+# after adding a migration, restart the service:
+#   docker compose -f docker-compose.yml -f docker-compose.dev.yml restart revenue
+
+x-dev: &dev
+  # Run through sh so a start.sh without the executable bit still works.
+  command: ["sh", "./start.sh"]
+  environment:
+    UVICORN_RELOAD: "1"
+    # Keep root-owned __pycache__ folders out of the mounted source tree.
+    PYTHONDONTWRITEBYTECODE: "1"
+
+services:
+  gateway:
+    <<: *dev
+    volumes:
+      - ./src/v1/00_gateway:/app
+
+  identity:
+    <<: *dev
+    volumes:
+      - ./src/v1/01_identity:/app
+
+  revenue:
+    <<: *dev
+    volumes:
+      - ./src/v1/02_revenue:/app
+
+  delivery:
+    <<: *dev
+    volumes:
+      - ./src/v1/03_delivery:/app
+
+  control:
+    <<: *dev
+    volumes:
+      - ./src/v1/04_control:/app
+
+  documents:
+    <<: *dev
+    volumes:
+      - ./src/v1/05_documents:/app
+
+  communication:
+    <<: *dev
+    volumes:
+      - ./src/v1/06_communication:/app
+
+  management:
+    <<: *dev
+    volumes:
+      - ./src/v1/07_management:/app
+
+  insight:
+    <<: *dev
+    volumes:
+      - ./src/v1/08_insight:/app
+
+  assets:
+    <<: *dev
+    volumes:
+      - ./src/v1/09_assets:/app
