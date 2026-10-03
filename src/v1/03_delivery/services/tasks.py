@@ -305,7 +305,11 @@ async def create_task(session: AsyncSession, org_id: uuid.UUID, user_id: uuid.UU
         attributes={**(data.attributes or {}), "labels": data.labels or []},
         created_by=user_id,
         version=1,
-        created_at=datetime.now(timezone.utc),
+        created_at=(
+            datetime.combine(data.created_on, datetime.min.time(), tzinfo=timezone.utc)
+            if data.created_on
+            else datetime.now(timezone.utc)
+        ),
         updated_at=datetime.now(timezone.utc),
     )
     session.add(task)
@@ -507,13 +511,18 @@ async def review_task(session: AsyncSession, org_id: uuid.UUID, user_id: uuid.UU
     if data.result == "fail" and not data.feedback:
         raise FeedbackRequiredError()
 
+    reviewed_at = (
+        datetime.combine(data.reviewed_on, datetime.min.time(), tzinfo=timezone.utc)
+        if data.reviewed_on
+        else datetime.now(timezone.utc)
+    )
     from_status = task.status
     if data.result == "fail":
         task.status = "rework"
         task.review_round += 1
     else:
         task.status = "done"
-        task.completed_at = datetime.now(timezone.utc)
+        task.completed_at = reviewed_at
         task.progress_pct = 100
 
     review = TaskReview(
@@ -523,7 +532,7 @@ async def review_task(session: AsyncSession, org_id: uuid.UUID, user_id: uuid.UU
         result=data.result,
         rating=data.rating,
         feedback=data.feedback,
-        reviewed_at=datetime.now(timezone.utc),
+        reviewed_at=reviewed_at,
     )
     session.add(review)
     await _record_status_history(session, task, from_status, task.status, user_id, data.feedback)

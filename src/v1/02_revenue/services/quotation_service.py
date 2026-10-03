@@ -233,6 +233,8 @@ class QuotationService:
             completed_at=valid_until_dt,
             version=1,
         )
+        if payload.created_on:
+            quote.created_at = datetime.combine(payload.created_on, datetime.min.time())
         session.add(quote)
         await session.flush()
 

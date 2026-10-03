@@ -4,7 +4,7 @@ from typing import Literal, Optional
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from schemas.common import SubjectRef, SubjectRefInput, UnitRef, UserRef
+from schemas.common import PastDate, SubjectRef, SubjectRefInput, UnitRef, UserRef
 
 TaskStatus = Literal[
     "draft", "open", "assigned", "in_progress", "blocked", "submitted", "in_review", "rework", "done", "cancelled"
@@ -73,6 +73,8 @@ class TaskCreate(BaseModel):
     labels: Optional[list[str]] = None
     parent_task_id: Optional[uuid.UUID] = None
     attributes: Optional[dict] = None
+    # Back-dating support: when omitted, the task is dated today.
+    created_on: Optional[PastDate] = None
 
 
 class TaskUpdate(BaseModel):
@@ -181,6 +183,8 @@ class ReviewCreate(BaseModel):
     result: Literal["pass", "fail"]
     rating: Optional[int] = Field(None, ge=1, le=5)
     feedback: Optional[str] = None
+    # Back-dating support: when omitted, the review is dated now.
+    reviewed_on: Optional[PastDate] = None
 
 
 class ReviewResponse(BaseModel):

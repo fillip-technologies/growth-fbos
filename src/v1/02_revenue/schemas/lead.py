@@ -4,7 +4,7 @@ from typing import Literal, Optional
 from pydantic import BaseModel, ConfigDict, Field
 
 from schemas.client import ClientCreate, ClientResponse
-from schemas.common import Consent, Money
+from schemas.common import Consent, Money, PastDate
 from schemas.opportunity import OpportunityDetailResponse, UserRef, VerticalRef
 
 
@@ -19,6 +19,8 @@ class LeadCreate(BaseModel):
     owner_user_id: Optional[uuid.UUID] = None
     consent: Consent
     attributes: Optional[dict] = None
+    # Back-dating support: when omitted, the lead is dated today.
+    created_on: Optional[PastDate] = None
 
 
 class LeadUpdate(BaseModel):

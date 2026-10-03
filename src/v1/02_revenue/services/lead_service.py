@@ -131,6 +131,8 @@ class LeadService:
             attributes=payload.attributes or {},
             version=1,
         )
+        if payload.created_on:
+            lead.created_at = datetime.combine(payload.created_on, datetime.min.time())
         session.add(lead)
         await session.flush()
         return format_lead_response(lead)

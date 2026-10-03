@@ -1,10 +1,21 @@
 import base64
 import json
-from datetime import datetime, timezone
-from typing import Any, Generic, List, Optional, TypeVar
-from pydantic import BaseModel, Field, field_serializer
+from datetime import date, datetime, timezone
+from typing import Annotated, Any, Generic, List, Optional, TypeVar
+from pydantic import AfterValidator, BaseModel, Field, field_serializer
 
 T = TypeVar("T")
+
+
+def _not_in_future(v: date) -> date:
+    if v > date.today():
+        raise ValueError("date cannot be in the future")
+    return v
+
+
+# A date that may be back-dated but never set in the future. Used for the
+# optional "*_on" fields that let users record past data.
+PastDate = Annotated[date, AfterValidator(_not_in_future)]
 
 
 class Address(BaseModel):

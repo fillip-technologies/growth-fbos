@@ -3,7 +3,7 @@ from datetime import date, datetime
 from typing import List, Literal, Optional
 from pydantic import BaseModel, ConfigDict
 
-from schemas.common import Money
+from schemas.common import Money, PastDate
 from schemas.opportunity import ClientRef, UserRef
 
 
@@ -14,6 +14,8 @@ class CollectionFollowUpCreate(BaseModel):
     promised_date: Optional[date] = None
     promised_amount: Optional[Money] = None
     next_action_at: Optional[datetime] = None
+    # Back-dating support: when omitted, the follow-up is dated today.
+    followed_up_on: Optional[PastDate] = None
 
 
 class CollectionCaseResponse(BaseModel):

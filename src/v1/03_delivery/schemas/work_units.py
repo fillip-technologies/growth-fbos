@@ -4,7 +4,7 @@ from typing import Literal, Optional
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from schemas.common import ClientRef, Money, UnitRef, UserRef, VerticalRef
+from schemas.common import ClientRef, Money, PastDate, UnitRef, UserRef, VerticalRef
 
 WorkUnitStatus = Literal["draft", "planned", "active", "on_hold", "completed", "closed", "cancelled"]
 WorkUnitPriority = Literal["low", "medium", "high", "critical"]
@@ -95,6 +95,9 @@ class WorkUnitStatusChange(BaseModel):
 
     to_status: WorkUnitStatus
     reason: str = Field(..., min_length=1)
+    # Back-dating support: the actual start/end date recorded by this change.
+    # When omitted, today is used.
+    effective_on: Optional[PastDate] = None
 
 
 class WorkUnitResponse(BaseModel):

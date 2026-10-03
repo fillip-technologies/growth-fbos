@@ -25,6 +25,7 @@ from schemas.invoice import (
     CreditNoteCreate,
     DownloadUrl,
     InvoiceDraftCreate,
+    InvoiceIssue,
     InvoiceLineInput,
     InvoiceLineResponse,
     InvoiceResponse,
@@ -321,6 +322,7 @@ class InvoiceService:
         org_id: uuid.UUID,
         user_id: uuid.UUID,
         if_match: Optional[str] = None,
+        payload: Optional[InvoiceIssue] = None,
     ) -> InvoiceResponse:
         inv = await session.get(Invoice, invoice_id)
         if not inv or inv.organization_id != org_id:
@@ -348,9 +350,9 @@ class InvoiceService:
         fy = "26-27"
         inv.invoice_no = f"FTB/{fy}/{issued_count:06d}"
         inv.status = "issued"
-        inv.issue_date = date.today()
+        inv.issue_date = (payload.issue_date if payload else None) or date.today()
         if not inv.due_date:
-            inv.due_date = date.today() + timedelta(days=15)
+            inv.due_date = inv.issue_date + timedelta(days=15)
         inv.issued_by = user_id
 
         # Snapshot client

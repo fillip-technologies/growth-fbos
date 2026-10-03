@@ -3,7 +3,7 @@ from datetime import date, datetime
 from typing import List, Literal, Optional
 from pydantic import BaseModel, ConfigDict, Field
 
-from schemas.common import Money
+from schemas.common import Money, PastDate
 from schemas.opportunity import ClientRef
 
 
@@ -24,6 +24,11 @@ class InvoiceDraftCreate(BaseModel):
     due_date: Optional[date] = None
     lines: List[InvoiceLineInput] = Field(..., min_length=1)
     notes: Optional[str] = None
+
+
+class InvoiceIssue(BaseModel):
+    # Back-dating support: when omitted, the invoice is issued today.
+    issue_date: Optional[PastDate] = None
 
 
 class CreditNoteCreate(BaseModel):

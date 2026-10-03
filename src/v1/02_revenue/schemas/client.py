@@ -3,7 +3,7 @@ from datetime import datetime
 from typing import List, Literal, Optional
 from pydantic import BaseModel, ConfigDict, Field
 
-from schemas.common import Address
+from schemas.common import Address, PastDate
 from schemas.opportunity import UserRef
 
 
@@ -35,6 +35,8 @@ class ClientCreate(BaseModel):
     billing_address: Address
     owner_user_id: uuid.UUID
     source: Optional[str] = None
+    # Back-dating support: when omitted, the client is dated today.
+    created_on: Optional[PastDate] = None
 
 
 class ClientUpdate(BaseModel):
