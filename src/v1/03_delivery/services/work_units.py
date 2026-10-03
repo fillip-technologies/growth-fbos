@@ -561,10 +561,11 @@ async def change_work_unit_status(
         session.add(Closure(work_unit_id=work_unit.id, summary=data.reason, closed_by=None))
 
     work_unit.status = data.to_status
+    effective_on = data.effective_on or date.today()
     if data.to_status == "active" and work_unit.actual_start is None:
-        work_unit.actual_start = date.today()
+        work_unit.actual_start = effective_on
     if data.to_status in ("completed", "closed") and work_unit.actual_end is None:
-        work_unit.actual_end = date.today()
+        work_unit.actual_end = effective_on
 
     work_unit.updated_at = datetime.now(timezone.utc)
     work_unit.version += 1

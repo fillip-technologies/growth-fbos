@@ -1,4 +1,5 @@
 from typing import Optional
+import uuid
 
 from fastapi import APIRouter, Depends, Header, Request, Response, status
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -23,13 +24,17 @@ from schemas.auth import (
     RefreshRequest,
     TokenResponse,
 )
-from schemas.platform_auth import PlatformLoginRequest, PlatformLoginResponse
+from schemas.platform_auth import PlatformLoginRequest, PlatformLoginResponse, PlatformRefreshRequest
 from schemas.token import TokenPayload
 from services.auth_service import auth_service
-from services.platform_auth_service import platform_auth_service
+from services.platform_auth_service import PLATFORM_REFRESH_TOKEN_TYPE, platform_auth_service
 from utils.security import (
+    COOKIE_PLATFORM_CSRF_TOKEN,
+    COOKIE_PLATFORM_REFRESH_TOKEN,
     COOKIE_REFRESH_TOKEN,
     clear_auth_cookies,
+    decode_access_token_claims,
+    decode_refresh_token,
     is_browser_client,
     set_auth_cookies,
     validate_csrf,
@@ -74,15 +79,123 @@ async def login(
     response_model=PlatformLoginResponse,
     status_code=status.HTTP_200_OK,
     summary="Platform Super-Admin Login",
-    description="Authenticates the independent platform super-admin (platform_admins table, access-token-only) and returns an access token.",
+    description=(
+        "Authenticates the independent platform super-admin. Returns a 15-minute access token; "
+        "browsers also get a rotating refresh token as the HttpOnly `fbos_prt` cookie "
+        "(plus the readable `fbos_pcsrf` CSRF cookie)."
+    ),
 )
 async def platform_login(
     request_data: PlatformLoginRequest,
+    request: Request,
+    response: Response,
     session: AsyncSession = Depends(get_db_session),
 ) -> PlatformLoginResponse:
-    return await platform_auth_service.login(
-        session=session, email=request_data.email, password=request_data.password
+    client_is_browser = is_browser_client(request)
+    login_response, refresh_token = await platform_auth_service.login(
+        session=session,
+        email=request_data.email,
+        password=request_data.password,
+        client_ip=get_client_ip(request),
+        user_agent=get_user_agent(request),
+        client_is_browser=client_is_browser,
     )
+    if client_is_browser:
+        _set_platform_cookies(response, refresh_token)
+    return login_response
+
+
+@router.post(
+    "/platform/token/refresh",
+    response_model=PlatformLoginResponse,
+    status_code=status.HTTP_200_OK,
+    summary="Rotate the platform super-admin's refresh token",
+    description=(
+        "Same rules as /token/refresh, with the platform cookies: browsers send the `fbos_prt` cookie "
+        "and an X-CSRF-Token header equal to the `fbos_pcsrf` cookie."
+    ),
+)
+async def platform_refresh_token(
+    request: Request,
+    response: Response,
+    request_body: Optional[PlatformRefreshRequest] = None,
+    session: AsyncSession = Depends(get_db_session),
+) -> PlatformLoginResponse:
+    cookie_token = request.cookies.get(COOKIE_PLATFORM_REFRESH_TOKEN)
+    if cookie_token is not None:
+        validate_csrf(request, csrf_cookie_name=COOKIE_PLATFORM_CSRF_TOKEN)
+    target_token = cookie_token or (request_body.refresh_token if request_body else None)
+
+    client_is_browser = is_browser_client(request)
+    token_response, new_refresh_token = await platform_auth_service.refresh(
+        session=session,
+        refresh_token=target_token,
+        client_ip=get_client_ip(request),
+        user_agent=get_user_agent(request),
+        client_is_browser=client_is_browser,
+    )
+    if client_is_browser:
+        _set_platform_cookies(response, new_refresh_token)
+    return token_response
+
+
+@router.post(
+    "/platform/logout",
+    status_code=status.HTTP_204_NO_CONTENT,
+    summary="Sign the platform super-admin out",
+    description="Revokes the current sign-in and clears the platform cookies. Works even after the access token expired.",
+)
+async def platform_logout(
+    request: Request,
+    request_body: Optional[PlatformRefreshRequest] = None,
+    session: AsyncSession = Depends(get_db_session),
+) -> Response:
+    admin_id, family_id = _session_of(
+        request,
+        refresh_token=request.cookies.get(COOKIE_PLATFORM_REFRESH_TOKEN)
+        or (request_body.refresh_token if request_body else None),
+        refresh_token_type=PLATFORM_REFRESH_TOKEN_TYPE,
+    )
+    await platform_auth_service.logout(
+        session, family_id=family_id, admin_id=admin_id,
+        client_ip=get_client_ip(request), user_agent=get_user_agent(request),
+    )
+    response = Response(status_code=status.HTTP_204_NO_CONTENT)
+    clear_auth_cookies(
+        response,
+        refresh_cookie_name=COOKIE_PLATFORM_REFRESH_TOKEN,
+        csrf_cookie_name=COOKIE_PLATFORM_CSRF_TOKEN,
+    )
+    return response
+
+
+def _set_platform_cookies(response: Response, refresh_token: str) -> None:
+    set_auth_cookies(
+        response=response,
+        refresh_token=refresh_token,
+        refresh_cookie_name=COOKIE_PLATFORM_REFRESH_TOKEN,
+        csrf_cookie_name=COOKIE_PLATFORM_CSRF_TOKEN,
+    )
+
+
+def _session_of(
+    request: Request, refresh_token: Optional[str], refresh_token_type: str
+) -> tuple[Optional[uuid.UUID], Optional[uuid.UUID]]:
+    """
+    (subject id, session family) of the caller, from the refresh token if present, else
+    from the bearer access token, expired or not. (None, None) when neither is usable.
+    """
+    claims = decode_refresh_token(refresh_token, refresh_token_type)
+    if claims is None:
+        auth_header = request.headers.get("authorization", "")
+        bearer = auth_header[7:].strip() if auth_header.lower().startswith("bearer ") else None
+        claims = decode_access_token_claims(bearer)
+    if not claims or not claims.get("family_id"):
+        return None, None
+    try:
+        return uuid.UUID(claims["sub"]), uuid.UUID(claims["family_id"])
+    except (ValueError, TypeError):
+        return None, None
 
 
 @router.post(
@@ -171,22 +284,34 @@ async def refresh_token(
     "/logout",
     status_code=status.HTTP_204_NO_CONTENT,
     summary="Sign out and revoke the session",
-    description="Revokes the refresh-token family for the current session and clears the browser cookies.",
+    description=(
+        "Revokes the refresh-token family of the current sign-in and clears the browser cookies. "
+        "Works even after the access token expired (the session is found from the refresh cookie)."
+    ),
 )
 async def logout(
     request: Request,
+<<<<<<< HEAD
     current_user: TokenPayload = Depends(get_current_user),
+=======
+    request_body: Optional[RefreshRequest] = None,
+>>>>>>> 14a4133116dfbe9935129747bdaacad0577cec48
     session: AsyncSession = Depends(get_db_session),
 ) -> Response:
-    client_ip = get_client_ip(request)
-    user_agent = get_user_agent(request)
-
+    user_id, family_id = _session_of(
+        request,
+        refresh_token=request.cookies.get(COOKIE_REFRESH_TOKEN)
+        or (request_body.refresh_token if request_body else None),
+        refresh_token_type="refresh",
+    )
     await auth_service.logout(
         session=session,
-        current_user=current_user,
-        client_ip=client_ip,
-        user_agent=user_agent,
+        user_id=user_id,
+        family_id=family_id,
+        client_ip=get_client_ip(request),
+        user_agent=get_user_agent(request),
     )
+<<<<<<< HEAD
 
     # Clear the cookies on the response we actually return: FastAPI ignores
     # headers set on an injected `response` when the handler returns its own.
@@ -194,6 +319,11 @@ async def logout(
     no_content = Response(status_code=status.HTTP_204_NO_CONTENT)
     clear_auth_cookies(no_content)
     return no_content
+=======
+    response = Response(status_code=status.HTTP_204_NO_CONTENT)
+    clear_auth_cookies(response)
+    return response
+>>>>>>> 14a4133116dfbe9935129747bdaacad0577cec48
 
 
 @router.get(

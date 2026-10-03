@@ -5,7 +5,7 @@ from fastapi import APIRouter, Depends, Header, Query, Response, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from database.session import get_db_session
-from dependencies import get_current_user
+from dependencies import require_permission
 from exceptions import PreconditionRequiredError
 from schemas.common import PaginatedResponse
 from schemas.org_unit import (
@@ -14,7 +14,7 @@ from schemas.org_unit import (
     OrgUnitResponse,
     OrgUnitUpdate,
 )
-from schemas.token import TokenPayload
+from services.access_control import Actor
 from services.org_unit_service import org_unit_service
 
 router = APIRouter()
@@ -34,12 +34,12 @@ async def list_org_units(
     sort: Optional[str] = Query(None, description="Comma-separated fields, - for descending"),
     limit: int = Query(25, ge=1, le=100),
     cursor: Optional[str] = Query(None, description="Opaque pagination cursor"),
-    current_user: TokenPayload = Depends(get_current_user),
+    actor: Actor = Depends(require_permission("identity.org_unit.read")),
     db: AsyncSession = Depends(get_db_session),
 ) -> PaginatedResponse[OrgUnitResponse]:
     return await org_unit_service.list_org_units(
         session=db,
-        organization_id=current_user.organization_id,
+        organization_id=actor.organization_id,
         unit_type=unit_type,
         parent_id=parent_id,
         status=status,
@@ -60,12 +60,12 @@ async def create_org_unit(
     body: OrgUnitCreate,
     response: Response,
     idempotency_key: Optional[str] = Header(None, alias="Idempotency-Key"),
-    current_user: TokenPayload = Depends(get_current_user),
+    actor: Actor = Depends(require_permission("identity.org_unit.create")),
     db: AsyncSession = Depends(get_db_session),
 ) -> OrgUnitResponse:
     unit = await org_unit_service.create_org_unit(
         session=db,
-        organization_id=current_user.organization_id,
+        organization_id=actor.organization_id,
         data=body,
     )
     response.headers["ETag"] = f'"{unit.version}"'
@@ -82,13 +82,13 @@ async def create_org_unit(
 async def get_org_unit(
     unit_id: uuid.UUID,
     response: Response,
-    current_user: TokenPayload = Depends(get_current_user),
+    actor: Actor = Depends(require_permission("identity.org_unit.read")),
     db: AsyncSession = Depends(get_db_session),
 ) -> OrgUnitResponse:
     unit = await org_unit_service.get_org_unit(
         session=db,
         unit_id=unit_id,
-        organization_id=current_user.organization_id,
+        organization_id=actor.organization_id,
     )
     response.headers["ETag"] = f'"{unit.version}"'
     return unit
@@ -105,7 +105,7 @@ async def update_org_unit(
     body: OrgUnitUpdate,
     response: Response,
     if_match: Optional[str] = Header(None, alias="If-Match"),
-    current_user: TokenPayload = Depends(get_current_user),
+    actor: Actor = Depends(require_permission("identity.org_unit.update")),
     db: AsyncSession = Depends(get_db_session),
 ) -> OrgUnitResponse:
     if not if_match:
@@ -114,7 +114,7 @@ async def update_org_unit(
     unit = await org_unit_service.update_org_unit(
         session=db,
         unit_id=unit_id,
-        organization_id=current_user.organization_id,
+        organization_id=actor.organization_id,
         data=body,
         if_match=if_match,
     )
@@ -133,7 +133,7 @@ async def move_org_unit(
     body: OrgUnitMoveRequest,
     response: Response,
     if_match: Optional[str] = Header(None, alias="If-Match"),
-    current_user: TokenPayload = Depends(get_current_user),
+    actor: Actor = Depends(require_permission("identity.org_unit.move")),
     db: AsyncSession = Depends(get_db_session),
 ) -> OrgUnitResponse:
     if not if_match:
@@ -142,7 +142,7 @@ async def move_org_unit(
     unit = await org_unit_service.move_org_unit(
         session=db,
         unit_id=unit_id,
-        organization_id=current_user.organization_id,
+        organization_id=actor.organization_id,
         data=body,
         if_match=if_match,
     )

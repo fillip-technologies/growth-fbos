@@ -32,6 +32,7 @@ from schemas.client import ClientCreateRequest, ClientUpdateRequest
 from schemas.organization import OrganizationCreateRequest
 from schemas.token import TokenPayload
 from schemas.user import UserInviteRequest
+from services.access_control import Actor
 from services.client_service import client_service
 from services.organization_service import organization_service
 from services.platform_auth_service import platform_auth_service
@@ -112,7 +113,8 @@ async def test_create_client_duplicate_code_rejected(db_session):
 @pytest.mark.asyncio
 async def test_client_admin_creates_and_scopes_second_org(db_session):
     client = await client_service.create_client(
-        session=db_session, data=ClientCreateRequest(name="Acme", code="ACME", contact_email="ops@acme.example.com")
+        session=db_session,
+        data=ClientCreateRequest(name="Acme", code="ACME", contact_email="ops@acme.example.com", max_organizations=3),
     )
 
     org = await organization_service.create_organization(
@@ -122,7 +124,7 @@ async def test_client_admin_creates_and_scopes_second_org(db_session):
             name="Acme India",
             code="ACME-IN", email="org@acme-in.example.com",
             base_currency="INR",
-            fiscal_year_start="04-01",
+            fiscal_year_start="01-04",
             timezone="Asia/Kolkata",
         ),
     )
@@ -141,7 +143,7 @@ async def test_client_admin_creates_and_scopes_second_org(db_session):
             client_id=client.id,
             data=OrganizationCreateRequest(
                 name="Dup", code="acme-in", email="org@acme-in.example.com", base_currency="INR",
-                fiscal_year_start="04-01", timezone="Asia/Kolkata",
+                fiscal_year_start="01-04", timezone="Asia/Kolkata",
             ),
         )
 
@@ -178,7 +180,7 @@ async def test_parentless_org_is_rejected(db_session):
             code="ORPHAN",
             email="orphan@example.com",
             base_currency="USD",
-            fiscal_year_start="01-01",
+            fiscal_year_start="01-04",
             timezone="UTC",
             status="active",
         )
@@ -204,9 +206,10 @@ async def test_platform_admin_login_issues_independent_token(db_session):
     )
     await db_session.commit()
 
-    resp = await platform_auth_service.login(
+    resp, refresh_token = await platform_auth_service.login(
         session=db_session, email="root@fbos.platform", password="Secret@123"
     )
+    assert refresh_token and resp.refresh_token is None  # browsers get it as a cookie
     claims = decode_jwt_token(resp.access_token)
     assert claims["user_type"] == "platform_admin"
     assert "org_id" not in claims and "client_id" not in claims
@@ -266,7 +269,7 @@ async def test_client_and_org_endpoints_end_to_end(async_client, db_session):
             "code": "GLOBEX-US",
             "email": "org@globex-us.example.com",
             "base_currency": "USD",
-            "fiscal_year_start": "01-01",
+            "fiscal_year_start": "01-04",
             "timezone": "America/New_York",
         },
     )
@@ -296,7 +299,7 @@ async def test_org_endpoint_rejects_admin_without_client_scope(async_client):
             "code": "ORPHAN",
             "email": "orphan@example.com",
             "base_currency": "USD",
-            "fiscal_year_start": "01-01",
+            "fiscal_year_start": "01-04",
             "timezone": "UTC",
         },
     )
@@ -322,7 +325,10 @@ async def test_client_organization_limit_enforced(db_session):
     second_org = await organization_service.create_organization(
         session=db_session,
         client_id=client.id,
-        data=OrganizationCreateRequest(name="Quota Sub 1", code="QUOTA-SUB1", email="org@quota-sub1.example.com"),
+        data=OrganizationCreateRequest(
+            name="Quota Sub 1", code="QUOTA-SUB1", email="org@quota-sub1.example.com",
+            base_currency="INR", timezone="Asia/Kolkata",
+        ),
     )
     assert second_org.code == "QUOTA-SUB1"
 
@@ -331,7 +337,10 @@ async def test_client_organization_limit_enforced(db_session):
         await organization_service.create_organization(
             session=db_session,
             client_id=client.id,
-            data=OrganizationCreateRequest(name="Quota Sub 2", code="QUOTA-SUB2", email="org@quota-sub2.example.com"),
+            data=OrganizationCreateRequest(
+                name="Quota Sub 2", code="QUOTA-SUB2", email="org@quota-sub2.example.com",
+                base_currency="INR", timezone="Asia/Kolkata",
+            ),
         )
     assert exc_info.value.code == "CLIENT_ORGANIZATION_LIMIT_REACHED"
     assert exc_info.value.meta["limit"] == 2
@@ -348,7 +357,10 @@ async def test_client_organization_limit_enforced(db_session):
     third_org = await organization_service.create_organization(
         session=db_session,
         client_id=client.id,
-        data=OrganizationCreateRequest(name="Quota Sub 2", code="QUOTA-SUB2", email="org@quota-sub2.example.com"),
+        data=OrganizationCreateRequest(
+            name="Quota Sub 2", code="QUOTA-SUB2", email="org@quota-sub2.example.com",
+            base_currency="INR", timezone="Asia/Kolkata",
+        ),
     )
     assert third_org.code == "QUOTA-SUB2"
 
@@ -372,10 +384,18 @@ async def test_organization_user_limit_enforced(db_session):
         )
     ).scalar_one()
 
+    client_admin = (
+        await db_session.execute(select(User).where(User.organization_id == org.id))
+    ).scalar_one()
+    actor = Actor(
+        user_id=client_admin.id, organization_id=org.id, user_type="client_admin",
+        name=client_admin.name, is_superuser=True,
+    )
+
     # Invite 2nd user -> succeeds (count = 2)
     user2 = await user_service.invite_user(
         session=db_session,
-        organization_id=org.id,
+        actor=actor,
         data=UserInviteRequest(name="User Two", email="user2@uquota.example.com"),
     )
     assert user2.email == "user2@uquota.example.com"
@@ -384,10 +404,174 @@ async def test_organization_user_limit_enforced(db_session):
     with pytest.raises(OrganizationUserLimitReachedError) as exc_info:
         await user_service.invite_user(
             session=db_session,
-            organization_id=org.id,
+            actor=actor,
             data=UserInviteRequest(name="User Three", email="user3@uquota.example.com"),
         )
     assert exc_info.value.code == "ORGANIZATION_USER_LIMIT_REACHED"
     assert exc_info.value.meta["limit"] == 2
     assert exc_info.value.meta["current"] == 2
 
+
+
+# --------------------------------------------------------------------------- #
+# Subscription window & fiscal-year ownership
+# --------------------------------------------------------------------------- #
+
+@pytest.mark.asyncio
+async def test_create_client_defaults_subscription_window_and_fiscal_year(db_session):
+    from datetime import date
+
+    client = await client_service.create_client(
+        session=db_session,
+        data=ClientCreateRequest(name="Acme", code="ACME", contact_email="ops@acme.example.com"),
+    )
+    assert client.subscription_start == date.today()
+    assert client.subscription_end.year == client.subscription_start.year + 1
+    assert client.subscription_state == "active"
+
+    org = (await db_session.execute(select(Organization).where(Organization.client_id == client.id))).scalar_one()
+    assert org.fiscal_year_start == "01-04"  # DD-MM, set by default; client admin owns changes
+
+
+@pytest.mark.asyncio
+async def test_invalid_subscription_window_rejected(db_session):
+    from datetime import date, timedelta
+
+    from exceptions import InvalidSubscriptionWindowError
+
+    client = await client_service.create_client(
+        session=db_session,
+        data=ClientCreateRequest(name="Acme", code="ACME", contact_email="ops@acme.example.com"),
+    )
+    with pytest.raises(InvalidSubscriptionWindowError):
+        await client_service.update_client(
+            session=db_session,
+            client_id=client.id,
+            data=ClientUpdateRequest(subscription_end=date.today() - timedelta(days=5)),
+        )
+
+
+@pytest.mark.asyncio
+async def test_expired_client_is_locked_out_until_renewed(db_session):
+    from datetime import date, timedelta
+
+    from exceptions import SubscriptionExpiredError
+    from services.auth_service import auth_service
+
+    client = await client_service.create_client(
+        session=db_session,
+        data=ClientCreateRequest(
+            name="Acme", code="ACME", contact_email="ops@acme.example.com",
+            admin_email="admin@acme.example.com",
+            subscription_start=date.today() - timedelta(days=400),
+            subscription_end=date.today() - timedelta(days=35),
+        ),
+    )
+    assert client.subscription_state == "expired"
+    user = (await db_session.execute(select(User).where(User.email == "admin@acme.example.com"))).scalar_one()
+
+    with pytest.raises(SubscriptionExpiredError):
+        await auth_service._assert_subscription_active(db_session, user)
+
+    await client_service.update_client(
+        session=db_session,
+        client_id=client.id,
+        data=ClientUpdateRequest(subscription_end=date.today() + timedelta(days=365)),
+    )
+    await auth_service._assert_subscription_active(db_session, user)  # no longer raises
+
+
+@pytest.mark.asyncio
+async def test_client_admin_reads_only_own_client(async_client, db_session):
+    from tests.conftest import TEST_CLIENT_ID
+
+    app.dependency_overrides[require_client_admin] = lambda: TokenPayload(
+        sub=str(TEST_USER_ID), user_type="client_admin", client_id=str(TEST_CLIENT_ID), type="access",
+    )
+    try:
+        res = await async_client.get("/api/identity/v1/clients/me")
+    finally:
+        app.dependency_overrides.pop(require_client_admin, None)
+    assert res.status_code == 200
+    body = res.json()
+    assert body["id"] == str(TEST_CLIENT_ID)
+    assert body["subscription_state"] == "active"
+    assert body["subscription_end"]
+
+
+@pytest.mark.asyncio
+async def test_delete_client_removes_everything_it_owns(db_session):
+    from sqlalchemy import text
+
+    from exceptions import ClientNotFoundError
+    from models.client import Client
+    from models.rbac import Role
+
+    client = await client_service.create_client(
+        session=db_session,
+        data=ClientCreateRequest(
+            name="Acme", code="ACME", contact_email="ops@acme.example.com", admin_email="admin@acme.example.com",
+        ),
+    )
+    other = await client_service.create_client(
+        session=db_session,
+        data=ClientCreateRequest(
+            name="Globex", code="GLOBEX", contact_email="ops@globex.example.com", admin_email="admin@globex.example.com",
+        ),
+    )
+    assert (await db_session.execute(select(func.count()).select_from(Role))).scalar() > 0
+
+    await client_service.delete_client(session=db_session, client_id=client.id)
+
+    assert await db_session.get(Client, client.id) is None
+    assert (await db_session.execute(
+        select(func.count()).select_from(User).where(User.email == "admin@acme.example.com")
+    )).scalar() == 0
+    # The other tenant is untouched.
+    assert await db_session.get(Client, other.id) is not None
+    assert (await db_session.execute(
+        select(func.count()).select_from(User).where(User.email == "admin@globex.example.com")
+    )).scalar() == 1
+    assert (await db_session.execute(
+        select(func.count()).select_from(Organization).where(Organization.client_id == other.id)
+    )).scalar() == 1
+
+    with pytest.raises(ClientNotFoundError):
+        await client_service.delete_client(session=db_session, client_id=client.id)
+
+
+@pytest.mark.asyncio
+async def test_client_creation_email_content_and_base_url(db_session, monkeypatch):
+    from config import settings
+    from services.email_service import email_service
+    from services.event_publisher import event_publisher
+
+    sent = []
+
+    async def fake_send(to, subject, text, html_body=None):
+        sent.append((to, subject, text, html_body))
+        return True
+
+    monkeypatch.setattr(email_service, "send", fake_send)
+    monkeypatch.setattr(settings, "client_admin_base_url", "https://admin.example.test/")
+    event_publisher.clear_events()
+
+    await client_service.create_client(
+        session=db_session,
+        data=ClientCreateRequest(
+            name="Acme Corp", code="ACME", contact_email="ops@acme.example.com",
+            admin_email="boss@acme.example.com", admin_name="Asha",
+        ),
+    )
+    import asyncio
+    await asyncio.gather(*event_publisher._tasks)
+
+    assert len(sent) == 1
+    to, subject, text, html_body = sent[0]
+    assert to == "boss@acme.example.com"
+    assert "Acme Corp" in subject
+    assert "Hello Asha" in html_body and "Service period" in html_body
+    # links come from CLIENT_ADMIN_BASE_URL (trailing slash tolerated)
+    assert "https://admin.example.test/accept-invitation?token=inv_" in html_body
+    assert "https://admin.example.test/accept-invitation?token=inv_" in text
+    assert "https://admin.example.test/login" in text

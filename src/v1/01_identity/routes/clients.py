@@ -5,7 +5,8 @@ from fastapi import APIRouter, Depends, Header, Query, Response, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from database.session import get_db_session
-from dependencies import require_platform_admin
+from exceptions import ClientAdminRequiredError
+from dependencies import require_client_admin, require_platform_admin
 from schemas.client import ClientCreateRequest, ClientResponse, ClientUpdateRequest
 from schemas.common import PaginatedResponse
 from schemas.token import TokenPayload
@@ -50,6 +51,23 @@ async def list_clients(
 
 
 @router.get(
+    "/me",
+    response_model=ClientResponse,
+    status_code=status.HTTP_200_OK,
+    summary="Get the caller's own client (subscription window, quotas)",
+)
+async def get_my_client(
+    current_user: TokenPayload = Depends(require_client_admin),
+    db: AsyncSession = Depends(get_db_session),
+) -> ClientResponse:
+    # Declared before "/{client_id}" so "me" is not parsed as a UUID. The client comes
+    # from the token, never from the URL, so a client admin can only ever see their own.
+    if current_user.client_id is None:
+        raise ClientAdminRequiredError()
+    return await client_service.get_client(session=db, client_id=current_user.client_uuid)
+
+
+@router.get(
     "/{client_id}",
     response_model=ClientResponse,
     status_code=status.HTTP_200_OK,
@@ -76,3 +94,17 @@ async def update_client(
     db: AsyncSession = Depends(get_db_session),
 ) -> ClientResponse:
     return await client_service.update_client(session=db, client_id=client_id, data=body)
+
+
+@router.delete(
+    "/{client_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    summary="Permanently delete a client and everything it owns",
+)
+async def delete_client(
+    client_id: uuid.UUID,
+    current_user: TokenPayload = Depends(require_platform_admin),
+    db: AsyncSession = Depends(get_db_session),
+) -> Response:
+    await client_service.delete_client(session=db, client_id=client_id, actor_id=current_user.user_id)
+    return Response(status_code=status.HTTP_204_NO_CONTENT)

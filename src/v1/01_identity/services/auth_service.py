@@ -12,6 +12,7 @@ import pyotp
 
 from config import settings
 from exceptions import (
+    SubscriptionExpiredError,
     AccountLockedError,
     AccountNotActiveError,
     ClientCredentialsInvalidError,
@@ -26,11 +27,12 @@ from exceptions import (
     ResetTokenInvalidError,
     UserNotFoundError,
 )
+from models.client import Client
 from models.auth import ApiClient, RefreshToken, UserCredential
 from models.org_unit import OrgUnit
 from models.organization import Organization
 from models.platform_admin import PlatformAdmin
-from models.rbac import Role, RoleAssignment, RolePermission
+from models.rbac import Permission, Role, RoleAssignment
 from models.user import User
 from models.vertical import Vertical
 from schemas.auth import (
@@ -56,10 +58,12 @@ from schemas.auth import (
 )
 from schemas.token import TokenPayload
 from schemas.user import HomeUnitRef
+from services.access_control import load_grants
 from services.alert_service import alert_service
 from services.audit_service import audit_service
 from services.event_publisher import event_publisher
 from services.rate_limiter import rate_limiter
+from services.subscription import is_client_usable
 from utils.security import (
     create_access_token,
     create_mfa_token,
@@ -97,7 +101,6 @@ class AuthService:
         assignments = list(assignments_res.scalars().all())
 
         role_items: list[MeRoleItem] = []
-        permission_codes: set[str] = set()
 
         for assignment in assignments:
             if assignment.valid_to is not None:
@@ -130,11 +133,13 @@ class AuthService:
                 self_only=assignment.self_only,
             ))
 
-            rp_res = await session.execute(
-                select(RolePermission).where(RolePermission.role_id == role.id)
-            )
-            for rp in rp_res.scalars().all():
-                permission_codes.add(rp.permission_code)
+    
+        # Access is user-based: effective permissions are the user's own grants. The
+        # client admin is the tenant superuser and holds the whole catalog.
+        if user.user_type == "client_admin":
+            permission_codes = set((await session.execute(select(Permission.code))).scalars().all())
+        else:
+            permission_codes = {grant.permission for grant in await load_grants(session, user.id)}
 
         cred = await session.get(UserCredential, user.id)
         mfa_enabled = bool(cred and cred.otp_enabled)
@@ -155,6 +160,13 @@ class AuthService:
             timezone=tz,
             locale=None,
         )
+
+    async def _assert_subscription_active(self, session: AsyncSession, user: User) -> None:
+        """Total lock: users of a client that is inactive or outside its service window cannot sign in."""
+        org = await session.get(Organization, user.organization_id)
+        client = await session.get(Client, org.client_id) if org else None
+        if not is_client_usable(client):
+            raise SubscriptionExpiredError()
 
     async def _access_token_for(
         self, session: AsyncSession, user: User, family_id: uuid.UUID
@@ -296,6 +308,9 @@ class AuthService:
                     )
                     await session.commit()
                     raise InvalidCredentialsError()
+
+        # 2b. Client subscription window (expired / inactive client -> 403 SUBSCRIPTION_EXPIRED)
+        await self._assert_subscription_active(session, user)
 
         # 3. Check account active status (invited, suspended, deactivated -> 403)
         user_status = getattr(user, "status", "active")
@@ -573,6 +588,8 @@ class AuthService:
         if user_status != "active" or user.user_type in ("invited", "suspended", "deactivated"):
             raise AccountNotActiveError()
 
+        await self._assert_subscription_active(session, user)
+
         credential = await session.get(UserCredential, user_id)
         if not credential or not credential.otp_secret_enc:
             raise MfaCodeInvalidError()
@@ -772,6 +789,8 @@ class AuthService:
         if user_status != "active" or user.user_type in ("invited", "suspended", "deactivated"):
             raise AccountNotActiveError()
 
+        await self._assert_subscription_active(session, user)
+
         new_token_id = uuid.uuid4()
         new_refresh_token_str = create_refresh_token(
             token_id=new_token_id,
@@ -825,37 +844,24 @@ class AuthService:
     async def logout(
         self,
         session: AsyncSession,
-        current_user: TokenPayload,
+        user_id: Optional[uuid.UUID],
+        family_id: Optional[uuid.UUID],
         client_ip: Optional[str] = None,
         user_agent: Optional[str] = None,
     ) -> None:
-        rate_limiter.check(f"{current_user.sub}:logout", rate_class="standard")
+        """
+        Revoke one sign-in (its refresh-token family). Only that session ends; the user's
+        other devices stay signed in. Idempotent: no known session is a no-op.
+        """
+        if family_id is None:
+            return
+        rate_limiter.check(f"{family_id}:logout", rate_class="standard")
 
-        user_id = uuid.UUID(current_user.sub)
-        now = datetime.now(timezone.utc)
-
-        if current_user.family_id:
-            family_id = uuid.UUID(current_user.family_id)
-            stmt = (
-                update(RefreshToken)
-                .where(
-                    RefreshToken.family_id == family_id,
-                    RefreshToken.revoked_at.is_(None),
-                )
-                .values(revoked_at=now)
-            )
-            await session.execute(stmt)
-        else:
-            stmt = (
-                update(RefreshToken)
-                .where(
-                    RefreshToken.user_id == user_id,
-                    RefreshToken.revoked_at.is_(None),
-                )
-                .values(revoked_at=now)
-            )
-            await session.execute(stmt)
-
+        await session.execute(
+            update(RefreshToken)
+            .where(RefreshToken.family_id == family_id, RefreshToken.revoked_at.is_(None))
+            .values(revoked_at=datetime.now(timezone.utc))
+        )
         await audit_service.record_attempt(
             session=session,
             event_type="identity.session.revoked.v1",
@@ -864,18 +870,17 @@ class AuthService:
             ip_address=client_ip,
             user_agent=user_agent,
             user_id=user_id,
-            details={"family_id": current_user.family_id},
+            details={"family_id": str(family_id)},
         )
         await event_publisher.publish(
             "identity.session.revoked.v1",
             {
-                "user_id": str(user_id),
-                "family_id": current_user.family_id,
+                "user_id": str(user_id) if user_id else None,
+                "family_id": str(family_id),
                 "ip_address": client_ip,
                 "user_agent": user_agent,
             },
         )
-
         await session.commit()
 
     async def get_me(
@@ -1013,20 +1018,33 @@ class AuthService:
         if expires < now:
             raise InvitationInvalidError("Token expired")
 
+        # Only a pending invitee can activate: a deactivated (or already active) user's
+        # leftover link must never bring the account back.
+        user = await session.get(User, cred.user_id)
+        if not user or user.status != "invited":
+            cred.invitation_token = None
+            cred.invitation_token_expires_at = None
+            await session.commit()
+            raise InvitationInvalidError()
+
         cred.password_hash = hash_password(request_data.password)
         cred.invitation_token = None
         cred.invitation_token_expires_at = None
+        cred.password_changed_at = now
+        cred.failed_attempts = 0
+        cred.locked_until = None
 
-        user = await session.get(User, cred.user_id)
-        if user:
-            user.status = "active"
-            user.version += 1
-
+        user.status = "active"
+        user.version += 1
         await session.commit()
 
         await event_publisher.publish(
             "identity.user.activated.v1",
-            {"user_id": str(cred.user_id)},
+            {
+                "user_id": str(user.id),
+                "organization_id": str(user.organization_id),
+                "home_unit_id": str(user.home_unit_id) if user.home_unit_id else None,
+            },
         )
 
     async def start_mfa_enrollment(

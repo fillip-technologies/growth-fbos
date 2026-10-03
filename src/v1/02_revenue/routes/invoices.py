@@ -10,6 +10,7 @@ from schemas.invoice import (
     CreditNoteCreate,
     DownloadUrl,
     InvoiceDraftCreate,
+    InvoiceIssue,
     InvoiceResponse,
 )
 from services.invoice_service import InvoiceService
@@ -91,6 +92,7 @@ async def issue_invoice(
     response: Response,
     if_match: Optional[str] = Header(None, alias="If-Match"),
     idempotency_key: Optional[str] = Header(None, alias="Idempotency-Key"),
+    payload: Optional[InvoiceIssue] = None,
 ) -> InvoiceResponse:
     """Issue a draft invoice, allocating a gapless sequence number and freezing it."""
     require_idempotency_key(idempotency_key)
@@ -101,6 +103,7 @@ async def issue_invoice(
         org_id=org_id,
         user_id=user_id,
         if_match=if_match,
+        payload=payload,
     )
     await session.commit()
     response.headers["ETag"] = f'"{invoice.version}"'

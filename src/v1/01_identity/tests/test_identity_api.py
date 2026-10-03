@@ -161,29 +161,42 @@ async def test_roles_and_permissions(async_client: httpx.AsyncClient):
         json={
             "code": "qa_lead",
             "name": "QA Lead",
-            "permissions": ["task.task.read", "task.task.assign"],
+            "permissions": ["identity.org_unit.read", "identity.calendar.read"],
         },
     )
     assert role_res.status_code == 201
     role = role_res.json()
     assert role["code"] == "qa_lead"
-    assert "task.task.read" in role["permissions"]
+    assert "identity.org_unit.read" in role["permissions"]
+
+    # Unknown permission codes are rejected instead of failing on the foreign key.
+    bad_role = await async_client.post(
+        "/api/identity/v1/roles",
+        json={"code": "bad", "name": "Bad", "permissions": ["task.task.read"]},
+    )
+    assert bad_role.status_code == 422
+    assert bad_role.json()["code"] == "VALIDATION_FAILED"
 
     # 3. Replace role permissions with ETag
     role_id = role["id"]
     put_res = await async_client.put(
         f"/api/identity/v1/roles/{role_id}/permissions",
-        json={"permissions": ["task.task.read", "task.task.update"]},
+        json={"permissions": ["identity.org_unit.read", "identity.calendar.update"]},
         headers={"If-Match": '"1"'},
     )
     assert put_res.status_code == 200
-    assert "task.task.update" in put_res.json()["permissions"]
+    assert "identity.calendar.update" in put_res.json()["permissions"]
 
-    # 4. Create role assignment
+    # 4. Apply the role preset to another user: its permissions are copied onto them.
+    invitee = await async_client.post(
+        "/api/identity/v1/users", json={"name": "QA Person", "email": "qa.person@example.com"}
+    )
+    assert invitee.status_code == 201
+    invitee_id = invitee.json()["id"]
     assign_res = await async_client.post(
         "/api/identity/v1/role-assignments",
         json={
-            "user_id": str(TEST_USER_ID),
+            "user_id": invitee_id,
             "role_id": role_id,
             "reason": "Test Assignment",
         },
@@ -197,15 +210,21 @@ async def test_roles_and_permissions(async_client: httpx.AsyncClient):
     assert list_assign.status_code == 200
 
     # 6. Internal effective grants check
+    perms_after = await async_client.get(f"/api/identity/v1/users/{invitee_id}/permissions")
+    assert perms_after.status_code == 200
+    granted = {(p["code"], p["source_role"]) for p in perms_after.json()["permissions"]}
+    assert granted == {("identity.org_unit.read", "qa_lead"), ("identity.calendar.update", "qa_lead")}
+
     grants_res = await async_client.get(f"/api/identity/v1/internal/authz/grants?user_id={TEST_USER_ID}")
     assert grants_res.status_code == 200
-    grants_data = grants_res.json()
-    perm_names = [g["permission"] for g in grants_data["grants"]]
-    assert "task.task.read" in perm_names
+    perm_names = [g["permission"] for g in grants_res.json()["grants"]]
+    assert "identity.user.create" in perm_names
 
-    # 7. Revoke role assignment
+    # 7. Revoke role assignment: the permissions it gave are removed with it.
     revoke_res = await async_client.delete(f"/api/identity/v1/role-assignments/{assignment_id}?reason=Removed")
     assert revoke_res.status_code == 204
+    perms_revoked = await async_client.get(f"/api/identity/v1/users/{invitee_id}/permissions")
+    assert perms_revoked.json()["permissions"] == []
 
 
 @pytest.mark.asyncio

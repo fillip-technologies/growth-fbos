@@ -1,4 +1,5 @@
 import uuid
+from datetime import datetime
 from typing import List, Optional
 
 from sqlalchemy import select
@@ -114,6 +115,8 @@ class CollectionService:
             notes=payload.notes,
             outcome=payload.outcome,
         )
+        if payload.followed_up_on:
+            followup.followed_up_at = datetime.combine(payload.followed_up_on, datetime.min.time())
         session.add(followup)
 
         if payload.outcome == "promised":

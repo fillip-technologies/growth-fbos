@@ -34,6 +34,10 @@ class Settings(BaseSettings):
     lockout_window_minutes: int = 15  # within 15 minutes
     lockout_duration_minutes: int = 15  # locks account for 15 minutes
 
+    # Shared secret other services send as X-FBOS-Internal-Token on /internal/* calls.
+    # Empty is accepted only when app_env is "development".
+    internal_service_token: str = ""
+
     # Rate Limiting
     auth_rate_limit_per_minute: int = 60
 
@@ -44,6 +48,20 @@ class Settings(BaseSettings):
     db_max_overflow: int = 20
     db_pool_timeout: int = 30
     db_pool_recycle: int = 1800
+
+    # Mail (SMTP)
+    mail_enabled: bool = False  # explicit opt-in so tests/dev never send real mail
+    mail_mailer: str = "smtp"
+    mail_host: str = ""
+    mail_port: int = 587
+    mail_encryption: str = "tls"
+    mail_username: str = ""
+    mail_password: str = ""
+    mail_from_address: str = ""
+    mail_from_name: str = "FBOS"
+    # Base URL of the client-admin frontend. Every link in outgoing emails (activate
+    # account, reset password, sign in) is built from it: change it here for staging/prod.
+    client_admin_base_url: str = "http://localhost:5174"
 
 
 settings = Settings()

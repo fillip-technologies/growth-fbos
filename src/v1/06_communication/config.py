@@ -16,5 +16,15 @@ class Settings(BaseSettings):
     db_pool_timeout: int = 30
     db_pool_recycle: int = 1800
 
+    # Mail (SMTP)
+    mail_mailer: str = "smtp"
+    mail_host: str = ""
+    mail_port: int = 587
+    mail_encryption: str = "tls"
+    mail_username: str = ""
+    mail_password: str = ""
+    mail_from_address: str = ""
+    mail_from_name: str = "FBOS"
+
 
 settings = Settings()

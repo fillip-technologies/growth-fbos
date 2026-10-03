@@ -3,7 +3,7 @@ from datetime import date, datetime
 from typing import List, Literal, Optional
 from pydantic import BaseModel, ConfigDict, Field
 
-from schemas.common import Money
+from schemas.common import Money, PastDate
 from schemas.opportunity import ClientRef
 
 
@@ -20,6 +20,8 @@ class QuotationCreate(BaseModel):
     place_of_supply: Optional[str] = None
     items: List[QuotationItemInput] = Field(..., min_length=1)
     terms: Optional[str] = None
+    # Back-dating support: when omitted, the quotation is dated today.
+    created_on: Optional[PastDate] = None
 
 
 class QuotationItemsReplace(BaseModel):

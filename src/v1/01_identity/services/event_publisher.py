@@ -1,4 +1,5 @@
 from datetime import datetime, timezone
+import asyncio
 import logging
 from typing import Any
 import uuid
@@ -29,12 +30,30 @@ class EventPublisher:
 
     def __init__(self) -> None:
         self._published_events: list[DomainEvent] = []
+        self._tasks: set[asyncio.Task] = set()  # keep refs so tasks aren't garbage-collected
 
     async def publish(self, event_type: str, data: dict[str, Any]) -> DomainEvent:
         event = DomainEvent(event_type=event_type, data=data)
         self._published_events.append(event)
         logger.info("Published domain event: %s", event.to_dict())
+        self._dispatch_email(event)
         return event
+
+    def _dispatch_email(self, event: DomainEvent) -> None:
+        """Fire-and-forget the email side effect of invitation / password-reset events."""
+        from services.email_service import email_service  # local import: avoids a cycle at module load
+
+        data = event.data
+        coro = None
+        if event.event_type == "identity.user.invited.v1" and data.get("invitation_token") and data.get("email"):
+            coro = email_service.send_invitation(data)
+        elif event.event_type == "identity.password.reset_requested.v1" and data.get("token") and data.get("email"):
+            coro = email_service.send_password_reset(data["email"], data["token"])
+        if coro is None:
+            return
+        task = asyncio.get_running_loop().create_task(coro)
+        self._tasks.add(task)
+        task.add_done_callback(self._tasks.discard)
 
     def get_published_events(self) -> list[DomainEvent]:
         """Return all published events (useful for assertions in test suites)."""
