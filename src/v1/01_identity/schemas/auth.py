@@ -13,6 +13,7 @@ class OrganizationRef(BaseModel):
     id: uuid.UUID
     code: str
     name: str
+    calendar_id: Optional[uuid.UUID] = None
 
 
 class ScopeUnitRef(BaseModel):

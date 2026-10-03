@@ -26,11 +26,11 @@ PERMISSION_CATALOG: list[tuple[str, str, str]] = [
     ("identity.role_assignment.read", "identity", "List roles applied to users"),
     ("identity.role_assignment.create", "identity", "Apply a role preset to a user"),
     ("identity.role_assignment.delete", "identity", "Remove a role preset from a user"),
-    # Organization structure
-    ("identity.org_unit.read", "identity", "Read organization units"),
-    ("identity.org_unit.create", "identity", "Create organization units"),
-    ("identity.org_unit.update", "identity", "Update organization units"),
-    ("identity.org_unit.move", "identity", "Move organization units"),
+    # Company structure (branches, departments, teams)
+    ("identity.org_unit.read", "identity", "View the company structure"),
+    ("identity.org_unit.create", "identity", "Add branches, departments and teams"),
+    ("identity.org_unit.update", "identity", "Edit branches, departments and teams"),
+    ("identity.org_unit.move", "identity", "Move departments and teams"),
     ("identity.calendar.read", "identity", "Read working calendars"),
     ("identity.calendar.create", "identity", "Create working calendars"),
     ("identity.calendar.update", "identity", "Update working calendars"),
@@ -38,6 +38,9 @@ PERMISSION_CATALOG: list[tuple[str, str, str]] = [
     ("identity.field_definition.create", "identity", "Create custom field schemas"),
     ("identity.field_definition.publish", "identity", "Publish custom field schemas"),
     ("identity.vertical_pack.manage", "identity", "Register and activate vertical packs"),
+    ("identity.session.read", "identity", "View where users are signed in"),
+    ("identity.session.revoke", "identity", "Sign users out of their sessions"),
+    ("identity.audit_log.read", "identity", "Read the security audit log"),
     # Other services
     ("revenue.deal.read", "revenue", "View deals"),
     ("revenue.deal.create", "revenue", "Create deals"),
@@ -51,28 +54,36 @@ ADMIN_ROLE_CODE = "admin"
 MEMBER_ROLE_CODE = "member"
 
 
+# Reads of other people's security data (sign-in places, IP addresses); the `member`
+# preset leaves them out.
+SENSITIVE_READ_CODES = {"identity.session.read", "identity.audit_log.read"}
+
+
 def member_permission_codes(catalog_codes: list[str]) -> list[str]:
-    """The `member` preset is read-only access."""
-    return [code for code in catalog_codes if code.endswith(".read")]
+    """The `member` preset is read-only access, minus other people's security data."""
+    return [code for code in catalog_codes if code.endswith(".read") and code not in SENSITIVE_READ_CODES]
 
 
 async def ensure_permission_catalog(session: AsyncSession) -> list[str]:
     """
-    Insert missing catalog entries and keep every org's `admin` preset at the full catalog.
+    Insert missing catalog entries, keep descriptions as worded here, and keep every org's
+    `admin` preset at the full catalog.
 
     Codes added by this call are also granted (organization-wide) to users who hold the
     `admin` preset, so existing org admins keep full access when the catalog grows. Codes
     that already existed are never re-granted, so individual revocations stick.
     Returns the newly added codes.
     """
-    existing = set((await session.execute(select(Permission.code))).scalars().all())
+    existing = {p.code: p for p in (await session.execute(select(Permission))).scalars().all()}
     added = [code for code, _, _ in PERMISSION_CATALOG if code not in existing]
     for code, service, description in PERMISSION_CATALOG:
         if code in added:
             session.add(Permission(code=code, service=service, description=description))
+        elif existing[code].description != description:
+            existing[code].description = description
     await session.flush()
 
-    catalog_codes = existing | set(added)
+    catalog_codes = set(existing) | set(added)
     admin_roles = (
         await session.execute(select(Role).where(Role.code == ADMIN_ROLE_CODE, Role.is_system.is_(True)))
     ).scalars().all()

@@ -1,13 +1,14 @@
 from typing import Optional
 import uuid
 
-from fastapi import APIRouter, Depends, Header, Query, Response, status
+from fastapi import APIRouter, Depends, Header, Query, Request, Response, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from database.session import get_db_session
-from dependencies import require_permission
+from dependencies import get_client_ip, get_user_agent, require_permission
 from exceptions import PreconditionRequiredError
 from schemas.common import PaginatedResponse
+from schemas.session import SessionResponse
 from schemas.user import (
     InvitationResponse,
     UserDeactivateRequest,
@@ -19,6 +20,7 @@ from schemas.user import (
     UserUpdateRequest,
 )
 from services.access_control import Actor
+from services.session_service import PERM_SESSION_READ, PERM_SESSION_REVOKE, session_service
 from services.user_service import (
     PERM_ACCESS_MANAGE,
     PERM_ACCESS_READ,
@@ -190,3 +192,66 @@ async def replace_user_permissions(
     db: AsyncSession = Depends(get_db_session),
 ) -> UserPermissionsResponse:
     return await user_service.replace_permissions(session=db, actor=actor, user_id=user_id, data=body)
+
+
+@router.get(
+    "/{user_id}/sessions",
+    response_model=PaginatedResponse[SessionResponse],
+    status_code=status.HTTP_200_OK,
+    summary="List where a user is signed in",
+    description="The user's live sessions (browsers and devices), most recently used first.",
+)
+async def list_user_sessions(
+    user_id: uuid.UUID,
+    limit: int = Query(25, ge=1, le=100),
+    cursor: Optional[str] = Query(None, description="Opaque pagination cursor"),
+    actor: Actor = Depends(require_permission(PERM_SESSION_READ)),
+    db: AsyncSession = Depends(get_db_session),
+) -> PaginatedResponse[SessionResponse]:
+    user = await user_service.load_user_for(db, actor, user_id, PERM_SESSION_READ)
+    return await session_service.list_sessions(db, user.id, current_id=None, limit=limit, cursor=cursor)
+
+
+@router.delete(
+    "/{user_id}/sessions/{session_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    summary="Sign a user out of one session",
+    description="Ends that sign-in at once. Use /auth/sessions for your own sessions.",
+)
+async def revoke_user_session(
+    user_id: uuid.UUID,
+    session_id: uuid.UUID,
+    request: Request,
+    actor: Actor = Depends(require_permission(PERM_SESSION_REVOKE)),
+    db: AsyncSession = Depends(get_db_session),
+) -> Response:
+    user = await user_service.load_user_for(
+        db, actor, user_id, PERM_SESSION_REVOKE, manage_action="manage the sessions of"
+    )
+    await session_service.revoke_session(
+        db, user, session_id, revoked_by=actor.user_id,
+        client_ip=get_client_ip(request), user_agent=get_user_agent(request),
+    )
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+@router.delete(
+    "/{user_id}/sessions",
+    status_code=status.HTTP_204_NO_CONTENT,
+    summary="Sign a user out everywhere",
+    description="Ends all of the user's sign-ins at once. Use /auth/sessions for your own sessions.",
+)
+async def revoke_user_sessions(
+    user_id: uuid.UUID,
+    request: Request,
+    actor: Actor = Depends(require_permission(PERM_SESSION_REVOKE)),
+    db: AsyncSession = Depends(get_db_session),
+) -> Response:
+    user = await user_service.load_user_for(
+        db, actor, user_id, PERM_SESSION_REVOKE, manage_action="manage the sessions of"
+    )
+    await session_service.revoke_sessions(
+        db, user, revoked_by=actor.user_id,
+        client_ip=get_client_ip(request), user_agent=get_user_agent(request),
+    )
+    return Response(status_code=status.HTTP_204_NO_CONTENT)

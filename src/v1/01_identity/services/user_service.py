@@ -45,6 +45,7 @@ from services.access_control import Actor
 from services.event_publisher import event_publisher
 from services.rate_limiter import rate_limiter
 from services.user_permission_service import user_permission_service
+from utils.dates import iso_utc
 
 logger = logging.getLogger("identity.user_service")
 
@@ -73,15 +74,6 @@ def _assert_version(if_match: str, current_version: int) -> None:
         raise PreconditionFailedError(f"ETag mismatch. Current version is '{current_version}'")
 
 
-def _iso(value: Optional[datetime]) -> Optional[str]:
-    """ISO-8601 in UTC; DB columns are naive UTC, so tag them explicitly."""
-    if value is None:
-        return None
-    if value.tzinfo is None:
-        value = value.replace(tzinfo=timezone.utc)
-    return value.isoformat().replace("+00:00", "Z")
-
-
 class UserService:
     # ------------------------------------------------------------------ helpers
 
@@ -100,7 +92,7 @@ class UserService:
 
         cred = await session.get(UserCredential, user.id)
         invitation_expires_at = (
-            _iso(cred.invitation_token_expires_at)
+            iso_utc(cred.invitation_token_expires_at)
             if cred and user.status == "invited" and cred.invitation_token
             else None
         )
@@ -116,9 +108,9 @@ class UserService:
             home_unit=home_unit_ref,
             manager=manager_ref,
             mfa_enabled=bool(cred and cred.otp_enabled),
-            last_login_at=_iso(user.last_login_at),
+            last_login_at=iso_utc(user.last_login_at),
             version=user.version,
-            created_at=_iso(user.created_at),
+            created_at=iso_utc(user.created_at),
             invitation_expires_at=invitation_expires_at,
         )
 
@@ -147,6 +139,24 @@ class UserService:
             raise PermissionDeniedError(permission)
         raise UserNotFoundError()
 
+    async def load_user_for(
+        self,
+        session: AsyncSession,
+        actor: Actor,
+        user_id: uuid.UUID,
+        permission: str,
+        manage_action: Optional[str] = None,
+    ) -> User:
+        """
+        A user the actor may act on with `permission` (404 outside every readable scope, 403
+        when visible but not allowed). With `manage_action`, also refuses the actor's own
+        account and, for anyone but a client admin, a client admin's.
+        """
+        user = await self._load_user(session, actor, user_id, permission)
+        if manage_action:
+            self._assert_may_manage(actor, user, manage_action)
+        return user
+
     def _assert_may_manage(self, actor: Actor, user: User, action: str) -> None:
         """The tenant superuser (client admin) can only be managed by a client admin."""
         if user.id == actor.user_id:
@@ -163,13 +173,13 @@ class UserService:
         if unit_id is None:
             if not actor.has_org_wide(permission):
                 raise ValidationFailedError.for_field(
-                    "home_unit_id", "Required: you can only place users inside units you manage"
+                    "home_unit_id", "Required: you can only place people in branches, departments or teams you manage"
                 )
             return None
 
         unit = await session.get(OrgUnit, unit_id)
         if not unit or unit.organization_id != actor.organization_id or unit.status != "active":
-            raise ValidationFailedError.for_field("home_unit_id", "Unknown or inactive organization unit")
+            raise ValidationFailedError.for_field("home_unit_id", "Unknown or inactive branch, department or team")
         if not actor.can(permission, unit.path):
             raise PermissionDeniedError(permission, "You can't place users in this organization unit")
         return unit
@@ -552,7 +562,7 @@ class UserService:
                 or replacement.status != "active"
             ):
                 raise ValidationFailedError.for_field(
-                    "reassign_to_user_id", "Must be another active user of this organization"
+                    "reassign_to_user_id", "Must be another active user of this company"
                 )
 
         now = datetime.now(timezone.utc)

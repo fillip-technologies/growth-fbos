@@ -73,28 +73,29 @@ async def test_users_crud(async_client: httpx.AsyncClient):
 
 @pytest.mark.asyncio
 async def test_org_units_hierarchy_and_move(async_client: httpx.AsyncClient):
-    # 1. Create company (root)
-    company_res = await async_client.post(
+    # 1. Create branch (top level: the organization itself is the company)
+    branch_res = await async_client.post(
         "/api/identity/v1/org-units",
-        json={"code": "CORP", "name": "Global Corp", "unit_type": "company"},
+        json={"code": "HQ", "name": "Head Office", "unit_type": "branch"},
     )
-    assert company_res.status_code == 201
-    company = company_res.json()
-    assert company["path"] == f"/{company['id']}/"
+    assert branch_res.status_code == 201
+    branch = branch_res.json()
+    assert branch["parent_id"] is None
+    assert branch["path"] == f"/{branch['id']}/"
 
-    # 2. Create department under company
+    # 2. Create department under branch
     dept_res = await async_client.post(
         "/api/identity/v1/org-units",
         json={
             "code": "ENG",
             "name": "Engineering",
             "unit_type": "department",
-            "parent_id": company["id"],
+            "parent_id": branch["id"],
         },
     )
     assert dept_res.status_code == 201
     dept = dept_res.json()
-    assert dept["path"] == f"/{company['id']}/{dept['id']}/"
+    assert dept["path"] == f"/{branch['id']}/{dept['id']}/"
 
     # 3. Create team under department
     team_res = await async_client.post(
@@ -109,14 +110,14 @@ async def test_org_units_hierarchy_and_move(async_client: httpx.AsyncClient):
     assert team_res.status_code == 201
     team = team_res.json()
 
-    # 4. Try invalid hierarchy: team directly under company
+    # 4. Try invalid hierarchy: team directly under branch
     invalid_res = await async_client.post(
         "/api/identity/v1/org-units",
         json={
             "code": "BAD-TEAM",
             "name": "Bad Team",
             "unit_type": "team",
-            "parent_id": company["id"],
+            "parent_id": branch["id"],
         },
     )
     assert invalid_res.status_code == 422
@@ -128,7 +129,7 @@ async def test_org_units_hierarchy_and_move(async_client: httpx.AsyncClient):
             "code": "PROD",
             "name": "Product",
             "unit_type": "department",
-            "parent_id": company["id"],
+            "parent_id": branch["id"],
         },
     )
     assert dept2_res.status_code == 201
@@ -146,7 +147,115 @@ async def test_org_units_hierarchy_and_move(async_client: httpx.AsyncClient):
     assert move_res.status_code == 200
     moved_team = move_res.json()
     assert moved_team["parent_id"] == dept2["id"]
-    assert moved_team["path"] == f"/{company['id']}/{dept2['id']}/{team['id']}/"
+    assert moved_team["path"] == f"/{branch['id']}/{dept2['id']}/{team['id']}/"
+
+
+@pytest.mark.asyncio
+async def test_org_units_start_at_branches(async_client: httpx.AsyncClient):
+    units_url = "/api/identity/v1/org-units"
+    branch = (await async_client.post(units_url, json={"code": "DEL", "name": "Delhi", "unit_type": "branch"})).json()
+
+    # The company is the organization itself, not a unit.
+    company_res = await async_client.post(units_url, json={"code": "CO", "name": "Company", "unit_type": "company"})
+    assert company_res.status_code == 422
+
+    # A branch sits directly under the organization.
+    nested_branch_res = await async_client.post(
+        units_url, json={"code": "DEL-2", "name": "Delhi 2", "unit_type": "branch", "parent_id": branch["id"]},
+    )
+    assert nested_branch_res.status_code == 422
+    assert nested_branch_res.json()["code"] == "ORG_UNIT_HIERARCHY_INVALID"
+
+    # Departments and teams can't be at the top.
+    for unit_type in ("department", "team"):
+        top_level_res = await async_client.post(
+            units_url, json={"code": f"TOP-{unit_type}", "name": "Top", "unit_type": unit_type},
+        )
+        assert top_level_res.status_code == 422
+        assert top_level_res.json()["code"] == "ORG_UNIT_HIERARCHY_INVALID"
+
+    # A branch can't be moved under another unit.
+    dept = (await async_client.post(
+        units_url, json={"code": "SALES", "name": "Sales", "unit_type": "department", "parent_id": branch["id"]},
+    )).json()
+    other_branch = (await async_client.post(units_url, json={"code": "MUM", "name": "Mumbai", "unit_type": "branch"})).json()
+    move_res = await async_client.post(
+        f"{units_url}/{other_branch['id']}/move",
+        json={"new_parent_id": dept["id"], "reason": "Restructuring"},
+        headers={"If-Match": '"1"'},
+    )
+    assert move_res.status_code == 422
+    assert move_res.json()["code"] == "ORG_UNIT_HIERARCHY_INVALID"
+
+
+@pytest.mark.asyncio
+async def test_org_calendar_reaches_branches_and_following_units(async_client: httpx.AsyncClient, db_session):
+    from dependencies import require_client_admin
+    from main import app
+    from models.calendar import Calendar
+    from models.organization import Organization
+    from schemas.token import TokenPayload
+    from tests.conftest import TEST_CLIENT_ID
+
+    app.dependency_overrides[require_client_admin] = lambda: TokenPayload(
+        sub=str(TEST_USER_ID), user_type="client_admin", client_id=str(TEST_CLIENT_ID), type="access",
+    )
+    org_url = f"/api/identity/v1/organizations/{TEST_ORG_ID}"
+    units_url = "/api/identity/v1/org-units"
+
+    async def create_calendar(name: str) -> str:
+        res = await async_client.post(
+            "/api/identity/v1/calendars",
+            json={"name": name, "timezone": "UTC", "weekly_hours": {"mon": [["09:00", "17:00"]]}},
+        )
+        assert res.status_code == 201
+        return res.json()["id"]
+
+    async def unit_calendar(unit_id: str):
+        return (await async_client.get(f"{units_url}/{unit_id}")).json()["calendar_id"]
+
+    office, factory, night_shift = [await create_calendar(name) for name in ("Office", "Factory", "Night shift")]
+
+    # A branch created before the organization has a calendar starts without one...
+    early = (await async_client.post(units_url, json={"code": "EARLY", "name": "Early", "unit_type": "branch"})).json()
+    assert early["calendar_id"] is None
+
+    # ...and picks it up once the organization calendar is set.
+    set_res = await async_client.patch(org_url, json={"calendar_id": office})
+    assert set_res.status_code == 200
+    assert set_res.json()["calendar_id"] == office
+    assert await unit_calendar(early["id"]) == office
+
+    # New branches start on the organization calendar; a unit may pick its own.
+    late = (await async_client.post(units_url, json={"code": "LATE", "name": "Late", "unit_type": "branch"})).json()
+    assert late["calendar_id"] == office
+    own = (await async_client.post(units_url, json={
+        "code": "NIGHT", "name": "Night", "unit_type": "department", "parent_id": late["id"], "calendar_id": night_shift,
+    })).json()
+    assert own["calendar_id"] == night_shift
+
+    # Changing it moves the units that follow it; a unit's own calendar stays.
+    assert (await async_client.patch(org_url, json={"calendar_id": factory})).status_code == 200
+    assert await unit_calendar(early["id"]) == factory
+    assert await unit_calendar(late["id"]) == factory
+    assert await unit_calendar(own["id"]) == night_shift
+
+    # Only the organization's own calendars can be used.
+    other_org = Organization(
+        id=uuid.uuid4(), client_id=TEST_CLIENT_ID, name="Other", code="OTHER", email="other@example.com",
+        base_currency="USD", fiscal_year_start="01-04", timezone="UTC", status="active",
+    )
+    db_session.add(other_org)
+    await db_session.flush()
+    foreign_calendar = Calendar(id=uuid.uuid4(), organization_id=other_org.id, name="Theirs", timezone="UTC")
+    db_session.add(foreign_calendar)
+    await db_session.commit()
+
+    for calendar_id in (str(foreign_calendar.id), str(uuid.uuid4())):
+        reject_res = await async_client.patch(org_url, json={"calendar_id": calendar_id})
+        assert reject_res.status_code == 422
+        assert reject_res.json()["code"] == "VALIDATION_FAILED"
+    assert (await async_client.get(org_url)).json()["calendar_id"] == factory
 
 
 @pytest.mark.asyncio

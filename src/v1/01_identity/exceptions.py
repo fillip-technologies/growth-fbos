@@ -177,6 +177,17 @@ class UserNotFoundError(IdentityServiceError):
         )
 
 
+class SessionNotFoundError(IdentityServiceError):
+    """404: No active session with this id for this user."""
+
+    def __init__(self) -> None:
+        super().__init__(
+            status_code=status.HTTP_404_NOT_FOUND,
+            code="SESSION_NOT_FOUND",
+            message="Session not found or already signed out",
+        )
+
+
 class UserAlreadyExistsError(IdentityServiceError):
     """409: A user with this email already exists (emails are unique across the platform)."""
 

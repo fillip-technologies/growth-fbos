@@ -16,6 +16,7 @@ from exceptions import (
     PreconditionRequiredError,
 )
 from models.org_unit import OrgUnit
+from models.organization import Organization
 from models.rbac import RoleAssignment
 from models.user import User
 from schemas.common import PageInfo, PaginatedResponse
@@ -30,10 +31,13 @@ from services.event_publisher import event_publisher
 
 logger = logging.getLogger("identity.org_unit_service")
 
+# The organization itself is the company, so the structure starts at branches: a branch
+# sits directly under the organization (no parent unit), a department under a branch or
+# another department, a team under a department.
+ROOT_UNIT_TYPES = {"branch"}
 ALLOWED_PARENTS = {
-    "company": [],
-    "branch": ["company"],
-    "department": ["company", "branch", "department"],
+    "branch": [],
+    "department": ["branch", "department"],
     "team": ["department"],
 }
 
@@ -45,17 +49,20 @@ class OrgUnitService:
 
         allowed = ALLOWED_PARENTS.get(unit_type)
         if allowed is None:
-            return
+            raise OrgUnitHierarchyInvalidError(
+                allowed_parent_types=[],
+                message=f"Units of type '{unit_type}' are not supported",
+            )
 
-        if unit_type == "company":
+        if unit_type in ROOT_UNIT_TYPES:
             if parent is not None:
                 raise OrgUnitHierarchyInvalidError(
                     allowed_parent_types=[],
-                    message="A company cannot have a parent unit",
+                    message=f"A {unit_type} sits directly under the organization and cannot have a parent unit",
                 )
             return
 
-        # For branch, department, team: parent is required
+        # For department and team: parent is required
         if parent is None:
             raise OrgUnitHierarchyInvalidError(
                 allowed_parent_types=allowed,
@@ -207,10 +214,13 @@ class OrgUnitService:
                     message="Head user does not exist in this organization",
                 )
 
-        # Calendar inheritance
+        # Calendar inheritance: the parent's, or for a branch the organization's
         calendar_id = data.calendar_id
         if calendar_id is None and parent is not None:
             calendar_id = parent.calendar_id
+        if calendar_id is None and parent is None:
+            organization = await session.get(Organization, organization_id)
+            calendar_id = organization.calendar_id if organization else None
 
         unit_id = uuid.uuid4()
         path = f"{parent.path}{unit_id}/" if parent is not None else f"/{unit_id}/"

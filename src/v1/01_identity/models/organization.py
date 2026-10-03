@@ -24,6 +24,13 @@ class Organization(Base):
     base_currency: Mapped[str] = mapped_column(String(10), nullable=False)
     fiscal_year_start: Mapped[str] = mapped_column(String(5), nullable=False)  # DD-MM, e.g. "01-04" (1 April)
     timezone: Mapped[str] = mapped_column(String(100), nullable=False)
+    # The organization is the company; this is its working calendar (one of its own).
+    # New branches start on it, and units still on it follow when it changes.
+    calendar_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUIDType,
+        ForeignKey("calendars.id", ondelete="SET NULL", use_alter=True, name="fk_organizations_calendar_id"),
+        nullable=True,
+    )
     status: Mapped[str] = mapped_column(String(50), nullable=False, default="active")
     created_at: Mapped[datetime] = mapped_column(
         DateTime, server_default=func.now(), nullable=False

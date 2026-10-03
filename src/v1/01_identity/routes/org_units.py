@@ -27,7 +27,7 @@ router = APIRouter()
     summary="List organization units",
 )
 async def list_org_units(
-    unit_type: Optional[str] = Query(None, description="Filter by type (company, branch, department, team)"),
+    unit_type: Optional[str] = Query(None, description="Filter by type (branch, department, team)"),
     parent_id: Optional[uuid.UUID] = Query(None, description="Direct children of this unit"),
     status: Optional[str] = Query(None, description="Filter by status (active, inactive)"),
     q: Optional[str] = Query(None, description="Search by name or code"),

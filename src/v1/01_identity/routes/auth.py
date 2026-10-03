@@ -1,7 +1,7 @@
 from typing import Optional
 import uuid
 
-from fastapi import APIRouter, Depends, Header, Request, Response, status
+from fastapi import APIRouter, Depends, Header, Query, Request, Response, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from database.session import get_db_session
@@ -24,10 +24,13 @@ from schemas.auth import (
     RefreshRequest,
     TokenResponse,
 )
+from schemas.common import PaginatedResponse
 from schemas.platform_auth import PlatformLoginRequest, PlatformLoginResponse, PlatformRefreshRequest
+from schemas.session import SessionResponse
 from schemas.token import TokenPayload
 from services.auth_service import auth_service
 from services.platform_auth_service import PLATFORM_REFRESH_TOKEN_TYPE, platform_auth_service
+from services.session_service import current_session_id, session_service
 from utils.security import (
     COOKIE_PLATFORM_CSRF_TOKEN,
     COOKIE_PLATFORM_REFRESH_TOKEN,
@@ -309,6 +312,72 @@ async def logout(
     )
     response = Response(status_code=status.HTTP_204_NO_CONTENT)
     clear_auth_cookies(response)
+    return response
+
+
+@router.get(
+    "/sessions",
+    response_model=PaginatedResponse[SessionResponse],
+    status_code=status.HTTP_200_OK,
+    summary="List where you are signed in",
+    description="Your live sessions (browsers and devices), most recently used first. `current` marks this one.",
+)
+async def list_my_sessions(
+    limit: int = Query(25, ge=1, le=100),
+    cursor: Optional[str] = Query(None, description="Opaque pagination cursor"),
+    current_user: TokenPayload = Depends(get_current_user),
+    session: AsyncSession = Depends(get_db_session),
+) -> PaginatedResponse[SessionResponse]:
+    user = await session_service.signed_in_user(session, current_user)
+    return await session_service.list_sessions(
+        session, user.id, current_session_id(current_user), limit=limit, cursor=cursor
+    )
+
+
+@router.delete(
+    "/sessions/{session_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    summary="Sign out one of your sessions",
+    description="Ends that browser or device's sign-in at once. Ending the current session also clears its cookies.",
+)
+async def revoke_my_session(
+    session_id: uuid.UUID,
+    request: Request,
+    current_user: TokenPayload = Depends(get_current_user),
+    session: AsyncSession = Depends(get_db_session),
+) -> Response:
+    user = await session_service.signed_in_user(session, current_user)
+    await session_service.revoke_session(
+        session, user, session_id, revoked_by=user.id,
+        client_ip=get_client_ip(request), user_agent=get_user_agent(request),
+    )
+    response = Response(status_code=status.HTTP_204_NO_CONTENT)
+    if session_id == current_session_id(current_user):
+        clear_auth_cookies(response)
+    return response
+
+
+@router.delete(
+    "/sessions",
+    status_code=status.HTTP_204_NO_CONTENT,
+    summary="Sign out your other sessions",
+    description="Ends every other sign-in. With `include_current=true` this one ends too and its cookies are cleared.",
+)
+async def revoke_my_sessions(
+    request: Request,
+    include_current: bool = Query(False, description="Also sign out the session making this request"),
+    current_user: TokenPayload = Depends(get_current_user),
+    session: AsyncSession = Depends(get_db_session),
+) -> Response:
+    user = await session_service.signed_in_user(session, current_user)
+    await session_service.revoke_sessions(
+        session, user, revoked_by=user.id,
+        keep_session_id=None if include_current else current_session_id(current_user),
+        client_ip=get_client_ip(request), user_agent=get_user_agent(request),
+    )
+    response = Response(status_code=status.HTTP_204_NO_CONTENT)
+    if include_current:
+        clear_auth_cookies(response)
     return response
 
 

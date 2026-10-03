@@ -86,6 +86,7 @@ class AuthService:
             id=user.organization_id,
             code=org.code or "" if org else "",
             name=org.name if org else "",
+            calendar_id=org.calendar_id if org else None,
         )
 
         home_unit_ref: Optional[HomeUnitRef] = None
@@ -182,6 +183,26 @@ class AuthService:
             client_id=client_id,
             family_id=family_id,
         )
+
+    async def _has_successor(self, session: AsyncSession, token_record: RefreshToken) -> bool:
+        """Was this token rotated, i.e. issued a newer token in the same session?"""
+        successor = await session.execute(
+            select(RefreshToken.id)
+            .where(
+                RefreshToken.family_id == token_record.family_id,
+                RefreshToken.id != token_record.id,
+                RefreshToken.issued_at >= token_record.issued_at,
+            )
+            .limit(1)
+        )
+        return successor.first() is not None
+
+    async def _organization_of(self, session: AsyncSession, user_id: Optional[uuid.UUID]) -> Optional[uuid.UUID]:
+        """Organization of a user, so audit entries can be found per organization."""
+        if user_id is None:
+            return None
+        user = await session.get(User, user_id)
+        return user.organization_id if user else None
 
     async def login(
         self,
@@ -528,6 +549,7 @@ class AuthService:
             family_id=family_id,
             issued_at=now,
             user_agent=user_agent,
+            ip_address=client_ip,
         )
         session.add(db_refresh_token)
 
@@ -672,6 +694,7 @@ class AuthService:
             family_id=family_id,
             issued_at=now,
             user_agent=user_agent,
+            ip_address=client_ip,
         )
         session.add(db_refresh_token)
 
@@ -746,6 +769,11 @@ class AuthService:
 
         now = datetime.now(timezone.utc)
 
+        # A revoked token that was never rotated belongs to a session that was ended
+        # (sign-out, revocation, deactivation): refuse it without treating it as a replay.
+        if token_record.revoked_at is not None and not await self._has_successor(session, token_record):
+            raise RefreshTokenInvalidError()
+
         # Theft detection: already-rotated token presented
         if token_record.revoked_at is not None:
             stmt = (
@@ -765,6 +793,7 @@ class AuthService:
                 status="revoked",
                 ip_address=client_ip,
                 user_agent=user_agent,
+                organization_id=await self._organization_of(session, token_record.user_id),
                 user_id=token_record.user_id,
                 details={"family_id": str(token_record.family_id), "reason": "REFRESH_TOKEN_REUSED"},
             )
@@ -805,6 +834,7 @@ class AuthService:
             family_id=token_record.family_id,
             issued_at=now,
             user_agent=user_agent,
+            ip_address=client_ip,
         )
         session.add(new_token_record)
 
@@ -869,6 +899,7 @@ class AuthService:
             status="revoked",
             ip_address=client_ip,
             user_agent=user_agent,
+            organization_id=await self._organization_of(session, user_id),
             user_id=user_id,
             details={"family_id": str(family_id)},
         )

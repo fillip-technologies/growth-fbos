@@ -167,6 +167,7 @@ class ClientService:
             await session.execute(update(OrgUnit).where(OrgUnit.organization_id.in_(org_ids)).values(
                 head_user_id=None, parent_id=None))
             await session.execute(delete(OrgUnit).where(OrgUnit.organization_id.in_(org_ids)))
+            await session.execute(update(Organization).where(Organization.id.in_(org_ids)).values(calendar_id=None))
             await session.execute(delete(CalendarHoliday).where(CalendarHoliday.calendar_id.in_(calendar_ids)))
             await session.execute(delete(Calendar).where(Calendar.organization_id.in_(org_ids)))
             await session.execute(delete(FieldDefinition).where(FieldDefinition.organization_id.in_(org_ids)))

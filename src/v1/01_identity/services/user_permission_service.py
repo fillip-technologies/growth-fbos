@@ -129,7 +129,7 @@ class UserPermissionService:
         def check_scope_and_expiry(field: str, unit_id: Optional[uuid.UUID], valid_to: Optional[datetime]) -> bool:
             ok = True
             if unit_id is not None and unit_id not in scope_paths:
-                errors.append({"field": f"{field}.scope_unit_id", "issue": "Unknown or inactive organization unit"})
+                errors.append({"field": f"{field}.scope_unit_id", "issue": "Unknown or inactive branch, department or team"})
                 ok = False
             if valid_to is not None and _as_utc(valid_to) <= now:
                 errors.append({"field": f"{field}.valid_to", "issue": "Must be in the future"})

@@ -17,8 +17,9 @@ class OrgUnitCreate(BaseModel):
 
     code: str = Field(..., pattern=r"^[A-Za-z0-9\-]+$", description="Unique per organization. Letters, digits, dash.")
     name: str = Field(..., min_length=1, max_length=255)
-    unit_type: Literal["company", "branch", "department", "team"]
-    parent_id: Optional[uuid.UUID] = Field(None, description="Required for all types except company")
+    # The organization itself is the company: branches sit directly under it (no parent).
+    unit_type: Literal["branch", "department", "team"]
+    parent_id: Optional[uuid.UUID] = Field(None, description="Required for departments and teams; a branch has none")
     head_user_id: Optional[uuid.UUID] = None
     calendar_id: Optional[uuid.UUID] = None
 

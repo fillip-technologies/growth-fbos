@@ -50,13 +50,13 @@ async def make_user(db_session, email: str, home_unit_id=None, user_type="employ
 
 
 async def make_units(client: httpx.AsyncClient) -> dict[str, str]:
-    """company -> dept-a, dept-b. Returns code -> id."""
-    company = (await client.post(f"{API}/org-units", json={"code": "CO", "name": "Company", "unit_type": "company"})).json()
-    ids = {"CO": company["id"]}
+    """branch -> dept-a, dept-b. Returns code -> id."""
+    branch = (await client.post(f"{API}/org-units", json={"code": "BR", "name": "Branch", "unit_type": "branch"})).json()
+    ids = {"BR": branch["id"]}
     for code in ("DEPT-A", "DEPT-B"):
         res = await client.post(
             f"{API}/org-units",
-            json={"code": code, "name": code, "unit_type": "department", "parent_id": company["id"]},
+            json={"code": code, "name": code, "unit_type": "department", "parent_id": branch["id"]},
         )
         assert res.status_code == 201, res.text
         ids[code] = res.json()["id"]
