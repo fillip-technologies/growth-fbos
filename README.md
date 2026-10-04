@@ -252,7 +252,8 @@ To run or debug a specific service locally with hot-reloading:
 ```bash
 # 1. Create and activate Python virtual environment
 python3 -m venv .venv
-source .venv/bin/activate
+source .venv/bin/activate        # bash/zsh
+source .venv/bin/activate.fish   # fish
 
 # 2. Install dependencies for the target service
 pip install -r src/v1/01_identity/requirements.txt
