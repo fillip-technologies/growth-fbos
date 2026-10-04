@@ -15,7 +15,13 @@ from models.org_unit import OrgUnit, OrgUnitVertical
 from models.organization import Organization
 from models.rbac import Role, RoleAssignment, RolePermission
 from models.user import User
-from models.vertical import FieldDefinition, VerticalPack
+from models.vertical import (
+    FieldDefinition,
+    Vertical,
+    VerticalPack,
+    VerticalPackInstallation,
+    VerticalPackVersion,
+)
 from schemas.client import ClientCreateRequest, ClientResponse, ClientUpdateRequest
 from schemas.common import PageInfo, PaginatedResponse
 from schemas.organization import DEFAULT_FISCAL_YEAR_START, OrganizationCreateRequest
@@ -171,7 +177,8 @@ class ClientService:
             await session.execute(delete(CalendarHoliday).where(CalendarHoliday.calendar_id.in_(calendar_ids)))
             await session.execute(delete(Calendar).where(Calendar.organization_id.in_(org_ids)))
             await session.execute(delete(FieldDefinition).where(FieldDefinition.organization_id.in_(org_ids)))
-            await session.execute(delete(VerticalPack).where(VerticalPack.organization_id.in_(org_ids)))
+            await session.execute(delete(VerticalPackInstallation).where(
+                VerticalPackInstallation.organization_id.in_(org_ids)))
             await session.execute(delete(ApiClient).where(ApiClient.organization_id.in_(org_ids)))
             await session.execute(delete(RefreshToken).where(RefreshToken.user_id.in_(user_ids)))
             await session.execute(delete(UserCredential).where(UserCredential.user_id.in_(user_ids)))
@@ -179,6 +186,14 @@ class ClientService:
             await session.execute(delete(Role).where(Role.organization_id.in_(org_ids)))
             await session.execute(delete(Organization).where(Organization.client_id == client_id))
 
+        # Verticals and packs belong to the client itself, not to one organization.
+        pack_ids = await ids(select(VerticalPack.id).where(VerticalPack.client_id == client_id))
+        if pack_ids:
+            await session.execute(update(FieldDefinition).where(FieldDefinition.source_pack_id.in_(pack_ids)).values(
+                source_pack_id=None))
+            await session.execute(delete(VerticalPackVersion).where(VerticalPackVersion.pack_id.in_(pack_ids)))
+            await session.execute(delete(VerticalPack).where(VerticalPack.id.in_(pack_ids)))
+        await session.execute(delete(Vertical).where(Vertical.client_id == client_id))
         await session.execute(delete(Client).where(Client.id == client_id))
         await session.commit()
 

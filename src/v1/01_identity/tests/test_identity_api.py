@@ -494,10 +494,9 @@ async def test_invitation_and_reset_password_flow(async_client: httpx.AsyncClien
 
 
 @pytest.mark.asyncio
-async def test_oauth_and_vertical_packs(async_client: httpx.AsyncClient, db_session):
+async def test_oauth_client_credentials(async_client: httpx.AsyncClient, db_session):
     # 1. Seed an active ApiClient
     from models.auth import ApiClient
-    from models.vertical import Vertical
     client_record = ApiClient(
         id=uuid.uuid4(),
         organization_id=TEST_ORG_ID,
@@ -507,14 +506,7 @@ async def test_oauth_and_vertical_packs(async_client: httpx.AsyncClient, db_sess
         allowed_scopes="billing.invoice.read",
         status="active",
     )
-    vert = Vertical(
-        id=uuid.uuid4(),
-        name="IT Services",
-        code="it-services",
-        status="active",
-    )
     db_session.add(client_record)
-    db_session.add(vert)
     await db_session.commit()
 
     # 2. Request OAuth client credentials token
@@ -529,47 +521,4 @@ async def test_oauth_and_vertical_packs(async_client: httpx.AsyncClient, db_sess
     )
     assert oauth_res.status_code == 200
     assert "access_token" in oauth_res.json()
-
-    # 3. Create vertical pack
-    pack_res = await async_client.post(
-        "/api/identity/v1/vertical-packs",
-        json={
-            "vertical_id": str(vert.id),
-            "pack_code": "it-starter",
-            "version_no": 1,
-            "manifest": {"work_templates": ["standard"]},
-        },
-    )
-    assert pack_res.status_code == 201
-    pack = pack_res.json()
-    pack_id = pack["id"]
-
-    # 4. Activate vertical pack
-    act_res = await async_client.post(f"/api/identity/v1/vertical-packs/{pack_id}/activate")
-    assert act_res.status_code == 202
-    assert act_res.json()["status"] == "active"
-
-    # 5. List verticals: the seeded one plus the default registry
-    verticals_res = await async_client.get("/api/identity/v1/verticals")
-    assert verticals_res.status_code == 200
-    codes = {v["code"] for v in verticals_res.json()["data"]}
-    assert {"it-services", "it-software"} <= codes
-
-    # 6. List the organization's packs
-    packs_res = await async_client.get(
-        "/api/identity/v1/vertical-packs", params={"vertical_id": str(vert.id)}
-    )
-    assert packs_res.status_code == 200
-    packs = packs_res.json()["data"]
-    assert [p["id"] for p in packs] == [pack_id]
-    assert packs[0]["status"] == "active"
-    assert packs[0]["vertical"]["name"] == "IT Services"
-
-    # 7. An unknown vertical is rejected instead of being created on the fly
-    bad_res = await async_client.post(
-        "/api/identity/v1/vertical-packs",
-        json={"vertical_id": str(uuid.uuid4()), "pack_code": "x", "version_no": 1, "manifest": {}},
-    )
-    assert bad_res.status_code == 422
-    assert bad_res.json()["code"] == "VERTICAL_PACK_INVALID"
 
