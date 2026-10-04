@@ -282,10 +282,12 @@ class VerticalService:
         object_type: Optional[str] = None,
         vertical_id: Optional[uuid.UUID] = None,
         status: Optional[str] = None,
+        applicable_vertical_ids: Optional[list[uuid.UUID]] = None,
         limit: int = 25,
         cursor: Optional[str] = None,
         sort: Optional[str] = None,
     ) -> PaginatedResponse[FieldDefinitionResponse]:
+        """`applicable_vertical_ids` keeps definitions for no vertical or one of these (a unit's verticals)."""
         query = select(FieldDefinition).where(FieldDefinition.organization_id == organization_id)
 
         if object_type:
@@ -294,6 +296,10 @@ class VerticalService:
             query = query.where(FieldDefinition.vertical_id == vertical_id)
         if status:
             query = query.where(FieldDefinition.status == status)
+        if applicable_vertical_ids is not None:
+            query = query.where(
+                FieldDefinition.vertical_id.is_(None) | FieldDefinition.vertical_id.in_(applicable_vertical_ids)
+            )
 
         if sort:
             sort_fields = [s.strip() for s in sort.split(",")]

@@ -13,9 +13,12 @@ from schemas.org_unit import (
     OrgUnitMoveRequest,
     OrgUnitResponse,
     OrgUnitUpdate,
+    OrgUnitVerticalsResponse,
+    OrgUnitVerticalsUpdate,
 )
 from services.access_control import Actor
 from services.org_unit_service import org_unit_service
+from services.org_unit_vertical_service import org_unit_vertical_service
 
 router = APIRouter()
 
@@ -148,3 +151,36 @@ async def move_org_unit(
     )
     response.headers["ETag"] = f'"{unit.version}"'
     return unit
+
+
+@router.get(
+    "/{unit_id}/verticals",
+    response_model=OrgUnitVerticalsResponse,
+    status_code=status.HTTP_200_OK,
+    summary="The verticals a unit works in, own or inherited",
+)
+async def get_org_unit_verticals(
+    unit_id: uuid.UUID,
+    actor: Actor = Depends(require_permission("identity.org_unit.read")),
+    db: AsyncSession = Depends(get_db_session),
+) -> OrgUnitVerticalsResponse:
+    return await org_unit_vertical_service.get_unit_verticals(
+        session=db, organization_id=actor.organization_id, unit_id=unit_id
+    )
+
+
+@router.put(
+    "/{unit_id}/verticals",
+    response_model=OrgUnitVerticalsResponse,
+    status_code=status.HTTP_200_OK,
+    summary="Set a branch's or department's own verticals (empty = inherit)",
+)
+async def replace_org_unit_verticals(
+    unit_id: uuid.UUID,
+    body: OrgUnitVerticalsUpdate,
+    actor: Actor = Depends(require_permission("identity.org_unit.update")),
+    db: AsyncSession = Depends(get_db_session),
+) -> OrgUnitVerticalsResponse:
+    return await org_unit_vertical_service.replace_unit_verticals(
+        session=db, organization_id=actor.organization_id, unit_id=unit_id, vertical_ids=body.vertical_ids
+    )

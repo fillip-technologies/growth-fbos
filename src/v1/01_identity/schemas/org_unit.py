@@ -53,5 +53,42 @@ class OrgUnitResponse(BaseModel):
     calendar_id: Optional[uuid.UUID] = None
     status: str
     version: int
+    vertical_ids: list[uuid.UUID] = Field(
+        default_factory=list,
+        description="Verticals set on this unit itself; empty means it inherits its parent's",
+    )
     created_at: datetime
     updated_at: datetime
+
+
+class OrgUnitVerticalsUpdate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    vertical_ids: list[uuid.UUID] = Field(
+        ..., max_length=50, description="Replaces the unit's own verticals; empty means inherit from the parent"
+    )
+
+
+class UnitVerticalRef(BaseModel):
+    id: uuid.UUID
+    name: str
+    status: str
+
+
+class InheritedFromRef(BaseModel):
+    id: uuid.UUID
+    name: str
+    unit_type: Optional[str] = None
+
+
+class OrgUnitVerticalsResponse(BaseModel):
+    """The verticals a unit works in. A team never sets its own; it inherits its department's."""
+
+    unit_id: uuid.UUID
+    own: list[UnitVerticalRef] = Field(..., description="Set on this unit itself")
+    effective: list[UnitVerticalRef] = Field(
+        ..., description="What applies: its own, else the nearest parent's (active verticals only)"
+    )
+    inherited_from: Optional[InheritedFromRef] = Field(
+        None, description="The parent the effective verticals come from, when the unit has none of its own"
+    )

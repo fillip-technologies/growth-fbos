@@ -25,6 +25,7 @@ from schemas.vertical import (
     VerticalUpdate,
 )
 from services.access_control import Actor
+from services.org_unit_vertical_service import org_unit_vertical_service
 from services.vertical_service import vertical_service
 
 verticals_router = APIRouter()
@@ -139,18 +140,27 @@ async def list_field_definitions(
     object_type: Optional[str] = Query(None, description="Filter by object type"),
     vertical_id: Optional[uuid.UUID] = Query(None, description="Filter by vertical id"),
     definition_status: Optional[Literal["draft", "published", "retired"]] = Query(None, alias="status"),
+    org_unit_id: Optional[uuid.UUID] = Query(
+        None, description="Only definitions that apply in this unit: no vertical, or one of the unit's verticals"
+    ),
     limit: int = Query(25, ge=1, le=100),
     cursor: Optional[str] = Query(None, description="Opaque pagination cursor"),
     sort: Optional[str] = Query(None, description="Comma-separated fields, - for descending"),
     actor: Actor = Depends(require_permission("identity.field_definition.read")),
     db: AsyncSession = Depends(get_db_session),
 ) -> PaginatedResponse[FieldDefinitionResponse]:
+    unit_vertical_ids = None
+    if org_unit_id:
+        unit_vertical_ids = await org_unit_vertical_service.effective_vertical_ids(
+            session=db, organization_id=actor.organization_id, unit_id=org_unit_id
+        )
     return await vertical_service.list_field_definitions(
         session=db,
         organization_id=actor.organization_id,
         object_type=object_type,
         vertical_id=vertical_id,
         status=definition_status,
+        applicable_vertical_ids=unit_vertical_ids,
         limit=limit,
         cursor=cursor,
         sort=sort,

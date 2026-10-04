@@ -28,6 +28,7 @@ from schemas.org_unit import (
     OrgUnitUpdate,
 )
 from services.event_publisher import event_publisher
+from services.org_unit_vertical_service import org_unit_vertical_service
 
 logger = logging.getLogger("identity.org_unit_service")
 
@@ -75,7 +76,7 @@ class OrgUnitService:
                 message=f"A {unit_type} cannot be placed under a {parent.unit_type}. Allowed parent types: {', '.join(allowed)}",
             )
 
-    def _build_response(self, unit: OrgUnit) -> OrgUnitResponse:
+    def _build_response(self, unit: OrgUnit, vertical_ids: Optional[list[uuid.UUID]] = None) -> OrgUnitResponse:
         head_user_ref: Optional[HeadUserRef] = None
         if unit.head_user:
             head_user_ref = HeadUserRef(id=unit.head_user.id, name=unit.head_user.name)
@@ -91,9 +92,14 @@ class OrgUnitService:
             calendar_id=unit.calendar_id,
             status=unit.status,
             version=unit.version,
+            vertical_ids=vertical_ids or [],
             created_at=unit.created_at,
             updated_at=unit.updated_at,
         )
+
+    async def _response_with_verticals(self, session: AsyncSession, unit: OrgUnit) -> OrgUnitResponse:
+        own_verticals = await org_unit_vertical_service.own_vertical_ids(session, [unit.id])
+        return self._build_response(unit, own_verticals.get(unit.id))
 
     async def list_org_units(
         self,
@@ -156,7 +162,8 @@ class OrgUnitService:
         else:
             next_cursor = None
 
-        data = [self._build_response(u) for u in units]
+        own_verticals = await org_unit_vertical_service.own_vertical_ids(session, [u.id for u in units])
+        data = [self._build_response(u, own_verticals.get(u.id)) for u in units]
         return PaginatedResponse(
             data=data,
             page=PageInfo(next_cursor=next_cursor, has_more=has_more, limit=limit),
@@ -175,7 +182,7 @@ class OrgUnitService:
         if not unit:
             raise OrgUnitNotFoundError()
 
-        return self._build_response(unit)
+        return await self._response_with_verticals(session, unit)
 
     async def create_org_unit(
         self,
@@ -319,7 +326,7 @@ class OrgUnitService:
             },
         )
 
-        return self._build_response(unit)
+        return await self._response_with_verticals(session, unit)
 
     async def move_org_unit(
         self,
@@ -404,7 +411,7 @@ class OrgUnitService:
             },
         )
 
-        return self._build_response(unit)
+        return await self._response_with_verticals(session, unit)
 
 
 org_unit_service = OrgUnitService()
