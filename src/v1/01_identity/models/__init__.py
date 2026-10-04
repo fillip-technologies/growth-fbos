@@ -3,7 +3,14 @@ from models.organization import Organization
 from models.platform_admin import PlatformAdmin, PlatformRefreshToken
 from models.calendar import Calendar, CalendarHoliday
 from models.org_unit import OrgUnit, OrgUnitVertical
-from models.vertical import Vertical, VerticalPack, ObjectType, FieldDefinition
+from models.vertical import (
+    FieldDefinition,
+    ObjectType,
+    Vertical,
+    VerticalPack,
+    VerticalPackInstallation,
+    VerticalPackVersion,
+)
 from models.user import User
 from models.auth import UserCredential, RefreshToken, ApiClient
 from models.membership import UnitMembership
@@ -23,6 +30,8 @@ __all__ = [
     "OrgUnitVertical",
     "Vertical",
     "VerticalPack",
+    "VerticalPackInstallation",
+    "VerticalPackVersion",
     "ObjectType",
     "FieldDefinition",
     "User",
