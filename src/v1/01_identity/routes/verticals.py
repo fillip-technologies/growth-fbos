@@ -14,13 +14,34 @@ from schemas.vertical import (
     ObjectTypeResponse,
     VerticalPackCreate,
     VerticalPackResponse,
+    VerticalResponse,
 )
 from services.access_control import Actor
 from services.vertical_service import vertical_service
 
+verticals_router = APIRouter()
 object_types_router = APIRouter()
 field_definitions_router = APIRouter()
 vertical_packs_router = APIRouter()
+
+
+# ---------------------------------------------------------------------------
+# Verticals
+# ---------------------------------------------------------------------------
+
+@verticals_router.get(
+    "",
+    response_model=PaginatedResponse[VerticalResponse],
+    status_code=status.HTTP_200_OK,
+    summary="List industry verticals",
+)
+async def list_verticals(
+    limit: int = Query(25, ge=1, le=100),
+    cursor: Optional[str] = Query(None, description="Opaque pagination cursor"),
+    current_user: TokenPayload = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db_session),
+) -> PaginatedResponse[VerticalResponse]:
+    return await vertical_service.list_verticals(session=db, limit=limit, cursor=cursor)
 
 
 # ---------------------------------------------------------------------------
@@ -126,6 +147,28 @@ async def publish_field_definition(
 # ---------------------------------------------------------------------------
 # Vertical Packs
 # ---------------------------------------------------------------------------
+
+@vertical_packs_router.get(
+    "",
+    response_model=PaginatedResponse[VerticalPackResponse],
+    status_code=status.HTTP_200_OK,
+    summary="List the organization's vertical packs",
+)
+async def list_vertical_packs(
+    vertical_id: Optional[uuid.UUID] = Query(None, description="Filter by vertical id"),
+    limit: int = Query(25, ge=1, le=100),
+    cursor: Optional[str] = Query(None, description="Opaque pagination cursor"),
+    actor: Actor = Depends(require_permission("identity.vertical_pack.manage")),
+    db: AsyncSession = Depends(get_db_session),
+) -> PaginatedResponse[VerticalPackResponse]:
+    return await vertical_service.list_vertical_packs(
+        session=db,
+        organization_id=actor.organization_id,
+        vertical_id=vertical_id,
+        limit=limit,
+        cursor=cursor,
+    )
+
 
 @vertical_packs_router.post(
     "",
