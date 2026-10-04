@@ -2,9 +2,9 @@ import uuid
 from datetime import date
 from typing import Optional
 
-from fastapi import APIRouter, Header, Query, Response, status
+from fastapi import APIRouter, Depends, Header, Query, Response, status
 
-from dependencies import DatabaseSession, OrgId, UserId, require_idempotency_key
+from dependencies import DatabaseSession, OrgId, UserId, require_idempotency_key, require_permission
 from schemas.common import PageResponse
 from schemas.payment import (
     AllocationBatch,
@@ -15,8 +15,14 @@ from services.payment_service import PaymentService
 
 router = APIRouter(prefix="/payments", tags=["payments"])
 
+CAN_READ = Depends(require_permission("revenue.payment.read"))
+CAN_WRITE = Depends(require_permission("revenue.payment.write"))
 
-@router.get("", response_model=PageResponse[PaymentResponse])
+
+@router.get(
+    "", response_model=PageResponse[PaymentResponse],
+    dependencies=[CAN_READ],
+)
 async def list_payments(
     session: DatabaseSession,
     org_id: OrgId,
@@ -40,7 +46,10 @@ async def list_payments(
     )
 
 
-@router.post("", response_model=PaymentResponse, status_code=status.HTTP_201_CREATED)
+@router.post(
+    "", response_model=PaymentResponse, status_code=status.HTTP_201_CREATED,
+    dependencies=[CAN_WRITE],
+)
 async def record_payment(
     payload: PaymentCreate,
     session: DatabaseSession,
@@ -64,7 +73,10 @@ async def record_payment(
     return payment
 
 
-@router.post("/{payment_id}/allocations", response_model=PaymentResponse)
+@router.post(
+    "/{payment_id}/allocations", response_model=PaymentResponse,
+    dependencies=[CAN_WRITE],
+)
 async def allocate_payment(
     payment_id: uuid.UUID,
     payload: AllocationBatch,
@@ -85,5 +97,17 @@ async def allocate_payment(
         if_match=if_match,
     )
     await session.commit()
+    response.headers["ETag"] = f'"{payment.version}"'
+    return payment
+
+
+@router.get(
+    "/{payment_id}",
+    response_model=PaymentResponse,
+    dependencies=[CAN_READ],
+)
+async def get_payment(payment_id: uuid.UUID, session: DatabaseSession, org_id: OrgId, response: Response) -> PaymentResponse:
+    """Retrieve one payment with its allocations."""
+    payment = await PaymentService.get_payment(session=session, payment_id=payment_id, org_id=org_id)
     response.headers["ETag"] = f'"{payment.version}"'
     return payment

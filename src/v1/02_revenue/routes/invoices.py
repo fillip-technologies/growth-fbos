@@ -2,9 +2,9 @@ import uuid
 from datetime import date
 from typing import Optional
 
-from fastapi import APIRouter, Header, Query, Response, status
+from fastapi import APIRouter, Depends, Header, Query, Response, status
 
-from dependencies import DatabaseSession, OrgId, UserId, require_idempotency_key
+from dependencies import DatabaseSession, OrgId, UserId, require_idempotency_key, require_permission
 from schemas.common import PageResponse
 from schemas.invoice import (
     CreditNoteCreate,
@@ -17,8 +17,14 @@ from services.invoice_service import InvoiceService
 
 router = APIRouter(prefix="/invoices", tags=["invoices"])
 
+CAN_READ = Depends(require_permission("revenue.invoice.read"))
+CAN_WRITE = Depends(require_permission("revenue.invoice.write"))
 
-@router.get("", response_model=PageResponse[InvoiceResponse])
+
+@router.get(
+    "", response_model=PageResponse[InvoiceResponse],
+    dependencies=[CAN_READ],
+)
 async def list_invoices(
     session: DatabaseSession,
     org_id: OrgId,
@@ -44,7 +50,10 @@ async def list_invoices(
     )
 
 
-@router.post("", response_model=InvoiceResponse, status_code=status.HTTP_201_CREATED)
+@router.post(
+    "", response_model=InvoiceResponse, status_code=status.HTTP_201_CREATED,
+    dependencies=[CAN_WRITE],
+)
 async def create_draft_invoice(
     payload: InvoiceDraftCreate,
     session: DatabaseSession,
@@ -66,7 +75,10 @@ async def create_draft_invoice(
     return invoice
 
 
-@router.get("/{invoice_id}", response_model=InvoiceResponse)
+@router.get(
+    "/{invoice_id}", response_model=InvoiceResponse,
+    dependencies=[CAN_READ],
+)
 async def get_invoice(
     invoice_id: uuid.UUID,
     session: DatabaseSession,
@@ -83,7 +95,10 @@ async def get_invoice(
     return invoice
 
 
-@router.post("/{invoice_id}/issue", response_model=InvoiceResponse)
+@router.post(
+    "/{invoice_id}/issue", response_model=InvoiceResponse,
+    dependencies=[CAN_WRITE],
+)
 async def issue_invoice(
     invoice_id: uuid.UUID,
     session: DatabaseSession,
@@ -110,7 +125,10 @@ async def issue_invoice(
     return invoice
 
 
-@router.post("/{invoice_id}/credit-notes", response_model=InvoiceResponse, status_code=status.HTTP_201_CREATED)
+@router.post(
+    "/{invoice_id}/credit-notes", response_model=InvoiceResponse, status_code=status.HTTP_201_CREATED,
+    dependencies=[CAN_WRITE],
+)
 async def issue_credit_note(
     invoice_id: uuid.UUID,
     payload: CreditNoteCreate,
@@ -136,7 +154,10 @@ async def issue_credit_note(
     return credit_note
 
 
-@router.get("/{invoice_id}/pdf", response_model=DownloadUrl)
+@router.get(
+    "/{invoice_id}/pdf", response_model=DownloadUrl,
+    dependencies=[CAN_READ],
+)
 async def get_invoice_pdf(
     invoice_id: uuid.UUID,
     session: DatabaseSession,

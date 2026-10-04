@@ -1,17 +1,23 @@
 import uuid
 from typing import Optional
 
-from fastapi import APIRouter, Header, Query, status
+from fastapi import APIRouter, Depends, Header, Query, status
 
-from dependencies import DatabaseSession, OrgId, UserId
+from dependencies import DatabaseSession, OrgId, UserId, require_permission
 from schemas.activity import ActivityCreate, ActivityResponse
 from schemas.common import PageResponse
 from services.activity_service import ActivityService
 
 router = APIRouter(prefix="/activities", tags=["activities"])
 
+CAN_READ = Depends(require_permission("revenue.activity.read"))
+CAN_WRITE = Depends(require_permission("revenue.activity.write"))
 
-@router.get("", response_model=PageResponse[ActivityResponse])
+
+@router.get(
+    "", response_model=PageResponse[ActivityResponse],
+    dependencies=[CAN_READ],
+)
 async def list_activities(
     session: DatabaseSession,
     org_id: OrgId,
@@ -33,7 +39,10 @@ async def list_activities(
     )
 
 
-@router.post("", response_model=ActivityResponse, status_code=status.HTTP_201_CREATED)
+@router.post(
+    "", response_model=ActivityResponse, status_code=status.HTTP_201_CREATED,
+    dependencies=[CAN_WRITE],
+)
 async def log_activity(
     payload: ActivityCreate,
     session: DatabaseSession,

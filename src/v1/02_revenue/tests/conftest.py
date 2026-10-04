@@ -1,7 +1,7 @@
 import sys
 import uuid
 from pathlib import Path
-from typing import AsyncGenerator
+from typing import AsyncGenerator, Optional
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
@@ -10,9 +10,13 @@ import pytest
 import pytest_asyncio
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
+from fastapi import Header
+
 from database.session import get_db_session
+from dependencies import get_actor
 from main import app
 from models import Base
+from services.identity_client import Actor
 
 TEST_ORG_ID = uuid.UUID("0191f3a2-0011-7011-8077-0000001b2aa9")
 TEST_USER_ID = uuid.UUID("0191f3a2-0015-7015-8093-000000218f0d")
@@ -48,17 +52,25 @@ async def async_client(db_session: AsyncSession) -> AsyncGenerator[httpx.AsyncCl
     async def override_get_db():
         yield db_session
 
-    app.dependency_overrides[get_db_session] = override_get_db
+    # Stands in for identity: a client admin who may act in any organization of the
+    # client, chosen with X-Organization-Id. tests/test_auth.py covers the real lookup.
+    async def override_get_actor(
+        x_organization_id: Optional[uuid.UUID] = Header(None, alias="X-Organization-Id"),
+    ) -> Actor:
+        return Actor(
+            user_id=TEST_USER_ID,
+            organization_id=x_organization_id or TEST_ORG_ID,
+            user_type="client_admin",
+            name="Test Admin",
+            is_superuser=True,
+        )
 
-    headers = {
-        "X-FBOS-Org-Id": str(TEST_ORG_ID),
-        "X-FBOS-User-Id": str(TEST_USER_ID),
-    }
+    app.dependency_overrides[get_db_session] = override_get_db
+    app.dependency_overrides[get_actor] = override_get_actor
 
     async with httpx.AsyncClient(
         transport=httpx.ASGITransport(app=app),
         base_url="http://test",
-        headers=headers,
     ) as client:
         yield client
 

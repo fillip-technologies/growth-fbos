@@ -1,5 +1,6 @@
 import uuid
-from datetime import datetime
+from collections import defaultdict
+from datetime import date, datetime
 from typing import List, Optional
 
 from sqlalchemy import select
@@ -10,12 +11,24 @@ from exceptions import (
 )
 from models.client import Client
 from models.collection import CollectionCase, CollectionCaseInvoice, CollectionFollowup
+from models.invoice import Invoice
 from schemas.collection import (
     CollectionCaseResponse,
     CollectionFollowUpCreate,
+    CollectionFollowUpResponse,
+    CollectionRefreshResult,
 )
 from schemas.common import Money, PageMeta, PageResponse, decode_cursor, encode_cursor
 from schemas.opportunity import ClientRef, UserRef
+
+
+# Cases still being worked; a client has at most one of these at a time.
+LIVE_CASE_STATUSES = ("open", "promised", "escalated")
+
+
+async def _case_invoice_ids(session: AsyncSession, case_id: uuid.UUID) -> set[uuid.UUID]:
+    res = await session.execute(select(CollectionCaseInvoice.invoice_id).where(CollectionCaseInvoice.case_id == case_id))
+    return set(res.scalars().all())
 
 
 def format_collection_case(
@@ -95,6 +108,100 @@ class CollectionService:
         )
 
     @staticmethod
+    async def list_follow_ups(
+        session: AsyncSession, case_id: uuid.UUID, org_id: uuid.UUID
+    ) -> List[CollectionFollowUpResponse]:
+        case = await session.get(CollectionCase, case_id)
+        if not case or case.organization_id != org_id:
+            raise CollectionCaseNotFoundError(str(case_id))
+        res = await session.execute(
+            select(CollectionFollowup)
+            .where(CollectionFollowup.case_id == case.id)
+            .order_by(CollectionFollowup.followed_up_at.desc())
+        )
+        return [CollectionFollowUpResponse.model_validate(f) for f in res.scalars().all()]
+
+    @staticmethod
+    async def refresh(session: AsyncSession, org_id: uuid.UUID, today: date) -> CollectionRefreshResult:
+        """
+        Bring receivables up to date: issued tax invoices past their due date with money
+        still owed become `overdue`; each client owing overdue money gets one live case
+        tracking those invoices (owned by the client's owner); a live case whose invoices
+        are all settled is resolved. Safe to run any number of times.
+        """
+        late = await session.execute(
+            select(Invoice).where(
+                Invoice.organization_id == org_id,
+                Invoice.doc_type == "tax_invoice",
+                Invoice.status.in_(("issued", "partially_paid")),
+                Invoice.due_date < today,
+                Invoice.balance_due > 0,
+            )
+        )
+        marked = 0
+        for inv in late.scalars().all():
+            inv.status = "overdue"
+            inv.version += 1
+            marked += 1
+        await session.flush()
+
+        overdue = await session.execute(
+            select(Invoice).where(
+                Invoice.organization_id == org_id, Invoice.status == "overdue", Invoice.balance_due > 0
+            )
+        )
+        overdue_by_client: dict[uuid.UUID, list[Invoice]] = defaultdict(list)
+        for inv in overdue.scalars().all():
+            overdue_by_client[inv.client_id].append(inv)
+
+        live = await session.execute(
+            select(CollectionCase).where(
+                CollectionCase.organization_id == org_id,
+                CollectionCase.status.in_(LIVE_CASE_STATUSES),
+            )
+        )
+        live_cases = {case.client_id: case for case in live.scalars().all()}
+
+        opened = updated = resolved = 0
+        for client_id, invoices in overdue_by_client.items():
+            case = live_cases.get(client_id)
+            if case is None:
+                client = await session.get(Client, client_id)
+                case = CollectionCase(
+                    organization_id=org_id,
+                    client_id=client_id,
+                    owner_user_id=client.owner_user_id,
+                    status="open",
+                    dunning_level=1,
+                    total_overdue=0,
+                )
+                session.add(case)
+                await session.flush()
+                live_cases[client_id] = case
+                opened += 1
+            else:
+                updated += 1
+            tracked = await _case_invoice_ids(session, case.id)
+            for inv in invoices:
+                if inv.id not in tracked:
+                    session.add(CollectionCaseInvoice(case_id=case.id, invoice_id=inv.id))
+
+        for case in live_cases.values():
+            tracked = await _case_invoice_ids(session, case.id)
+            if not tracked:
+                continue
+            owed = await session.execute(select(Invoice.balance_due).where(Invoice.id.in_(tracked)))
+            case.total_overdue = sum(float(b) for b in owed.scalars().all())
+            if case.total_overdue == 0:
+                case.status = "resolved"
+                resolved += 1
+
+        await session.flush()
+        return CollectionRefreshResult(
+            invoices_marked_overdue=marked, cases_opened=opened, cases_updated=updated, cases_resolved=resolved
+        )
+
+    @staticmethod
     async def log_collection_follow_up(
         session: AsyncSession,
         case_id: uuid.UUID,
@@ -121,6 +228,9 @@ class CollectionService:
 
         if payload.outcome == "promised":
             case.status = "promised"
+        elif payload.outcome == "escalate":
+            case.status = "escalated"
+            case.dunning_level += 1
         if payload.promised_date:
             case.promised_date = payload.promised_date
         if payload.promised_amount:

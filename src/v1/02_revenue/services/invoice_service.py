@@ -9,6 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from exceptions import (
     ClientNotFoundError,
+    ContractNotFoundError,
     InvalidStateTransitionError,
     InvoiceAlreadyIssuedError,
     InvoiceNotFoundError,
@@ -18,6 +19,7 @@ from exceptions import (
     VersionConflictError,
 )
 from models.client import Client
+from models.contract import Contract
 from models.invoice import Invoice, InvoiceLine
 from models.invoice_series import InvoiceSeries
 from schemas.common import Money, PageMeta, PageResponse, decode_cursor, encode_cursor
@@ -225,8 +227,12 @@ class InvoiceService:
         payload: InvoiceDraftCreate,
     ) -> InvoiceResponse:
         client = await session.get(Client, payload.client_id)
-        if not client:
+        if not client or client.organization_id != org_id:
             raise ClientNotFoundError(str(payload.client_id))
+        if payload.contract_id:
+            contract = await session.get(Contract, payload.contract_id)
+            if not contract or contract.organization_id != org_id or contract.client_id != client.id:
+                raise ContractNotFoundError(str(payload.contract_id))
 
         supplier_gstin = "29AABCF9876L1Z3"
         place_of_supply = "29"
@@ -342,9 +348,13 @@ class InvoiceService:
 
         client = await session.get(Client, inv.client_id)
 
-        # Gapless number sequence
+        # Gapless number sequence: tax invoices only (credit notes have their own series).
         count_res = await session.execute(
-            select(func.count(Invoice.id)).where(Invoice.organization_id == org_id, Invoice.status != "draft")
+            select(func.count(Invoice.id)).where(
+                Invoice.organization_id == org_id,
+                Invoice.doc_type == "tax_invoice",
+                Invoice.invoice_no.is_not(None),
+            )
         )
         issued_count = (count_res.scalar_one() or 0) + 1
         fy = "26-27"

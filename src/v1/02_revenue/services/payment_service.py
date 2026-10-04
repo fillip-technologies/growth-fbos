@@ -6,9 +6,11 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from exceptions import (
+    AllocationClientMismatchError,
     AllocationExceedsPaymentError,
     ClientNotFoundError,
     InvoiceNotFoundError,
+    InvoiceNotIssuedError,
     InvoiceOverallocatedError,
     PaymentNotFoundError,
     PreconditionRequiredError,
@@ -58,6 +60,42 @@ def format_payment_response(
         allocations=alloc_responses,
         version=payment.version,
     )
+
+
+# Invoices a payment can settle: issued tax invoices that still have a balance.
+PAYABLE_STATUSES = ("issued", "partially_paid", "overdue")
+
+
+async def _apply_allocation(
+    session: AsyncSession,
+    org_id: uuid.UUID,
+    payment: Payment,
+    invoice_id: uuid.UUID,
+    amount: float,
+    allocated_at: datetime,
+) -> tuple[PaymentAllocation, Optional[str]]:
+    """Settle `amount` of an invoice from the payment's unallocated money."""
+    inv = await session.get(Invoice, invoice_id)
+    if not inv or inv.organization_id != org_id:
+        raise InvoiceNotFoundError(str(invoice_id))
+    if inv.client_id != payment.client_id:
+        raise AllocationClientMismatchError()
+    if inv.doc_type != "tax_invoice" or inv.status not in PAYABLE_STATUSES:
+        raise InvoiceNotIssuedError(inv.status)
+    if amount > float(inv.balance_due):
+        raise InvoiceOverallocatedError(float(inv.balance_due), amount)
+    if amount > float(payment.unapplied_amount):
+        raise AllocationExceedsPaymentError(float(payment.unapplied_amount), amount)
+
+    inv.balance_due = max(0.0, float(inv.balance_due) - amount)
+    inv.amount_settled = min(float(inv.grand_total), float(inv.amount_settled) + amount)
+    inv.status = "paid" if inv.balance_due == 0.0 else "partially_paid"
+    inv.version += 1
+
+    allocation = PaymentAllocation(payment_id=payment.id, invoice_id=inv.id, amount=amount, allocated_at=allocated_at)
+    session.add(allocation)
+    payment.unapplied_amount = float(payment.unapplied_amount) - amount
+    return allocation, inv.invoice_no
 
 
 class PaymentService:
@@ -120,6 +158,19 @@ class PaymentService:
         )
 
     @staticmethod
+    async def get_payment(session: AsyncSession, payment_id: uuid.UUID, org_id: uuid.UUID) -> PaymentResponse:
+        payment = await session.get(Payment, payment_id)
+        if not payment or payment.organization_id != org_id:
+            raise PaymentNotFoundError(str(payment_id))
+        client = await session.get(Client, payment.client_id)
+        allocations = await session.execute(
+            select(PaymentAllocation, Invoice.invoice_no)
+            .outerjoin(Invoice, Invoice.id == PaymentAllocation.invoice_id)
+            .where(PaymentAllocation.payment_id == payment.id)
+        )
+        return format_payment_response(payment, client, list(allocations.all()))
+
+    @staticmethod
     async def record_payment(
         session: AsyncSession,
         org_id: uuid.UUID,
@@ -127,7 +178,7 @@ class PaymentService:
         payload: PaymentCreate,
     ) -> PaymentResponse:
         client = await session.get(Client, payload.client_id)
-        if not client:
+        if not client or client.organization_id != org_id:
             raise ClientNotFoundError(str(payload.client_id))
 
         current_year = datetime.now(timezone.utc).year
@@ -161,34 +212,11 @@ class PaymentService:
         persisted_allocations = []
         if payload.allocations:
             for alloc_in in payload.allocations:
-                inv = await session.get(Invoice, alloc_in.invoice_id)
-                if not inv or inv.organization_id != org_id:
-                    raise InvoiceNotFoundError(str(alloc_in.invoice_id))
-
-                alloc_amt = alloc_in.amount.amount
-                if alloc_amt > float(inv.balance_due):
-                    raise InvoiceOverallocatedError(float(inv.balance_due), alloc_amt)
-                if alloc_amt > float(payment.unapplied_amount):
-                    raise AllocationExceedsPaymentError(float(payment.unapplied_amount), alloc_amt)
-
-                inv.balance_due = max(0.0, float(inv.balance_due) - alloc_amt)
-                inv.amount_settled = min(float(inv.grand_total), float(inv.amount_settled) + alloc_amt)
-                if inv.balance_due == 0.0:
-                    inv.status = "paid"
-                else:
-                    inv.status = "partially_paid"
-                inv.version += 1
-
                 # Allocations recorded with the payment default to its received date.
-                pa = PaymentAllocation(
-                    payment_id=payment.id,
-                    invoice_id=inv.id,
-                    amount=alloc_amt,
-                    allocated_at=datetime.combine(alloc_in.allocated_on or payload.received_on, datetime.min.time()),
+                allocated_at = datetime.combine(alloc_in.allocated_on or payload.received_on, datetime.min.time())
+                persisted_allocations.append(
+                    await _apply_allocation(session, org_id, payment, alloc_in.invoice_id, alloc_in.amount.amount, allocated_at)
                 )
-                session.add(pa)
-                persisted_allocations.append((pa, inv.invoice_no))
-                payment.unapplied_amount = float(payment.unapplied_amount) - alloc_amt
 
         await session.flush()
         return format_payment_response(payment, client, persisted_allocations)
@@ -222,37 +250,14 @@ class PaymentService:
         existing_allocs = list(alloc_res.all())
 
         for alloc_in in payload.allocations:
-            inv = await session.get(Invoice, alloc_in.invoice_id)
-            if not inv or inv.organization_id != org_id:
-                raise InvoiceNotFoundError(str(alloc_in.invoice_id))
-
-            alloc_amt = alloc_in.amount.amount
-            if alloc_amt > float(inv.balance_due):
-                raise InvoiceOverallocatedError(float(inv.balance_due), alloc_amt)
-            if alloc_amt > float(payment.unapplied_amount):
-                raise AllocationExceedsPaymentError(float(payment.unapplied_amount), alloc_amt)
-
-            inv.balance_due = max(0.0, float(inv.balance_due) - alloc_amt)
-            inv.amount_settled = min(float(inv.grand_total), float(inv.amount_settled) + alloc_amt)
-            if inv.balance_due == 0.0:
-                inv.status = "paid"
-            else:
-                inv.status = "partially_paid"
-            inv.version += 1
-
-            pa = PaymentAllocation(
-                payment_id=payment.id,
-                invoice_id=inv.id,
-                amount=alloc_amt,
-                allocated_at=(
-                    datetime.combine(alloc_in.allocated_on, datetime.min.time())
-                    if alloc_in.allocated_on
-                    else datetime.utcnow()
-                ),
+            allocated_at = (
+                datetime.combine(alloc_in.allocated_on, datetime.min.time())
+                if alloc_in.allocated_on
+                else datetime.utcnow()
             )
-            session.add(pa)
-            existing_allocs.append((pa, inv.invoice_no))
-            payment.unapplied_amount = float(payment.unapplied_amount) - alloc_amt
+            existing_allocs.append(
+                await _apply_allocation(session, org_id, payment, alloc_in.invoice_id, alloc_in.amount.amount, allocated_at)
+            )
 
         payment.version += 1
         await session.flush()

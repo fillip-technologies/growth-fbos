@@ -171,6 +171,26 @@ def format_quotation_response(
     )
 
 
+async def get_quote_in_org(session: AsyncSession, org_id: uuid.UUID, quotation_id: uuid.UUID) -> Quotation:
+    """The quotation if it belongs to the organization (through its client), else 404."""
+    res = await session.execute(
+        select(Quotation)
+        .join(Client, Client.id == Quotation.client_id)
+        .where(Quotation.id == quotation_id, Client.organization_id == org_id)
+    )
+    quote = res.scalars().first()
+    if not quote:
+        raise QuotationNotFoundError(str(quotation_id))
+    return quote
+
+
+def _check_version(if_match: Optional[str], version: int) -> None:
+    if if_match is None:
+        raise PreconditionRequiredError()
+    if int(if_match.strip('"').replace("W/", "")) != version:
+        raise VersionConflictError(version)
+
+
 class QuotationService:
     @staticmethod
     async def create_quotation(
@@ -266,9 +286,7 @@ class QuotationService:
         quotation_id: uuid.UUID,
         org_id: uuid.UUID,
     ) -> QuotationResponse:
-        quote = await session.get(Quotation, quotation_id)
-        if not quote:
-            raise QuotationNotFoundError(str(quotation_id))
+        quote = await get_quote_in_org(session, org_id, quotation_id)
 
         client = await session.get(Client, quote.client_id)
         items_res = await session.execute(
@@ -295,9 +313,7 @@ class QuotationService:
         payload: QuotationItemsReplace,
         if_match: Optional[str] = None,
     ) -> QuotationResponse:
-        quote = await session.get(Quotation, quotation_id)
-        if not quote:
-            raise QuotationNotFoundError(str(quotation_id))
+        quote = await get_quote_in_org(session, org_id, quotation_id)
 
         if if_match is None:
             raise PreconditionRequiredError()
@@ -361,9 +377,7 @@ class QuotationService:
         org_id: uuid.UUID,
         if_match: Optional[str] = None,
     ) -> QuotationResponse:
-        quote = await session.get(Quotation, quotation_id)
-        if not quote:
-            raise QuotationNotFoundError(str(quotation_id))
+        quote = await get_quote_in_org(session, org_id, quotation_id)
 
         if if_match is None:
             raise PreconditionRequiredError()
@@ -393,9 +407,7 @@ class QuotationService:
         org_id: uuid.UUID,
         if_match: Optional[str] = None,
     ) -> QuotationResponse:
-        quote = await session.get(Quotation, quotation_id)
-        if not quote:
-            raise QuotationNotFoundError(str(quotation_id))
+        quote = await get_quote_in_org(session, org_id, quotation_id)
 
         if if_match is None:
             raise PreconditionRequiredError()
@@ -418,9 +430,10 @@ class QuotationService:
         quotation_id: uuid.UUID,
         org_id: uuid.UUID,
     ) -> QuotationResponse:
-        curr_quote = await session.get(Quotation, quotation_id)
-        if not curr_quote:
-            raise QuotationNotFoundError(str(quotation_id))
+        curr_quote = await get_quote_in_org(session, org_id, quotation_id)
+        # An accepted quotation is the deal; a superseded one already has a newer revision.
+        if curr_quote.status in ("accepted", "superseded"):
+            raise InvalidStateTransitionError(curr_quote.status, "revise")
 
         client = await session.get(Client, curr_quote.client_id)
         old_items_res = await session.execute(
@@ -487,15 +500,46 @@ class QuotationService:
         return format_quotation_response(new_rev, client, persisted_items, totals)
 
     @staticmethod
+    async def list_for_opportunity(
+        session: AsyncSession,
+        org_id: uuid.UUID,
+        opportunity_id: uuid.UUID,
+    ) -> List[QuotationResponse]:
+        """Every revision quoted on the opportunity, newest first."""
+        res = await session.execute(
+            select(Quotation.id)
+            .join(Client, Client.id == Quotation.client_id)
+            .where(Quotation.opportunity_id == opportunity_id, Client.organization_id == org_id)
+            .order_by(Quotation.revision_no.desc())
+        )
+        return [await QuotationService.get_quotation(session, qid, org_id) for qid in res.scalars().all()]
+
+    @staticmethod
+    async def approve_quotation(
+        session: AsyncSession,
+        quotation_id: uuid.UUID,
+        org_id: uuid.UUID,
+        if_match: Optional[str] = None,
+    ) -> QuotationResponse:
+        """Approve a quotation held for its discount (over 20%), so it can be sent."""
+        quote = await get_quote_in_org(session, org_id, quotation_id)
+        _check_version(if_match, quote.version)
+        if quote.status != "pending_approval":
+            raise InvalidStateTransitionError(quote.status, "approve")
+
+        quote.status = "approved"
+        quote.version += 1
+        await session.flush()
+        return await QuotationService.get_quotation(session, quotation_id, org_id)
+
+    @staticmethod
     async def accept_quotation(
         session: AsyncSession,
         quotation_id: uuid.UUID,
         org_id: uuid.UUID,
         if_match: Optional[str] = None,
     ) -> QuotationResponse:
-        quote = await session.get(Quotation, quotation_id)
-        if not quote:
-            raise QuotationNotFoundError(str(quotation_id))
+        quote = await get_quote_in_org(session, org_id, quotation_id)
 
         if if_match is None:
             raise PreconditionRequiredError()
@@ -517,6 +561,12 @@ class QuotationService:
                 opp.status = "won"
                 opp.version += 1
 
+        # A prospect becomes a customer once it accepts a quotation.
+        client = await session.get(Client, quote.client_id)
+        if client and client.status == "prospect":
+            client.status = "active"
+            client.version += 1
+
         await session.flush()
         return await QuotationService.get_quotation(session, quotation_id, org_id)
 
@@ -528,9 +578,7 @@ class QuotationService:
         payload: QuotationReject,
         if_match: Optional[str] = None,
     ) -> QuotationResponse:
-        quote = await session.get(Quotation, quotation_id)
-        if not quote:
-            raise QuotationNotFoundError(str(quotation_id))
+        quote = await get_quote_in_org(session, org_id, quotation_id)
 
         if if_match is None:
             raise PreconditionRequiredError()

@@ -1,10 +1,10 @@
 import uuid
 from typing import Optional
 
-from fastapi import APIRouter, Header, Query, Response, status
+from fastapi import APIRouter, Depends, Header, Query, Response, status
 
-from dependencies import DatabaseSession, OrgId
-from schemas.common import PageResponse
+from dependencies import DatabaseSession, OrgId, require_permission
+from schemas.common import PageMeta, PageResponse
 from schemas.opportunity import (
     OpportunityDetailResponse,
     OpportunityLost,
@@ -16,8 +16,14 @@ from services.quotation_service import QuotationService
 
 router = APIRouter(prefix="/opportunities", tags=["opportunities"])
 
+CAN_READ = Depends(require_permission("revenue.opportunity.read"))
+CAN_WRITE = Depends(require_permission("revenue.opportunity.write"))
 
-@router.get("", response_model=PageResponse[OpportunityDetailResponse])
+
+@router.get(
+    "", response_model=PageResponse[OpportunityDetailResponse],
+    dependencies=[CAN_READ],
+)
 async def list_opportunities(
     session: DatabaseSession,
     org_id: OrgId,
@@ -39,7 +45,10 @@ async def list_opportunities(
     )
 
 
-@router.get("/{opportunity_id}", response_model=OpportunityDetailResponse)
+@router.get(
+    "/{opportunity_id}", response_model=OpportunityDetailResponse,
+    dependencies=[CAN_READ],
+)
 async def get_opportunity(
     opportunity_id: uuid.UUID,
     session: DatabaseSession,
@@ -56,7 +65,10 @@ async def get_opportunity(
     return opp
 
 
-@router.patch("/{opportunity_id}", response_model=OpportunityDetailResponse)
+@router.patch(
+    "/{opportunity_id}", response_model=OpportunityDetailResponse,
+    dependencies=[CAN_WRITE],
+)
 async def update_opportunity(
     opportunity_id: uuid.UUID,
     payload: OpportunityUpdate,
@@ -78,7 +90,10 @@ async def update_opportunity(
     return opp
 
 
-@router.post("/{opportunity_id}/lost", response_model=OpportunityDetailResponse)
+@router.post(
+    "/{opportunity_id}/lost", response_model=OpportunityDetailResponse,
+    dependencies=[CAN_WRITE],
+)
 async def mark_opportunity_lost(
     opportunity_id: uuid.UUID,
     payload: OpportunityLost,
@@ -100,7 +115,26 @@ async def mark_opportunity_lost(
     return opp
 
 
-@router.post("/{opportunity_id}/quotations", response_model=QuotationResponse, status_code=status.HTTP_201_CREATED)
+@router.get(
+    "/{opportunity_id}/quotations",
+    response_model=PageResponse[QuotationResponse],
+    dependencies=[CAN_READ],
+)
+async def list_opportunity_quotations(
+    opportunity_id: uuid.UUID,
+    session: DatabaseSession,
+    org_id: OrgId,
+) -> PageResponse[QuotationResponse]:
+    """Every quotation revision on the opportunity, newest first."""
+    await OpportunityService.get_opportunity(session=session, opportunity_id=opportunity_id, org_id=org_id)
+    quotations = await QuotationService.list_for_opportunity(session=session, org_id=org_id, opportunity_id=opportunity_id)
+    return PageResponse(data=quotations, page=PageMeta(has_more=False, limit=len(quotations)))
+
+
+@router.post(
+    "/{opportunity_id}/quotations", response_model=QuotationResponse, status_code=status.HTTP_201_CREATED,
+    dependencies=[CAN_WRITE],
+)
 async def create_quotation(
     opportunity_id: uuid.UUID,
     payload: QuotationCreate,
