@@ -549,3 +549,27 @@ async def test_oauth_and_vertical_packs(async_client: httpx.AsyncClient, db_sess
     assert act_res.status_code == 202
     assert act_res.json()["status"] == "active"
 
+    # 5. List verticals: the seeded one plus the default registry
+    verticals_res = await async_client.get("/api/identity/v1/verticals")
+    assert verticals_res.status_code == 200
+    codes = {v["code"] for v in verticals_res.json()["data"]}
+    assert {"it-services", "it-software"} <= codes
+
+    # 6. List the organization's packs
+    packs_res = await async_client.get(
+        "/api/identity/v1/vertical-packs", params={"vertical_id": str(vert.id)}
+    )
+    assert packs_res.status_code == 200
+    packs = packs_res.json()["data"]
+    assert [p["id"] for p in packs] == [pack_id]
+    assert packs[0]["status"] == "active"
+    assert packs[0]["vertical"]["name"] == "IT Services"
+
+    # 7. An unknown vertical is rejected instead of being created on the fly
+    bad_res = await async_client.post(
+        "/api/identity/v1/vertical-packs",
+        json={"vertical_id": str(uuid.uuid4()), "pack_code": "x", "version_no": 1, "manifest": {}},
+    )
+    assert bad_res.status_code == 422
+    assert bad_res.json()["code"] == "VERTICAL_PACK_INVALID"
+

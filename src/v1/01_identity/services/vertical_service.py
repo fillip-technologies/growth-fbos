@@ -3,7 +3,7 @@ import logging
 from typing import Optional
 import uuid
 
-from sqlalchemy import func, select
+from sqlalchemy import Select, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -25,6 +25,7 @@ from schemas.vertical import (
     ObjectTypeResponse,
     VerticalPackCreate,
     VerticalPackResponse,
+    VerticalResponse,
 )
 from services.event_publisher import event_publisher
 
@@ -43,8 +44,28 @@ DEFAULT_OBJECT_TYPES = [
     ("approval.request", "approval", "Approval request"),
 ]
 
+# Default registry of industry verticals; vertical packs and custom fields target one.
+DEFAULT_VERTICALS = [
+    (uuid.UUID("0191f3a2-0017-7017-8095-0000000a0001"), "it-software", "IT & Software"),
+]
+
 
 class VerticalService:
+    async def _ensure_verticals(self, session: AsyncSession) -> None:
+        for vertical_id, code, name in DEFAULT_VERTICALS:
+            existing = await session.execute(select(Vertical).where(Vertical.code == code))
+            if not existing.scalar_one_or_none():
+                session.add(Vertical(id=vertical_id, name=name, code=code, status="active"))
+        await session.commit()
+
+    async def _page(self, session: AsyncSession, query: Select, limit: int, cursor: Optional[str]) -> tuple[list, PageInfo]:
+        offset = int(cursor) if cursor and cursor.isdigit() else 0
+        result = await session.execute(query.offset(offset).limit(limit + 1))
+        items = list(result.scalars().all())
+        has_more = len(items) > limit
+        next_cursor = str(offset + limit) if has_more else None
+        return items[:limit], PageInfo(next_cursor=next_cursor, has_more=has_more, limit=limit)
+
     async def _ensure_object_types(self, session: AsyncSession) -> None:
         for code, svc, name in DEFAULT_OBJECT_TYPES:
             existing = await session.get(ObjectType, code)
@@ -129,6 +150,44 @@ class VerticalService:
         return PaginatedResponse(
             data=data,
             page=PageInfo(next_cursor=next_cursor, has_more=has_more, limit=limit),
+        )
+
+    async def list_verticals(
+        self,
+        session: AsyncSession,
+        limit: int = 25,
+        cursor: Optional[str] = None,
+    ) -> PaginatedResponse[VerticalResponse]:
+        await self._ensure_verticals(session)
+
+        query = select(Vertical).order_by(Vertical.name.asc(), Vertical.id.asc())
+        items, page = await self._page(session, query, limit, cursor)
+        return PaginatedResponse(
+            data=[VerticalResponse.model_validate(v) for v in items],
+            page=page,
+        )
+
+    async def list_vertical_packs(
+        self,
+        session: AsyncSession,
+        organization_id: uuid.UUID,
+        vertical_id: Optional[uuid.UUID] = None,
+        limit: int = 25,
+        cursor: Optional[str] = None,
+    ) -> PaginatedResponse[VerticalPackResponse]:
+        query = (
+            select(VerticalPack)
+            .options(selectinload(VerticalPack.vertical))
+            .where(VerticalPack.organization_id == organization_id)
+            .order_by(VerticalPack.pack_code.asc(), VerticalPack.version_no.desc(), VerticalPack.id.asc())
+        )
+        if vertical_id:
+            query = query.where(VerticalPack.vertical_id == vertical_id)
+
+        items, page = await self._page(session, query, limit, cursor)
+        return PaginatedResponse(
+            data=[self._build_vertical_pack_response(vp) for vp in items],
+            page=page,
         )
 
     async def list_field_definitions(
@@ -258,15 +317,7 @@ class VerticalService:
     ) -> VerticalPackResponse:
         vertical = await session.get(Vertical, data.vertical_id)
         if not vertical:
-            # If default vertical does not exist, create it dynamically
-            vertical = Vertical(
-                id=data.vertical_id,
-                name="IT & Software",
-                code="it-software",
-                status="active",
-            )
-            session.add(vertical)
-            await session.flush()
+            raise VerticalPackInvalidError(f"Vertical '{data.vertical_id}' is not registered.")
 
         if not isinstance(data.manifest, dict):
             raise VerticalPackInvalidError("Manifest must be a valid JSON object")

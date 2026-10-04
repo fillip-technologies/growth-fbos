@@ -15,6 +15,15 @@ class ObjectTypeResponse(BaseModel):
     display_name: str
 
 
+class VerticalResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
+    name: str
+    code: str
+    status: str
+
+
 class FieldDefinitionCreate(BaseModel):
     model_config = ConfigDict(extra="forbid")
 

@@ -16,6 +16,7 @@ from routes.verticals import (
     field_definitions_router,
     object_types_router,
     vertical_packs_router,
+    verticals_router,
 )
 
 core_router = APIRouter()
@@ -28,6 +29,7 @@ core_router.include_router(roles_router, prefix="/roles", tags=["roles"])
 core_router.include_router(permissions_router, prefix="/permissions", tags=["permissions"])
 core_router.include_router(role_assignments_router, prefix="/role-assignments", tags=["role-assignments"])
 core_router.include_router(calendars_router, prefix="/calendars", tags=["calendars"])
+core_router.include_router(verticals_router, prefix="/verticals", tags=["verticals"])
 core_router.include_router(object_types_router, prefix="/object-types", tags=["object-types"])
 core_router.include_router(field_definitions_router, prefix="/field-definitions", tags=["field-definitions"])
 core_router.include_router(vertical_packs_router, prefix="/vertical-packs", tags=["vertical-packs"])
