@@ -7,10 +7,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from config import settings
 from database.session import get_db_session
-from dependencies import require_permission
+from dependencies import get_actor, require_permission
 from exceptions import PermissionDeniedError, PreconditionRequiredError
 from schemas.common import PaginatedResponse
 from schemas.rbac import (
+    ActorResponse,
     GrantsResponse,
     PermissionResponse,
     RoleAssignmentCreate,
@@ -213,6 +214,38 @@ async def get_effective_grants(
 ) -> GrantsResponse:
     _verify_internal_caller(x_fbos_internal_token)
     return await rbac_service.get_effective_grants(session=db, user_id=user_id)
+
+
+@internal_router.get(
+    "/authz/actor",
+    response_model=ActorResponse,
+    status_code=status.HTTP_200_OK,
+    summary="Resolve the caller of another service (internal)",
+)
+async def resolve_actor(
+    x_fbos_internal_token: Optional[str] = Header(None, alias="X-FBOS-Internal-Token"),
+    actor: Actor = Depends(get_actor),
+    db: AsyncSession = Depends(get_db_session),
+) -> ActorResponse:
+    """
+    Other services forward the user's `Authorization` and `X-Organization-Id` headers here
+    instead of trusting them: this runs the same checks as identity's own endpoints (token,
+    revoked session, client lock, active user, organization within the client) and returns
+    the organization the request acts in with the user's permission codes.
+    """
+    _verify_internal_caller(x_fbos_internal_token)
+    if actor.is_superuser:
+        permissions = await rbac_service.list_permission_codes(session=db)
+    else:
+        permissions = sorted({grant.permission for grant in actor.grants})
+    return ActorResponse(
+        user_id=actor.user_id,
+        organization_id=actor.organization_id,
+        user_type=actor.user_type,
+        name=actor.name,
+        is_superuser=actor.is_superuser,
+        permissions=permissions,
+    )
 
 
 def _verify_internal_caller(token: Optional[str]) -> None:

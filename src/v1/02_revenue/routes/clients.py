@@ -1,17 +1,20 @@
 import uuid
 from typing import Optional
 
-from fastapi import APIRouter, Header, Query, Response, status
+from fastapi import APIRouter, Depends, Header, Query, Response, status
 
-from dependencies import DatabaseSession, OrgId
+from dependencies import DatabaseSession, OrgId, require_permission
 from schemas.client import ClientCreate, ClientResponse, ClientUpdate, ContactCreate, ContactResponse
 from schemas.common import PageResponse
 from services.client_service import ClientService
 
 router = APIRouter(prefix="/clients", tags=["clients"])
 
+CAN_READ = Depends(require_permission("revenue.client.read"))
+CAN_WRITE = Depends(require_permission("revenue.client.write"))
 
-@router.get("", response_model=PageResponse[ClientResponse])
+
+@router.get("", response_model=PageResponse[ClientResponse], dependencies=[CAN_READ])
 async def list_clients(
     session: DatabaseSession,
     org_id: OrgId,
@@ -29,7 +32,7 @@ async def list_clients(
     )
 
 
-@router.post("", response_model=ClientResponse, status_code=status.HTTP_201_CREATED)
+@router.post("", response_model=ClientResponse, status_code=status.HTTP_201_CREATED, dependencies=[CAN_WRITE])
 async def create_client(
     payload: ClientCreate,
     session: DatabaseSession,
@@ -44,7 +47,7 @@ async def create_client(
     return client
 
 
-@router.get("/{client_id}", response_model=ClientResponse)
+@router.get("/{client_id}", response_model=ClientResponse, dependencies=[CAN_READ])
 async def get_client(
     client_id: uuid.UUID,
     session: DatabaseSession,
@@ -57,7 +60,7 @@ async def get_client(
     return client
 
 
-@router.patch("/{client_id}", response_model=ClientResponse)
+@router.patch("/{client_id}", response_model=ClientResponse, dependencies=[CAN_WRITE])
 async def update_client(
     client_id: uuid.UUID,
     payload: ClientUpdate,
@@ -79,7 +82,10 @@ async def update_client(
     return client
 
 
-@router.post("/{client_id}/contacts", response_model=ContactResponse, status_code=status.HTTP_201_CREATED)
+@router.post(
+    "/{client_id}/contacts", response_model=ContactResponse, status_code=status.HTTP_201_CREATED,
+    dependencies=[CAN_WRITE],
+)
 async def add_client_contact(
     client_id: uuid.UUID,
     payload: ContactCreate,

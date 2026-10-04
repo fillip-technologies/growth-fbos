@@ -1,20 +1,29 @@
 import uuid
-from typing import Optional
+from datetime import date
+from typing import List, Optional
 
-from fastapi import APIRouter, Header, Query, status
+from fastapi import APIRouter, Depends, Header, Query, status
 
-from dependencies import DatabaseSession, OrgId, UserId
+from dependencies import DatabaseSession, OrgId, UserId, require_permission
 from schemas.collection import (
     CollectionCaseResponse,
     CollectionFollowUpCreate,
+    CollectionFollowUpResponse,
+    CollectionRefreshResult,
 )
 from schemas.common import PageResponse
 from services.collection_service import CollectionService
 
 router = APIRouter(prefix="/collection-cases", tags=["collections"])
 
+CAN_READ = Depends(require_permission("revenue.collection.read"))
+CAN_WRITE = Depends(require_permission("revenue.collection.write"))
 
-@router.get("", response_model=PageResponse[CollectionCaseResponse])
+
+@router.get(
+    "", response_model=PageResponse[CollectionCaseResponse],
+    dependencies=[CAN_READ],
+)
 async def list_collection_cases(
     session: DatabaseSession,
     org_id: OrgId,
@@ -36,7 +45,10 @@ async def list_collection_cases(
     )
 
 
-@router.post("/{case_id}/follow-ups", response_model=CollectionCaseResponse, status_code=status.HTTP_201_CREATED)
+@router.post(
+    "/{case_id}/follow-ups", response_model=CollectionCaseResponse, status_code=status.HTTP_201_CREATED,
+    dependencies=[CAN_WRITE],
+)
 async def log_collection_follow_up(
     case_id: uuid.UUID,
     payload: CollectionFollowUpCreate,
@@ -55,3 +67,26 @@ async def log_collection_follow_up(
     )
     await session.commit()
     return case
+
+
+@router.get(
+    "/{case_id}/follow-ups",
+    response_model=List[CollectionFollowUpResponse],
+    dependencies=[CAN_READ],
+)
+async def list_follow_ups(case_id: uuid.UUID, session: DatabaseSession, org_id: OrgId) -> List[CollectionFollowUpResponse]:
+    """The case's follow-ups, newest first."""
+    return await CollectionService.list_follow_ups(session=session, case_id=case_id, org_id=org_id)
+
+
+@router.post(
+    "/refresh",
+    response_model=CollectionRefreshResult,
+    dependencies=[CAN_WRITE],
+)
+async def refresh_collections(session: DatabaseSession, org_id: OrgId) -> CollectionRefreshResult:
+    """Mark invoices past due as overdue, open a case per client owing overdue money and
+    resolve cases that are fully paid. Idempotent; run on demand or from a daily job."""
+    result = await CollectionService.refresh(session=session, org_id=org_id, today=date.today())
+    await session.commit()
+    return result

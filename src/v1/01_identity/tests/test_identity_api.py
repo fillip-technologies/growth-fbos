@@ -522,3 +522,20 @@ async def test_oauth_client_credentials(async_client: httpx.AsyncClient, db_sess
     assert oauth_res.status_code == 200
     assert "access_token" in oauth_res.json()
 
+
+
+@pytest.mark.asyncio
+async def test_internal_actor_resolves_caller(async_client: httpx.AsyncClient):
+    res = await async_client.get("/api/identity/v1/internal/authz/actor")
+    assert res.status_code == 200
+    body = res.json()
+    assert body["user_id"] == str(TEST_USER_ID)
+    assert body["organization_id"] == str(TEST_ORG_ID)
+    assert body["is_superuser"] is False
+    assert "revenue.client_service.read" in body["permissions"]
+
+    # An employee can't act in another organization.
+    other_org = await async_client.get(
+        "/api/identity/v1/internal/authz/actor", headers={"X-Organization-Id": str(uuid.uuid4())}
+    )
+    assert other_org.status_code == 404

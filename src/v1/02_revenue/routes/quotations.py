@@ -1,9 +1,9 @@
 import uuid
 from typing import Optional
 
-from fastapi import APIRouter, Header, Response, status
+from fastapi import APIRouter, Depends, Header, Response, status
 
-from dependencies import DatabaseSession, OrgId
+from dependencies import DatabaseSession, OrgId, require_permission
 from schemas.quotation import (
     QuotationItemsReplace,
     QuotationReject,
@@ -13,8 +13,15 @@ from services.quotation_service import QuotationService
 
 router = APIRouter(prefix="/quotations", tags=["quotations"])
 
+CAN_READ = Depends(require_permission("revenue.opportunity.read"))
+CAN_WRITE = Depends(require_permission("revenue.opportunity.write"))
+CAN_APPROVE = Depends(require_permission("revenue.quotation.approve"))
 
-@router.get("/{quotation_id}", response_model=QuotationResponse)
+
+@router.get(
+    "/{quotation_id}", response_model=QuotationResponse,
+    dependencies=[CAN_READ],
+)
 async def get_quotation(
     quotation_id: uuid.UUID,
     session: DatabaseSession,
@@ -31,7 +38,10 @@ async def get_quotation(
     return quotation
 
 
-@router.put("/{quotation_id}/items", response_model=QuotationResponse)
+@router.put(
+    "/{quotation_id}/items", response_model=QuotationResponse,
+    dependencies=[CAN_WRITE],
+)
 async def replace_quotation_items(
     quotation_id: uuid.UUID,
     payload: QuotationItemsReplace,
@@ -53,7 +63,10 @@ async def replace_quotation_items(
     return quotation
 
 
-@router.post("/{quotation_id}/submit", response_model=QuotationResponse)
+@router.post(
+    "/{quotation_id}/submit", response_model=QuotationResponse,
+    dependencies=[CAN_WRITE],
+)
 async def submit_quotation(
     quotation_id: uuid.UUID,
     session: DatabaseSession,
@@ -74,7 +87,31 @@ async def submit_quotation(
     return quotation
 
 
-@router.post("/{quotation_id}/send", response_model=QuotationResponse)
+@router.post(
+    "/{quotation_id}/approve",
+    response_model=QuotationResponse,
+    dependencies=[CAN_APPROVE],
+)
+async def approve_quotation(
+    quotation_id: uuid.UUID,
+    session: DatabaseSession,
+    org_id: OrgId,
+    response: Response,
+    if_match: Optional[str] = Header(None, alias="If-Match"),
+) -> QuotationResponse:
+    """Approve a quotation held for its discount, so it can be sent."""
+    quotation = await QuotationService.approve_quotation(
+        session=session, quotation_id=quotation_id, org_id=org_id, if_match=if_match
+    )
+    await session.commit()
+    response.headers["ETag"] = f'"{quotation.version}"'
+    return quotation
+
+
+@router.post(
+    "/{quotation_id}/send", response_model=QuotationResponse,
+    dependencies=[CAN_WRITE],
+)
 async def send_quotation(
     quotation_id: uuid.UUID,
     session: DatabaseSession,
@@ -95,7 +132,10 @@ async def send_quotation(
     return quotation
 
 
-@router.post("/{quotation_id}/revise", response_model=QuotationResponse, status_code=status.HTTP_201_CREATED)
+@router.post(
+    "/{quotation_id}/revise", response_model=QuotationResponse, status_code=status.HTTP_201_CREATED,
+    dependencies=[CAN_WRITE],
+)
 async def revise_quotation(
     quotation_id: uuid.UUID,
     session: DatabaseSession,
@@ -114,7 +154,10 @@ async def revise_quotation(
     return quotation
 
 
-@router.post("/{quotation_id}/accept", response_model=QuotationResponse)
+@router.post(
+    "/{quotation_id}/accept", response_model=QuotationResponse,
+    dependencies=[CAN_WRITE],
+)
 async def accept_quotation(
     quotation_id: uuid.UUID,
     session: DatabaseSession,
@@ -135,7 +178,10 @@ async def accept_quotation(
     return quotation
 
 
-@router.post("/{quotation_id}/reject", response_model=QuotationResponse)
+@router.post(
+    "/{quotation_id}/reject", response_model=QuotationResponse,
+    dependencies=[CAN_WRITE],
+)
 async def reject_quotation(
     quotation_id: uuid.UUID,
     payload: QuotationReject,

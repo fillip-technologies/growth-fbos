@@ -1,17 +1,23 @@
 import uuid
 from typing import Optional
 
-from fastapi import APIRouter, Header, Query, status
+from fastapi import APIRouter, Depends, Header, Query, status
 
-from dependencies import DatabaseSession, OrgId
+from dependencies import DatabaseSession, OrgId, require_permission
 from schemas.common import PageResponse
 from schemas.offering import OfferingCreate, OfferingResponse
 from services.offering_service import OfferingService
 
 router = APIRouter(prefix="/offerings", tags=["offerings"])
 
+CAN_READ = Depends(require_permission("revenue.offering.read"))
+CAN_WRITE = Depends(require_permission("revenue.offering.write"))
 
-@router.get("", response_model=PageResponse[OfferingResponse])
+
+@router.get(
+    "", response_model=PageResponse[OfferingResponse],
+    dependencies=[CAN_READ],
+)
 async def list_offerings(
     session: DatabaseSession,
     org_id: OrgId,
@@ -31,7 +37,10 @@ async def list_offerings(
     )
 
 
-@router.post("", response_model=OfferingResponse, status_code=status.HTTP_201_CREATED)
+@router.post(
+    "", response_model=OfferingResponse, status_code=status.HTTP_201_CREATED,
+    dependencies=[CAN_WRITE],
+)
 async def create_offering(
     payload: OfferingCreate,
     session: DatabaseSession,
@@ -46,3 +55,13 @@ async def create_offering(
     )
     await session.commit()
     return offering
+
+
+@router.get(
+    "/{offering_id}",
+    response_model=OfferingResponse,
+    dependencies=[CAN_READ],
+)
+async def get_offering(offering_id: uuid.UUID, session: DatabaseSession, org_id: OrgId) -> OfferingResponse:
+    """Retrieve one offering."""
+    return await OfferingService.get_offering(session=session, offering_id=offering_id, org_id=org_id)

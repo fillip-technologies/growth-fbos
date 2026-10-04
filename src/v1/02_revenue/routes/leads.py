@@ -1,9 +1,10 @@
 import uuid
 from typing import Optional
 
-from fastapi import APIRouter, Header, Query, Response, status
+from fastapi import APIRouter, Depends, Header, Query, Response, status
 
-from dependencies import DatabaseSession, OrgId
+from dependencies import CurrentActor, DatabaseSession, OrgId, require_permission
+from exceptions import PermissionDeniedError
 from schemas.common import PageResponse
 from schemas.lead import (
     LeadConvertRequest,
@@ -17,8 +18,16 @@ from services.lead_service import LeadService
 
 router = APIRouter(prefix="/leads", tags=["leads"])
 
+CAN_READ = Depends(require_permission("revenue.lead.read"))
+CAN_WRITE = Depends(require_permission("revenue.lead.write"))
+# Converting into a new customer also creates that customer.
+CLIENT_WRITE = "revenue.client.write"
 
-@router.get("", response_model=PageResponse[LeadResponse])
+
+@router.get(
+    "", response_model=PageResponse[LeadResponse],
+    dependencies=[CAN_READ],
+)
 async def list_leads(
     session: DatabaseSession,
     org_id: OrgId,
@@ -42,7 +51,10 @@ async def list_leads(
     )
 
 
-@router.post("", response_model=LeadResponse, status_code=status.HTTP_201_CREATED)
+@router.post(
+    "", response_model=LeadResponse, status_code=status.HTTP_201_CREATED,
+    dependencies=[CAN_WRITE],
+)
 async def create_lead(
     payload: LeadCreate,
     session: DatabaseSession,
@@ -61,7 +73,10 @@ async def create_lead(
     return lead
 
 
-@router.get("/{lead_id}", response_model=LeadResponse)
+@router.get(
+    "/{lead_id}", response_model=LeadResponse,
+    dependencies=[CAN_READ],
+)
 async def get_lead(
     lead_id: uuid.UUID,
     session: DatabaseSession,
@@ -78,7 +93,10 @@ async def get_lead(
     return lead
 
 
-@router.patch("/{lead_id}", response_model=LeadResponse)
+@router.patch(
+    "/{lead_id}", response_model=LeadResponse,
+    dependencies=[CAN_WRITE],
+)
 async def update_lead(
     lead_id: uuid.UUID,
     payload: LeadUpdate,
@@ -100,7 +118,10 @@ async def update_lead(
     return lead
 
 
-@router.post("/{lead_id}/disqualify", response_model=LeadResponse)
+@router.post(
+    "/{lead_id}/disqualify", response_model=LeadResponse,
+    dependencies=[CAN_WRITE],
+)
 async def disqualify_lead(
     lead_id: uuid.UUID,
     payload: LeadDisqualify,
@@ -122,16 +143,23 @@ async def disqualify_lead(
     return lead
 
 
-@router.post("/{lead_id}/convert", response_model=LeadConvertResult, status_code=status.HTTP_200_OK)
+@router.post(
+    "/{lead_id}/convert", response_model=LeadConvertResult, status_code=status.HTTP_200_OK,
+    dependencies=[CAN_WRITE],
+)
 async def convert_lead(
     lead_id: uuid.UUID,
     payload: LeadConvertRequest,
     session: DatabaseSession,
     org_id: OrgId,
+    actor: CurrentActor,
     if_match: Optional[str] = Header(None, alias="If-Match"),
     idempotency_key: Optional[str] = Header(None, alias="Idempotency-Key"),
 ) -> LeadConvertResult:
-    """Convert qualified lead atomically into Client, Deal, and Opportunity."""
+    """Convert qualified lead atomically into Client, Deal, and Opportunity. A new client
+    starts as a prospect and becomes active when it accepts a quotation."""
+    if payload.new_client and not actor.has(CLIENT_WRITE):
+        raise PermissionDeniedError(CLIENT_WRITE)
     result = await LeadService.convert_lead(
         session=session,
         org_id=org_id,

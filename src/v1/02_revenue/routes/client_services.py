@@ -1,9 +1,9 @@
 import uuid
 from typing import Literal, Optional
 
-from fastapi import APIRouter, Header, Query, Response, status
+from fastapi import APIRouter, Depends, Header, Query, Response, status
 
-from dependencies import DatabaseSession, OrgId
+from dependencies import DatabaseSession, OrgId, require_permission
 from schemas.client_service import (
     ClientServiceCreate,
     ClientServiceResponse,
@@ -20,11 +20,14 @@ from services.client_service_service import ClientServiceService
 
 router = APIRouter(tags=["client-services"])
 
+CAN_READ = Depends(require_permission("revenue.client_service.read"))
+CAN_WRITE = Depends(require_permission("revenue.client_service.write"))
+
 
 # --- Categories ------------------------------------------------------------
 
 
-@router.get("/service-categories", response_model=PageResponse[ServiceCategoryResponse])
+@router.get("/service-categories", response_model=PageResponse[ServiceCategoryResponse], dependencies=[CAN_READ])
 async def list_service_categories(session: DatabaseSession, org_id: OrgId) -> PageResponse[ServiceCategoryResponse]:
     """List the organization's service categories (a default set is created on first use)."""
     categories = await ClientServiceService.list_categories(session=session, org_id=org_id)
@@ -32,7 +35,10 @@ async def list_service_categories(session: DatabaseSession, org_id: OrgId) -> Pa
     return categories
 
 
-@router.post("/service-categories", response_model=ServiceCategoryResponse, status_code=status.HTTP_201_CREATED)
+@router.post(
+    "/service-categories", response_model=ServiceCategoryResponse, status_code=status.HTTP_201_CREATED,
+    dependencies=[CAN_WRITE],
+)
 async def create_service_category(
     payload: ServiceCategoryCreate, session: DatabaseSession, org_id: OrgId
 ) -> ServiceCategoryResponse:
@@ -42,7 +48,7 @@ async def create_service_category(
     return category
 
 
-@router.patch("/service-categories/{category_id}", response_model=ServiceCategoryResponse)
+@router.patch("/service-categories/{category_id}", response_model=ServiceCategoryResponse, dependencies=[CAN_WRITE])
 async def update_service_category(
     category_id: uuid.UUID, payload: ServiceCategoryUpdate, session: DatabaseSession, org_id: OrgId
 ) -> ServiceCategoryResponse:
@@ -57,7 +63,7 @@ async def update_service_category(
 # --- Providers -------------------------------------------------------------
 
 
-@router.get("/service-providers", response_model=PageResponse[ServiceProviderResponse])
+@router.get("/service-providers", response_model=PageResponse[ServiceProviderResponse], dependencies=[CAN_READ])
 async def list_service_providers(
     session: DatabaseSession,
     org_id: OrgId,
@@ -72,7 +78,10 @@ async def list_service_providers(
     )
 
 
-@router.post("/service-providers", response_model=ServiceProviderResponse, status_code=status.HTTP_201_CREATED)
+@router.post(
+    "/service-providers", response_model=ServiceProviderResponse, status_code=status.HTTP_201_CREATED,
+    dependencies=[CAN_WRITE],
+)
 async def create_service_provider(
     payload: ServiceProviderCreate, session: DatabaseSession, org_id: OrgId, response: Response
 ) -> ServiceProviderResponse:
@@ -83,7 +92,7 @@ async def create_service_provider(
     return provider
 
 
-@router.get("/service-providers/{provider_id}", response_model=ServiceProviderResponse)
+@router.get("/service-providers/{provider_id}", response_model=ServiceProviderResponse, dependencies=[CAN_READ])
 async def get_service_provider(
     provider_id: uuid.UUID, session: DatabaseSession, org_id: OrgId, response: Response
 ) -> ServiceProviderResponse:
@@ -93,7 +102,7 @@ async def get_service_provider(
     return provider
 
 
-@router.patch("/service-providers/{provider_id}", response_model=ServiceProviderResponse)
+@router.patch("/service-providers/{provider_id}", response_model=ServiceProviderResponse, dependencies=[CAN_WRITE])
 async def update_service_provider(
     provider_id: uuid.UUID,
     payload: ServiceProviderUpdate,
@@ -111,7 +120,7 @@ async def update_service_provider(
     return provider
 
 
-@router.delete("/service-providers/{provider_id}", status_code=status.HTTP_204_NO_CONTENT)
+@router.delete("/service-providers/{provider_id}", status_code=status.HTTP_204_NO_CONTENT, dependencies=[CAN_WRITE])
 async def delete_service_provider(provider_id: uuid.UUID, session: DatabaseSession, org_id: OrgId) -> Response:
     """Delete a provider that no client service uses."""
     await ClientServiceService.delete_provider(session=session, org_id=org_id, provider_id=provider_id)
@@ -122,7 +131,7 @@ async def delete_service_provider(provider_id: uuid.UUID, session: DatabaseSessi
 # --- Client services -------------------------------------------------------
 
 
-@router.get("/client-services", response_model=PageResponse[ClientServiceResponse])
+@router.get("/client-services", response_model=PageResponse[ClientServiceResponse], dependencies=[CAN_READ])
 async def list_client_services(
     session: DatabaseSession,
     org_id: OrgId,
@@ -152,7 +161,9 @@ async def list_client_services(
     )
 
 
-@router.get("/clients/{client_id}/services", response_model=PageResponse[ClientServiceResponse])
+@router.get(
+    "/clients/{client_id}/services", response_model=PageResponse[ClientServiceResponse], dependencies=[CAN_READ]
+)
 async def list_services_for_client(
     client_id: uuid.UUID,
     session: DatabaseSession,
@@ -167,7 +178,8 @@ async def list_services_for_client(
 
 
 @router.post(
-    "/clients/{client_id}/services", response_model=ClientServiceResponse, status_code=status.HTTP_201_CREATED
+    "/clients/{client_id}/services", response_model=ClientServiceResponse, status_code=status.HTTP_201_CREATED,
+    dependencies=[CAN_WRITE],
 )
 async def create_client_service(
     client_id: uuid.UUID,
@@ -185,7 +197,7 @@ async def create_client_service(
     return record
 
 
-@router.get("/client-services/{record_id}", response_model=ClientServiceResponse)
+@router.get("/client-services/{record_id}", response_model=ClientServiceResponse, dependencies=[CAN_READ])
 async def get_client_service(
     record_id: uuid.UUID, session: DatabaseSession, org_id: OrgId, response: Response
 ) -> ClientServiceResponse:
@@ -195,7 +207,7 @@ async def get_client_service(
     return record
 
 
-@router.patch("/client-services/{record_id}", response_model=ClientServiceResponse)
+@router.patch("/client-services/{record_id}", response_model=ClientServiceResponse, dependencies=[CAN_WRITE])
 async def update_client_service(
     record_id: uuid.UUID,
     payload: ClientServiceUpdate,
@@ -213,7 +225,7 @@ async def update_client_service(
     return record
 
 
-@router.delete("/client-services/{record_id}", status_code=status.HTTP_204_NO_CONTENT)
+@router.delete("/client-services/{record_id}", status_code=status.HTTP_204_NO_CONTENT, dependencies=[CAN_WRITE])
 async def delete_client_service(record_id: uuid.UUID, session: DatabaseSession, org_id: OrgId) -> Response:
     """Delete a client service."""
     await ClientServiceService.delete_service(session=session, org_id=org_id, record_id=record_id)
