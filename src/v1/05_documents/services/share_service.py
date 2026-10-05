@@ -25,6 +25,7 @@ from models.document import (
 )
 from schemas.document import DownloadUrlResponse
 from schemas.share import ShareCreate, ShareResponse
+from services.access import PERM_SHARE, Caller, require_document_write
 from services.storage_service import storage_service
 from utils.security import (
     generate_share_token,
@@ -40,16 +41,18 @@ class ShareService:
     async def create_share(
         self,
         session: AsyncSession,
+        caller: Caller,
         document_id: uuid.UUID,
         data: ShareCreate,
-        org_id: uuid.UUID,
-        user_id: Optional[uuid.UUID] = None,
     ) -> ShareResponse:
+        caller.require(PERM_SHARE)
+        user_id = caller.user_id
         stmt = (
             select(Document)
-            .where(Document.id == document_id, Document.organization_id == org_id)
+            .where(Document.id == document_id, Document.organization_id == caller.organization_id)
             .options(
                 selectinload(Document.versions).selectinload(DocumentVersion.storage_object),
+                selectinload(Document.links),
             )
             .execution_options(populate_existing=True)
         )
@@ -57,6 +60,8 @@ class ShareService:
         doc = result.scalar_one_or_none()
         if not doc:
             raise DocumentNotFoundError(str(document_id))
+        # Sending a file outside FBOS is a change to it, not a read.
+        await require_document_write(caller, doc)
 
         # Enforce classification check
         if doc.classification.lower() == "restricted":
@@ -136,22 +141,29 @@ class ShareService:
     async def revoke_share(
         self,
         session: AsyncSession,
+        caller: Caller,
         share_id: uuid.UUID,
-        org_id: uuid.UUID,
-        user_id: Optional[uuid.UUID] = None,
     ) -> None:
+        caller.require(PERM_SHARE)
+        user_id = caller.user_id
         stmt = (
             select(DocumentShare)
             .join(DocumentShare.document)
             .where(
                 DocumentShare.id == share_id,
-                Document.organization_id == org_id,
+                Document.organization_id == caller.organization_id,
             )
         )
         result = await session.execute(stmt)
         share = result.scalar_one_or_none()
         if not share:
             raise ShareNotFoundError(str(share_id))
+        document = (
+            await session.execute(
+                select(Document).where(Document.id == share.document_id).options(selectinload(Document.links))
+            )
+        ).scalar_one()
+        await require_document_write(caller, document)
 
         now = datetime.now(timezone.utc)
         share.revoked_at = now

@@ -2,6 +2,7 @@ import uuid
 import pytest
 from sqlalchemy import select, update
 
+from config import settings
 from models.document import Document, DocumentVersion, StorageObject
 
 
@@ -147,7 +148,8 @@ async def test_list_documents(async_client):
 
 
 @pytest.mark.asyncio
-async def test_download_url_and_scan_status(async_client, db_session):
+async def test_download_url_and_scan_status(async_client, db_session, monkeypatch):
+    monkeypatch.setattr(settings, "virus_scan_enabled", True)
     # 1. Upload doc
     start_res = await async_client.post(
         "/api/documents/v1/uploads",

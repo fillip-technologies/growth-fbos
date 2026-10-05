@@ -54,3 +54,11 @@ class ContractResponse(BaseModel):
     signed_at: Optional[datetime] = None
     signed_document_id: Optional[uuid.UUID] = None
     version: int
+
+
+class SignedDocumentSet(BaseModel):
+    """The documents-service id of the signed copy, already uploaded to this contract."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    document_id: uuid.UUID

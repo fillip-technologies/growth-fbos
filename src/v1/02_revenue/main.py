@@ -7,16 +7,21 @@ import httpx
 from config import settings
 from database.session import warm_pool
 from router import router
+from services.documents_client import DocumentsClient
 from services.identity_client import IdentityClient
 from utils.timing import ServerTimingMiddleware
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
-    async with httpx.AsyncClient(
-        base_url=settings.identity_service_url, timeout=settings.identity_timeout_seconds
-    ) as http:
+    async with (
+        httpx.AsyncClient(base_url=settings.identity_service_url, timeout=settings.identity_timeout_seconds) as http,
+        httpx.AsyncClient(
+            base_url=settings.documents_service_url, timeout=settings.documents_timeout_seconds
+        ) as documents_http,
+    ):
         app.state.identity_client = IdentityClient(http, settings.internal_service_token)
+        app.state.documents_client = DocumentsClient(documents_http, settings.internal_service_token)
         await warm_pool()
         yield
 

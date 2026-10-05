@@ -39,5 +39,9 @@ class Settings(BaseSettings):
     internal_service_token: str = ""
     identity_timeout_seconds: float = 5.0
 
+    # Documents stores the files attached to quotations and contracts.
+    documents_service_url: str = "http://localhost:8005"
+    documents_timeout_seconds: float = 10.0
+
 
 settings = Settings()

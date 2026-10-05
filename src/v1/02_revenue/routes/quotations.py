@@ -3,12 +3,13 @@ from typing import Optional
 
 from fastapi import APIRouter, Depends, Header, Response, status
 
-from dependencies import DatabaseSession, OrgId, require_permission
+from dependencies import Authorization, DatabaseSession, Documents, OrgId, require_permission
 from schemas.quotation import (
     QuotationItemsReplace,
     QuotationReject,
     QuotationResponse,
 )
+from services.documents_client import SubjectRef
 from services.quotation_service import QuotationService
 
 router = APIRouter(prefix="/quotations", tags=["quotations"])
@@ -141,13 +142,24 @@ async def revise_quotation(
     session: DatabaseSession,
     org_id: OrgId,
     response: Response,
+    authorization: Authorization,
+    documents: Documents,
     idempotency_key: Optional[str] = Header(None, alias="Idempotency-Key"),
 ) -> QuotationResponse:
-    """Create revision N+1 of this quotation and supersede the current one."""
+    """Create revision N+1 of this quotation and supersede the current one; its documents carry over."""
     quotation = await QuotationService.revise_quotation(
         session=session,
         quotation_id=quotation_id,
         org_id=org_id,
+    )
+    # Before the commit: if documents can't be reached the revision isn't created, rather
+    # than created without its files.
+    await documents.copy_links(
+        authorization,
+        org_id,
+        source=SubjectRef("revenue.quotation", quotation_id),
+        target=SubjectRef("revenue.quotation", quotation.id),
+        target_label=f"{quotation.quote_no} rev {quotation.revision_no}",
     )
     await session.commit()
     response.headers["ETag"] = f'"{quotation.version}"'

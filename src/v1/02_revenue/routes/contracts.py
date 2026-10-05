@@ -3,9 +3,9 @@ from typing import Optional
 
 from fastapi import APIRouter, Depends, Header, Query, Response, status
 
-from dependencies import DatabaseSession, OrgId, require_permission
+from dependencies import Authorization, DatabaseSession, Documents, OrgId, require_permission
 from schemas.common import PageResponse
-from schemas.contract import ContractCreate, ContractResponse
+from schemas.contract import ContractCreate, ContractResponse, SignedDocumentSet
 from services.contract_service import ContractService
 
 router = APIRouter(prefix="/contracts", tags=["contracts"])
@@ -83,6 +83,38 @@ async def get_contract(
     return contract
 
 
+@router.put(
+    "/{contract_id}/signed-document", response_model=ContractResponse,
+    dependencies=[CAN_WRITE],
+)
+async def set_signed_document(
+    contract_id: uuid.UUID,
+    payload: SignedDocumentSet,
+    session: DatabaseSession,
+    org_id: OrgId,
+    response: Response,
+    authorization: Authorization,
+    documents: Documents,
+    if_match: Optional[str] = Header(None, alias="If-Match"),
+) -> ContractResponse:
+    """
+    Mark an uploaded document as the signed copy. Upload it to the documents service first,
+    linked to `revenue.contract` / this id; activation requires it.
+    """
+    contract = await ContractService.set_signed_document(
+        session=session,
+        contract_id=contract_id,
+        org_id=org_id,
+        document_id=payload.document_id,
+        if_match=if_match,
+        documents=documents,
+        authorization=authorization,
+    )
+    await session.commit()
+    response.headers["ETag"] = f'"{contract.version}"'
+    return contract
+
+
 @router.post(
     "/{contract_id}/activate", response_model=ContractResponse,
     dependencies=[CAN_WRITE],
@@ -95,7 +127,7 @@ async def activate_contract(
     if_match: Optional[str] = Header(None, alias="If-Match"),
     idempotency_key: Optional[str] = Header(None, alias="Idempotency-Key"),
 ) -> ContractResponse:
-    """Activate a signed contract, starting delivery and billing."""
+    """Activate a contract whose signed copy is attached, starting delivery and billing."""
     contract = await ContractService.activate_contract(
         session=session,
         contract_id=contract_id,

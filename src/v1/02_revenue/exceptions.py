@@ -369,3 +369,55 @@ class InvalidWebhookSignatureError(RevenueServiceError):
             "INVALID_SIGNATURE",
             "Razorpay webhook signature verification failed",
         )
+
+
+class SubjectNotFoundError(RevenueServiceError):
+    """404: Documents asked about a record type revenue doesn't have, or one outside the org."""
+
+    def __init__(self, subject_type: str) -> None:
+        super().__init__(status.HTTP_404_NOT_FOUND, "NOT_FOUND", f"No such '{subject_type}' record")
+
+
+class SubjectLockedError(RevenueServiceError):
+    """409: The record is closed and no longer accepts documents."""
+
+    def __init__(self, subject_type: str, current_status: str) -> None:
+        super().__init__(
+            status.HTTP_409_CONFLICT,
+            "SUBJECT_LOCKED",
+            f"A {current_status} {subject_type.split('.')[-1]} no longer accepts documents.",
+            meta={"status": current_status},
+        )
+
+
+class DocumentsServiceUnavailableError(RevenueServiceError):
+    """503: The documents service could not be reached."""
+
+    def __init__(self) -> None:
+        super().__init__(
+            status.HTTP_503_SERVICE_UNAVAILABLE,
+            "DOCUMENTS_SERVICE_UNAVAILABLE",
+            "Documents could not be reached right now. Try again shortly.",
+        )
+
+
+class SignedCopyRequiredError(RevenueServiceError):
+    """409: A contract can't be activated before its signed copy is attached."""
+
+    def __init__(self) -> None:
+        super().__init__(
+            status.HTTP_409_CONFLICT,
+            "SIGNED_COPY_REQUIRED",
+            "Attach the signed copy of the contract before activating it.",
+        )
+
+
+class DocumentNotLinkedError(RevenueServiceError):
+    """422: The document isn't attached to this contract (or isn't visible to the caller)."""
+
+    def __init__(self) -> None:
+        super().__init__(
+            status.HTTP_422_UNPROCESSABLE_CONTENT,
+            "DOCUMENT_NOT_LINKED",
+            "Upload the signed copy to this contract first; that document isn't attached to it.",
+        )
