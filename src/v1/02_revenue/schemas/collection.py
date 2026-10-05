@@ -31,3 +31,23 @@ class CollectionCaseResponse(BaseModel):
     next_action_at: Optional[datetime] = None
     promised_date: Optional[date] = None
     promised_amount: Optional[Money] = None
+
+
+class CollectionFollowUpResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
+    channel: str
+    notes: Optional[str] = None
+    outcome: Optional[str] = None
+    by_user_id: uuid.UUID
+    followed_up_at: datetime
+
+
+class CollectionRefreshResult(BaseModel):
+    """What a refresh changed: invoices now overdue, cases opened and cases closed."""
+
+    invoices_marked_overdue: int
+    cases_opened: int
+    cases_updated: int
+    cases_resolved: int

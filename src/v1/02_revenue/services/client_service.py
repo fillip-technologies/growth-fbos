@@ -109,7 +109,10 @@ class ClientService:
         session: AsyncSession,
         org_id: uuid.UUID,
         payload: ClientCreate,
+        status: str = "active",
     ) -> ClientResponse:
+        """Create a client. Converting a lead creates a `prospect`; it turns `active` when a
+        quotation is accepted."""
         validate_gstin(payload.gstin, payload.billing_address.state_code)
 
         # Check for duplicates by GSTIN or PAN
@@ -143,7 +146,7 @@ class ClientService:
             client_type=payload.client_type,
             pan=payload.pan.strip().upper() if payload.pan else None,
             gstin=payload.gstin.strip().upper() if payload.gstin else None,
-            status="active",
+            status=status,
             billing_address=payload.billing_address.model_dump_json(),
             owner_user_id=payload.owner_user_id,
             source=payload.source,

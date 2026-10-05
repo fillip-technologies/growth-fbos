@@ -45,6 +45,7 @@ class ContractResponse(BaseModel):
     client: ClientRef
     deal_id: Optional[uuid.UUID] = None
     accepted_quotation_id: Optional[uuid.UUID] = None
+    opportunity_id: Optional[uuid.UUID] = None
     status: Literal["draft", "pending_signature", "active", "completed", "terminated", "expired"]
     start_date: date
     end_date: Optional[date] = None

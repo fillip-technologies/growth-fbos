@@ -26,6 +26,36 @@ class RevenueServiceError(HTTPException):
         super().__init__(status_code=status_code, detail=payload)
 
 
+class AuthenticationRequiredError(RevenueServiceError):
+    """401: The request carries no bearer access token."""
+
+    def __init__(self) -> None:
+        super().__init__(status.HTTP_401_UNAUTHORIZED, "UNAUTHORIZED", "Authentication required")
+
+
+class PermissionDeniedError(RevenueServiceError):
+    """403: The caller is signed in but lacks the permission for this action."""
+
+    def __init__(self, required_permission: str) -> None:
+        super().__init__(
+            status.HTTP_403_FORBIDDEN,
+            "PERMISSION_DENIED",
+            f"You need the '{required_permission}' permission to do this",
+            meta={"required_permission": required_permission},
+        )
+
+
+class AuthServiceUnavailableError(RevenueServiceError):
+    """503: Identity could not be reached to authenticate the request."""
+
+    def __init__(self) -> None:
+        super().__init__(
+            status.HTTP_503_SERVICE_UNAVAILABLE,
+            "AUTH_SERVICE_UNAVAILABLE",
+            "Sign-in could not be checked right now. Try again shortly.",
+        )
+
+
 class ClientNotFoundError(RevenueServiceError):
     """404: Client not found or outside the caller's scope."""
 
@@ -294,6 +324,17 @@ class InvoiceOverallocatedError(RevenueServiceError):
             status.HTTP_422_UNPROCESSABLE_CONTENT,
             "ALLOCATION_EXCEEDS_BALANCE",
             f"Allocation amount {allocated} exceeds invoice balance due of {balance_due}.",
+        )
+
+
+class AllocationClientMismatchError(RevenueServiceError):
+    """422: A payment can only settle invoices of the client who paid."""
+
+    def __init__(self) -> None:
+        super().__init__(
+            status.HTTP_422_UNPROCESSABLE_CONTENT,
+            "ALLOCATION_CLIENT_MISMATCH",
+            "A payment can only be allocated to invoices of the client who made it.",
         )
 
 

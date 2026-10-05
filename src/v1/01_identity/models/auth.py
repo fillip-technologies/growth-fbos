@@ -40,6 +40,7 @@ class RefreshToken(Base):
     issued_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
     revoked_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
     user_agent: Mapped[Optional[str]] = mapped_column(String(512), nullable=True)
+    ip_address: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
 
 
 class ApiClient(Base):

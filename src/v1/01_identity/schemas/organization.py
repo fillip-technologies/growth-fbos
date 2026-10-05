@@ -32,6 +32,8 @@ class OrganizationUpdateRequest(BaseModel):
     fiscal_year_start: Optional[str] = Field(default=None, pattern=FISCAL_YEAR_START_PATTERN)  # DD-MM
     timezone: Optional[str] = None
     status: Optional[str] = None
+    # One of this organization's calendars. Can be replaced, not removed.
+    calendar_id: Optional[uuid.UUID] = None
 
 
 class OrganizationResponse(BaseModel):
@@ -45,5 +47,6 @@ class OrganizationResponse(BaseModel):
     base_currency: str
     fiscal_year_start: str
     timezone: str
+    calendar_id: Optional[uuid.UUID] = None
     status: str
     created_at: Optional[str] = None

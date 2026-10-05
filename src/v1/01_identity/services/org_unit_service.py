@@ -16,6 +16,7 @@ from exceptions import (
     PreconditionRequiredError,
 )
 from models.org_unit import OrgUnit
+from models.organization import Organization
 from models.rbac import RoleAssignment
 from models.user import User
 from schemas.common import PageInfo, PaginatedResponse
@@ -27,13 +28,17 @@ from schemas.org_unit import (
     OrgUnitUpdate,
 )
 from services.event_publisher import event_publisher
+from services.org_unit_vertical_service import org_unit_vertical_service
 
 logger = logging.getLogger("identity.org_unit_service")
 
+# The organization itself is the company, so the structure starts at branches: a branch
+# sits directly under the organization (no parent unit), a department under a branch or
+# another department, a team under a department.
+ROOT_UNIT_TYPES = {"branch"}
 ALLOWED_PARENTS = {
-    "company": [],
-    "branch": ["company"],
-    "department": ["company", "branch", "department"],
+    "branch": [],
+    "department": ["branch", "department"],
     "team": ["department"],
 }
 
@@ -45,17 +50,20 @@ class OrgUnitService:
 
         allowed = ALLOWED_PARENTS.get(unit_type)
         if allowed is None:
-            return
+            raise OrgUnitHierarchyInvalidError(
+                allowed_parent_types=[],
+                message=f"Units of type '{unit_type}' are not supported",
+            )
 
-        if unit_type == "company":
+        if unit_type in ROOT_UNIT_TYPES:
             if parent is not None:
                 raise OrgUnitHierarchyInvalidError(
                     allowed_parent_types=[],
-                    message="A company cannot have a parent unit",
+                    message=f"A {unit_type} sits directly under the organization and cannot have a parent unit",
                 )
             return
 
-        # For branch, department, team: parent is required
+        # For department and team: parent is required
         if parent is None:
             raise OrgUnitHierarchyInvalidError(
                 allowed_parent_types=allowed,
@@ -68,7 +76,7 @@ class OrgUnitService:
                 message=f"A {unit_type} cannot be placed under a {parent.unit_type}. Allowed parent types: {', '.join(allowed)}",
             )
 
-    def _build_response(self, unit: OrgUnit) -> OrgUnitResponse:
+    def _build_response(self, unit: OrgUnit, vertical_ids: Optional[list[uuid.UUID]] = None) -> OrgUnitResponse:
         head_user_ref: Optional[HeadUserRef] = None
         if unit.head_user:
             head_user_ref = HeadUserRef(id=unit.head_user.id, name=unit.head_user.name)
@@ -84,9 +92,14 @@ class OrgUnitService:
             calendar_id=unit.calendar_id,
             status=unit.status,
             version=unit.version,
+            vertical_ids=vertical_ids or [],
             created_at=unit.created_at,
             updated_at=unit.updated_at,
         )
+
+    async def _response_with_verticals(self, session: AsyncSession, unit: OrgUnit) -> OrgUnitResponse:
+        own_verticals = await org_unit_vertical_service.own_vertical_ids(session, [unit.id])
+        return self._build_response(unit, own_verticals.get(unit.id))
 
     async def list_org_units(
         self,
@@ -149,7 +162,8 @@ class OrgUnitService:
         else:
             next_cursor = None
 
-        data = [self._build_response(u) for u in units]
+        own_verticals = await org_unit_vertical_service.own_vertical_ids(session, [u.id for u in units])
+        data = [self._build_response(u, own_verticals.get(u.id)) for u in units]
         return PaginatedResponse(
             data=data,
             page=PageInfo(next_cursor=next_cursor, has_more=has_more, limit=limit),
@@ -168,7 +182,7 @@ class OrgUnitService:
         if not unit:
             raise OrgUnitNotFoundError()
 
-        return self._build_response(unit)
+        return await self._response_with_verticals(session, unit)
 
     async def create_org_unit(
         self,
@@ -207,10 +221,13 @@ class OrgUnitService:
                     message="Head user does not exist in this organization",
                 )
 
-        # Calendar inheritance
+        # Calendar inheritance: the parent's, or for a branch the organization's
         calendar_id = data.calendar_id
         if calendar_id is None and parent is not None:
             calendar_id = parent.calendar_id
+        if calendar_id is None and parent is None:
+            organization = await session.get(Organization, organization_id)
+            calendar_id = organization.calendar_id if organization else None
 
         unit_id = uuid.uuid4()
         path = f"{parent.path}{unit_id}/" if parent is not None else f"/{unit_id}/"
@@ -309,7 +326,7 @@ class OrgUnitService:
             },
         )
 
-        return self._build_response(unit)
+        return await self._response_with_verticals(session, unit)
 
     async def move_org_unit(
         self,
@@ -394,7 +411,7 @@ class OrgUnitService:
             },
         )
 
-        return self._build_response(unit)
+        return await self._response_with_verticals(session, unit)
 
 
 org_unit_service = OrgUnitService()

@@ -4,7 +4,7 @@ import secrets
 from typing import Optional
 import uuid
 
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from exceptions import (
@@ -13,9 +13,12 @@ from exceptions import (
     OrganizationNotFoundError,
     OrgCodeAlreadyExistsError,
     UserAlreadyExistsError,
+    ValidationFailedError,
 )
 from models.auth import UserCredential
+from models.calendar import Calendar
 from models.client import Client
+from models.org_unit import OrgUnit
 from models.organization import Organization
 from models.rbac import Permission, Role, RoleAssignment, RolePermission
 from models.user import User
@@ -48,6 +51,7 @@ class OrganizationService:
             base_currency=org.base_currency,
             fiscal_year_start=org.fiscal_year_start,
             timezone=org.timezone,
+            calendar_id=org.calendar_id,
             status=org.status,
             created_at=org.created_at.isoformat() if org.created_at else None,
         )
@@ -311,6 +315,25 @@ class OrganizationService:
             page=PageInfo(next_cursor=next_cursor, has_more=has_more, limit=limit),
         )
 
+    async def _switch_calendar(self, session: AsyncSession, org: Organization, calendar_id: uuid.UUID) -> None:
+        """
+        Make `calendar_id` the organization's calendar. Units on no calendar or on the previous
+        organization calendar follow it; units given a calendar of their own keep theirs.
+        """
+        calendar = await session.get(Calendar, calendar_id)
+        if not calendar or calendar.organization_id != org.id:
+            raise ValidationFailedError.for_field("calendar_id", "Pick one of this company's calendars")
+
+        following_org_calendar = OrgUnit.calendar_id.is_(None)
+        if org.calendar_id is not None:
+            following_org_calendar = or_(following_org_calendar, OrgUnit.calendar_id == org.calendar_id)
+        await session.execute(
+            update(OrgUnit)
+            .where(OrgUnit.organization_id == org.id, following_org_calendar)
+            .values(calendar_id=calendar_id, version=OrgUnit.version + 1)
+        )
+        org.calendar_id = calendar_id
+
     async def get_organization(
         self,
         session: AsyncSession,
@@ -345,6 +368,8 @@ class OrganizationService:
             org.timezone = data.timezone
         if data.status is not None:
             org.status = data.status
+        if data.calendar_id is not None and data.calendar_id != org.calendar_id:
+            await self._switch_calendar(session, org, data.calendar_id)
 
         await session.commit()
         await session.refresh(org)

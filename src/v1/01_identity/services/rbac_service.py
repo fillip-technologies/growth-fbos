@@ -527,6 +527,10 @@ class RbacService:
             },
         )
 
+    async def list_permission_codes(self, session: AsyncSession) -> list[str]:
+        """Every code in the permission catalog — what a client admin holds."""
+        return list((await session.execute(select(Permission.code).order_by(Permission.code))).scalars().all())
+
     async def get_effective_grants(
         self,
         session: AsyncSession,
@@ -543,7 +547,7 @@ class RbacService:
         elif user.user_type == "client_admin":
             grants = [
                 GrantItem(permission=code, scope_path=None, vertical_id=None, self_only=False)
-                for code in (await session.execute(select(Permission.code))).scalars().all()
+                for code in await self.list_permission_codes(session)
             ]
         else:
             grants = [

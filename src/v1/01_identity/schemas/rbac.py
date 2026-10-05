@@ -103,6 +103,18 @@ class GrantItem(BaseModel):
     self_only: bool = False
 
 
+class ActorResponse(BaseModel):
+    """The caller of another service, resolved from their access token (internal)."""
+
+    user_id: uuid.UUID
+    organization_id: uuid.UUID
+    user_type: str
+    name: str
+    is_superuser: bool
+    # Permission codes held in at least one scope; client admins hold the full catalog.
+    permissions: list[str]
+
+
 class GrantsResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 

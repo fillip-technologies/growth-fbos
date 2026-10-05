@@ -5,6 +5,7 @@ from typing import Optional
 from fastapi import Depends, Header, HTTPException, Request, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 import jwt
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from database.session import get_db_session
@@ -16,6 +17,7 @@ from exceptions import (
     PlatformAdminRequiredError,
     SubscriptionExpiredError,
 )
+from models.auth import RefreshToken
 from models.client import Client
 from models.organization import Organization
 from models.platform_admin import PlatformAdmin
@@ -39,6 +41,20 @@ def get_client_ip(request: Request) -> str:
 def get_user_agent(request: Request) -> str:
     """Extract User-Agent header string."""
     return request.headers.get("user-agent", "Unknown")
+
+
+async def _session_is_active(session: AsyncSession, family_id: str) -> bool:
+    """A session is live while its refresh-token family still has an unrevoked token."""
+    try:
+        family = uuid.UUID(family_id)
+    except ValueError:
+        return False
+    live_token = await session.execute(
+        select(RefreshToken.id)
+        .where(RefreshToken.family_id == family, RefreshToken.revoked_at.is_(None))
+        .limit(1)
+    )
+    return live_token.first() is not None
 
 
 async def get_current_user(
@@ -87,6 +103,15 @@ async def get_current_user(
         client = await session.get(Client, uuid.UUID(str(payload["client_id"])))
         if not is_client_usable(client):
             raise SubscriptionExpiredError()
+
+    # A signed-out or revoked session stops working at once, not when its access token
+    # expires. The platform super-admin's sessions live in their own table.
+    family_id = payload.get("family_id")
+    if family_id and payload.get("user_type") != "platform_admin" and not await _session_is_active(session, family_id):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail={"code": "SESSION_REVOKED", "message": "This session has been signed out", "status": 401},
+        )
 
     return TokenPayload(
         sub=payload["sub"],

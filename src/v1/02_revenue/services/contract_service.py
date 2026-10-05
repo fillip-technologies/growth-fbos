@@ -11,19 +11,19 @@ from exceptions import (
     PaymentTermsTotalError,
     PreconditionRequiredError,
     QuotationNotAcceptedError,
-    QuotationNotFoundError,
     VersionConflictError,
 )
 from models.client import Client
 from models.contract import Contract, ContractPaymentTerm, ContractTerm
-from models.quotation import Quotation, QuotationItem
-from schemas.common import Money
+from models.quotation import QuotationItem
+from schemas.common import Money, PageMeta, PageResponse, decode_cursor, encode_cursor
 from schemas.contract import (
     ContractCreate,
     ContractResponse,
     PaymentTermResponse,
 )
 from schemas.opportunity import ClientRef
+from services.quotation_service import get_quote_in_org
 
 
 def format_contract_response(
@@ -50,6 +50,7 @@ def format_contract_response(
         client=ClientRef(id=client.id, name=client.name),
         deal_id=contract.deal_id,
         accepted_quotation_id=contract.accepted_quotation_id,
+        opportunity_id=contract.opportunity_id,
         status=contract.status if contract.status in ("draft", "pending_signature", "active", "completed", "terminated", "expired") else "active",
         start_date=contract.start_date,
         end_date=contract.end_date,
@@ -68,9 +69,7 @@ class ContractService:
         org_id: uuid.UUID,
         payload: ContractCreate,
     ) -> ContractResponse:
-        quote = await session.get(Quotation, payload.quotation_id)
-        if not quote:
-            raise QuotationNotFoundError(str(payload.quotation_id))
+        quote = await get_quote_in_org(session, org_id, payload.quotation_id)
 
         if quote.status != "accepted":
             raise QuotationNotAcceptedError(quote.status)
@@ -141,6 +140,52 @@ class ContractService:
 
         await session.flush()
         return format_contract_response(contract, client, persisted_terms)
+
+    @staticmethod
+    async def list_contracts(
+        session: AsyncSession,
+        org_id: uuid.UUID,
+        client_id: Optional[uuid.UUID] = None,
+        opportunity_id: Optional[uuid.UUID] = None,
+        status: Optional[str] = None,
+        limit: int = 25,
+        cursor: Optional[str] = None,
+    ) -> PageResponse[ContractResponse]:
+        query = (
+            select(Contract, Client)
+            .join(Client, Client.id == Contract.client_id)
+            .where(Contract.organization_id == org_id)
+        )
+        if client_id:
+            query = query.where(Contract.client_id == client_id)
+        if opportunity_id:
+            query = query.where(Contract.opportunity_id == opportunity_id)
+        if status:
+            query = query.where(Contract.status == status)
+        if cursor:
+            last_id = decode_cursor(cursor).get("last_id")
+            if last_id:
+                query = query.where(Contract.id > uuid.UUID(last_id))
+
+        rows = list((await session.execute(query.order_by(Contract.id.asc()).limit(limit + 1))).all())
+        has_more = len(rows) > limit
+        rows = rows[:limit]
+
+        terms_by_contract: dict[uuid.UUID, list[ContractPaymentTerm]] = {contract.id: [] for contract, _ in rows}
+        if rows:
+            terms = await session.execute(
+                select(ContractPaymentTerm)
+                .where(ContractPaymentTerm.contract_id.in_(terms_by_contract))
+                .order_by(ContractPaymentTerm.seq.asc())
+            )
+            for term in terms.scalars().all():
+                terms_by_contract[term.contract_id].append(term)
+
+        next_cursor = encode_cursor({"last_id": str(rows[-1][0].id)}) if has_more and rows else None
+        return PageResponse(
+            data=[format_contract_response(contract, client, terms_by_contract[contract.id]) for contract, client in rows],
+            page=PageMeta(next_cursor=next_cursor, has_more=has_more, limit=limit),
+        )
 
     @staticmethod
     async def get_contract(

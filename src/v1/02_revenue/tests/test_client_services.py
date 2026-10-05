@@ -160,7 +160,7 @@ async def test_client_services_are_org_scoped(async_client: httpx.AsyncClient):
     )
     record_id = create.json()["id"]
 
-    other_org = {"X-FBOS-Org-Id": str(uuid.uuid4())}
+    other_org = {"X-Organization-Id": str(uuid.uuid4())}
     assert (await async_client.get(f"{BASE}/client-services/{record_id}", headers=other_org)).status_code == 404
     listing = await async_client.get(f"{BASE}/client-services", headers=other_org)
     assert listing.json()["data"] == []

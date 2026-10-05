@@ -259,7 +259,7 @@ class LeadService:
                 raise ClientNotFoundError(str(payload.existing_client_id))
             client_resp = await ClientService.get_client(session, client_entity.id, org_id)
         elif payload.new_client:
-            client_resp = await ClientService.create_client(session, org_id, payload.new_client)
+            client_resp = await ClientService.create_client(session, org_id, payload.new_client, status="prospect")
             client_entity = await session.get(Client, client_resp.id)
             client_created = True
         else:

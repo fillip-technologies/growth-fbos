@@ -177,6 +177,17 @@ class UserNotFoundError(IdentityServiceError):
         )
 
 
+class SessionNotFoundError(IdentityServiceError):
+    """404: No active session with this id for this user."""
+
+    def __init__(self) -> None:
+        super().__init__(
+            status_code=status.HTTP_404_NOT_FOUND,
+            code="SESSION_NOT_FOUND",
+            message="Session not found or already signed out",
+        )
+
+
 class UserAlreadyExistsError(IdentityServiceError):
     """409: A user with this email already exists (emails are unique across the platform)."""
 
@@ -340,6 +351,28 @@ class VerticalPackInvalidError(IdentityServiceError):
         super().__init__(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             code="VERTICAL_PACK_INVALID",
+            message=message,
+        )
+
+
+class VerticalNotFoundError(IdentityServiceError):
+    """404: Vertical not found in the caller's client."""
+
+    def __init__(self) -> None:
+        super().__init__(
+            status_code=status.HTTP_404_NOT_FOUND,
+            code="NOT_FOUND",
+            message="The id does not exist, or exists outside every scope you are granted.",
+        )
+
+
+class PackVersionConflictError(IdentityServiceError):
+    """409: The pack version is not in a state that allows this (e.g. editing a published version)."""
+
+    def __init__(self, message: str) -> None:
+        super().__init__(
+            status_code=status.HTTP_409_CONFLICT,
+            code="PACK_VERSION_CONFLICT",
             message=message,
         )
 
