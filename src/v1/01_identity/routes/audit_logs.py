@@ -29,6 +29,9 @@ router = APIRouter()
 async def list_audit_logs(
     user_id: Optional[uuid.UUID] = Query(None, description="Only entries about this user"),
     event_type: Optional[str] = Query(None, description="e.g. identity.session.login_failed.v1"),
+    exclude_event_type: Optional[list[str]] = Query(
+        None, description="Leave out these event types (repeatable), e.g. identity.session.refreshed.v1"
+    ),
     status: Optional[str] = Query(None, description="success, failed, revoked or locked"),
     created_after: Optional[datetime] = Query(None, description="ISO 8601, inclusive"),
     created_before: Optional[datetime] = Query(None, description="ISO 8601, exclusive"),
@@ -42,6 +45,7 @@ async def list_audit_logs(
         actor=actor,
         user_id=user_id,
         event_type=event_type,
+        exclude_event_types=exclude_event_type,
         status=status,
         created_after=created_after,
         created_before=created_before,

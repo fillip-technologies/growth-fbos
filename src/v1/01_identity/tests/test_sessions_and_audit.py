@@ -278,6 +278,9 @@ async def test_audit_log_lists_this_organizations_entries_with_filters(async_cli
     assert await listed(user_id=str(member.id)) == [str(signed_out.id), str(failed.id)]
     assert await listed(status="failed") == [str(failed.id)]
     assert await listed(event_type="identity.session.login_succeeded.v1") == [str(signed_in.id)]
+    assert await listed(exclude_event_type=["identity.session.revoked.v1", "identity.session.login_failed.v1"]) == [
+        str(signed_in.id)
+    ]
     since = (datetime.now(timezone.utc) - timedelta(hours=2, minutes=30)).isoformat().replace("+00:00", "Z")
     until = (datetime.now(timezone.utc) - timedelta(hours=1, minutes=30)).isoformat().replace("+00:00", "Z")
     assert await listed(created_after=since) == [str(signed_out.id), str(failed.id)]
