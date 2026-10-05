@@ -7,12 +7,15 @@ from fastapi.exception_handlers import request_validation_exception_handler
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
-from database.session import dispose_engine
+from config import settings
+from database.session import dispose_engine, warm_pool
 from exceptions import IdentityServiceError
 import models  # noqa: F401 - Register all models with Base.metadata
 from router import router
 from schemas.auth import JwksResponse
+from services.auth_cache import auth_cache
 from services.auth_service import auth_service
+from utils.timing import ServerTimingMiddleware
 
 # Rejected requests are logged with their reason; uvicorn's access log only shows the status.
 logger = logging.getLogger("identity.errors")
@@ -62,12 +65,16 @@ _PROBLEM_META: dict[str, tuple[str, bool]] = {
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # Schema is owned by Alembic (`alembic upgrade head` runs in start.sh).
+    await warm_pool()
+    await auth_cache.connect(settings.redis_url)
     yield
+    await auth_cache.close()
     await dispose_engine()
 
 
 app = FastAPI(title="Identity Service", version="1.0.0", lifespan=lifespan)
 app.include_router(router)
+app.add_middleware(ServerTimingMiddleware)
 
 
 @app.exception_handler(IdentityServiceError)

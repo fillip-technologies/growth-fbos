@@ -30,6 +30,15 @@ class ManagerRef(BaseModel):
     name: str
 
 
+class TeamRef(BaseModel):
+    """A team the user belongs to as an extra member, on top of where they work."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    id: uuid.UUID
+    name: str
+
+
 def _clean_optional(value: Optional[str]) -> Optional[str]:
     if value is None:
         return None
@@ -106,7 +115,11 @@ class UserInviteRequest(BaseModel):
 
 
 class UserUpdateRequest(BaseModel):
-    """Fields left out are unchanged; `phone` and `manager_user_id` may be set to null to clear them."""
+    """
+    Fields left out are unchanged; `phone`, `manager_user_id` and `home_unit_id` may be set to
+    null to clear them. Clearing `home_unit_id` needs company-wide rights, since a person with no
+    place is outside every unit-scoped manager's reach.
+    """
 
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
 
@@ -142,6 +155,8 @@ class UserResponse(BaseModel):
     user_type: str
     status: str
     home_unit: Optional[HomeUnitRef] = None
+    # Teams they're an extra member of, by name; never includes `home_unit`.
+    teams: list[TeamRef] = Field(default_factory=list)
     manager: Optional[ManagerRef] = None
     mfa_enabled: bool = False
     last_login_at: Optional[str] = None

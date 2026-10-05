@@ -11,6 +11,7 @@ import jwt
 import pyotp
 
 from config import settings
+from database.session import keep_loaded
 from exceptions import (
     SubscriptionExpiredError,
     AccountLockedError,
@@ -183,6 +184,28 @@ class AuthService:
             client_id=client_id,
             family_id=family_id,
         )
+
+    async def _load_refresh_token_with_account(
+        self, session: AsyncSession, token_id: uuid.UUID
+    ) -> Optional[RefreshToken]:
+        """
+        The refresh token with its user, organization and client in one round trip. They
+        land in the session's identity map, so the user, subscription and token-claim
+        lookups that follow cost no further query against the remote database.
+        """
+        row = (
+            await session.execute(
+                select(RefreshToken, User, Organization, Client)
+                .outerjoin(User, User.id == RefreshToken.user_id)
+                .outerjoin(Organization, Organization.id == User.organization_id)
+                .outerjoin(Client, Client.id == Organization.client_id)
+                .where(RefreshToken.id == token_id)
+            )
+        ).first()
+        if row is None:
+            return None
+        keep_loaded(session, row.User, row.Organization, row.Client)
+        return row.RefreshToken
 
     async def _has_successor(self, session: AsyncSession, token_record: RefreshToken) -> bool:
         """Was this token rotated, i.e. issued a newer token in the same session?"""
@@ -763,7 +786,7 @@ class AuthService:
         except (ValueError, TypeError):
             raise RefreshTokenInvalidError()
 
-        token_record = await session.get(RefreshToken, token_id)
+        token_record = await self._load_refresh_token_with_account(session, token_id)
         if not token_record:
             raise RefreshTokenInvalidError()
 
