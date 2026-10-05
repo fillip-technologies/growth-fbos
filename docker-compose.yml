@@ -22,6 +22,19 @@ services:
       timeout: 5s
       retries: 5
 
+  # Cache for identity's per-request auth checks (src/v1/01_identity/services/auth_cache.py).
+  # Internal only and nothing persisted: losing it only costs database round trips.
+  # volatile-lru evicts only expiring entries, never the `auth:epoch` they are checked against.
+  redis:
+    image: redis:7-alpine
+    restart: always
+    command: ["redis-server", "--save", "", "--appendonly", "no", "--maxmemory", "64mb", "--maxmemory-policy", "volatile-lru"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+
   # ---------------------------------------------------------------------------
   # 00 — Gateway Service  →  http://localhost:8000
   # ---------------------------------------------------------------------------
@@ -50,6 +63,8 @@ services:
     depends_on:
       db:
         condition: service_healthy
+      redis:
+        condition: service_started  # optional: identity falls back to the database
     restart: on-failure
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/health"]

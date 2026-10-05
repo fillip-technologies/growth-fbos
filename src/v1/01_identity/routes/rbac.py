@@ -21,6 +21,7 @@ from schemas.rbac import (
     RoleResponse,
 )
 from services.access_control import Actor
+from services.auth_cache import auth_cache
 from services.rbac_service import rbac_service
 
 roles_router = APIRouter()
@@ -235,7 +236,7 @@ async def resolve_actor(
     """
     _verify_internal_caller(x_fbos_internal_token)
     if actor.is_superuser:
-        permissions = await rbac_service.list_permission_codes(session=db)
+        permissions = await _permission_catalog(db)
     else:
         permissions = sorted({grant.permission for grant in actor.grants})
     return ActorResponse(
@@ -246,6 +247,16 @@ async def resolve_actor(
         is_superuser=actor.is_superuser,
         permissions=permissions,
     )
+
+
+async def _permission_catalog(db: AsyncSession) -> list[str]:
+    """Every permission code (what a client admin holds); it only changes with a deploy."""
+    epoch, cached = await auth_cache.permission_codes()
+    if cached is not None:
+        return cached
+    codes = await rbac_service.list_permission_codes(session=db)
+    await auth_cache.remember_permission_codes(epoch, codes)
+    return codes
 
 
 def _verify_internal_caller(token: Optional[str]) -> None:
