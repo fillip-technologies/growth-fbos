@@ -37,6 +37,7 @@ class AuditService:
         actor: Actor,
         user_id: Optional[uuid.UUID] = None,
         event_type: Optional[str] = None,
+        exclude_event_types: Optional[list[str]] = None,
         status: Optional[str] = None,
         created_after: Optional[datetime] = None,
         created_before: Optional[datetime] = None,
@@ -49,6 +50,8 @@ class AuditService:
             query = query.where(SecurityAuditLog.user_id == user_id)
         if event_type:
             query = query.where(SecurityAuditLog.event_type == event_type)
+        if exclude_event_types:
+            query = query.where(SecurityAuditLog.event_type.not_in(exclude_event_types))
         if status:
             query = query.where(SecurityAuditLog.status == status)
         if created_after is not None:
