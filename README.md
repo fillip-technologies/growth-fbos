@@ -273,4 +273,7 @@ PYTHONPATH=. pytest src/v1/01_identity/tests
 
 # Run revenue test suite:
 PYTHONPATH=. pytest src/v1/02_revenue/tests
+
+# Run every service's test suite, one service at a time:
+for t in src/v1/*/tests; do PYTHONPATH=. pytest "$t" || break; done
 ```
