@@ -29,10 +29,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from exceptions import (
     AssigneeNotInUnitError,
+    BuiltInReadOnlyError,
     ChecklistItemNotFoundError,
     DailyMinutesExceededError,
     DependenciesOpenError,
     DependencyCycleError,
+    DuplicateCodeError,
     FeedbackRequiredError,
     FieldNotEditableInStatusError,
     HandoverAlreadyOpenError,
@@ -50,6 +52,7 @@ from exceptions import (
     TaskTemplateNotFoundError,
     TaskTypeNotFoundError,
     TimeEntryNotFoundError,
+    TimeEntryNotOwnError,
     ValidationFailedError,
     VersionConflictError,
 )
@@ -65,6 +68,7 @@ from schemas.tasks import (
     CommentCreate,
     CommentResponse,
     DependencyCreate,
+    DependencyResponse,
     HandoverAccept,
     HandoverCreate,
     HandoverReject,
@@ -80,7 +84,13 @@ from schemas.tasks import (
     TaskHistoryItemResponse,
     TaskResponse,
     TaskSubmit,
+    TaskTemplateCreate,
+    TaskTemplateResponse,
+    TaskTemplateUpdate,
+    TaskTypeCreate,
     TaskTypeRef,
+    TaskTypeResponse,
+    TaskTypeUpdate,
     TaskUpdate,
     TimeEntryCreate,
     TimeEntryResponse,
@@ -207,6 +217,146 @@ async def _record_status_history(session: AsyncSession, task: Task, from_status:
     )
 
 
+# --- Task types and templates ---------------------------------------------------
+
+
+def _visible_task_types(org_id: uuid.UUID):
+    """The organization's own task types plus the built-in ones every organization shares."""
+    return or_(TaskType.organization_id == org_id, TaskType.organization_id.is_(None))
+
+
+def _task_type_response(task_type: TaskType) -> TaskTypeResponse:
+    return TaskTypeResponse(
+        id=task_type.id,
+        code=task_type.code,
+        name=task_type.name,
+        category=task_type.category,
+        requires_review=task_type.requires_review,
+        default_estimate_minutes=task_type.default_estimate_minutes,
+        built_in=task_type.organization_id is None,
+    )
+
+
+async def list_task_types(
+    session: AsyncSession, org_id: uuid.UUID, limit: int, cursor: Optional[str]
+) -> PageResponse[TaskTypeResponse]:
+    query = select(TaskType).where(_visible_task_types(org_id))
+    rows, page = await paginate(session, query, TaskType, limit, cursor, order_by=TaskType.code)
+    return PageResponse(data=[_task_type_response(t) for t in rows], page=page)
+
+
+async def create_task_type(session: AsyncSession, org_id: uuid.UUID, data: TaskTypeCreate) -> TaskTypeResponse:
+    # A code may exist once among the organization's types and the built-ins.
+    taken = (await session.execute(select(TaskType.id).where(_visible_task_types(org_id), TaskType.code == data.code))).first()
+    if taken:
+        raise DuplicateCodeError(data.code)
+    task_type = TaskType(organization_id=org_id, **data.model_dump())
+    session.add(task_type)
+    await session.flush()
+    return _task_type_response(task_type)
+
+
+async def update_task_type(
+    session: AsyncSession, org_id: uuid.UUID, type_id: uuid.UUID, data: TaskTypeUpdate
+) -> TaskTypeResponse:
+    task_type = (
+        await session.execute(select(TaskType).where(_visible_task_types(org_id), TaskType.id == type_id))
+    ).scalars().first()
+    if not task_type:
+        raise TaskTypeNotFoundError(str(type_id))
+    if task_type.organization_id is None:
+        raise BuiltInReadOnlyError(task_type.code)
+    for field, value in data.model_dump(exclude_unset=True).items():
+        if value is not None or field == "default_estimate_minutes":
+            setattr(task_type, field, value)
+    await session.flush()
+    return _task_type_response(task_type)
+
+
+async def _task_template_responses(session: AsyncSession, templates: list[TaskTemplate]) -> list[TaskTemplateResponse]:
+    task_types = {}
+    if templates:
+        task_types = {
+            t.id: t
+            for t in (
+                await session.execute(select(TaskType).where(TaskType.id.in_({t.task_type_id for t in templates})))
+            ).scalars()
+        }
+    return [
+        TaskTemplateResponse(
+            id=template.id,
+            code=template.code,
+            task_type=TaskTypeRef.model_validate(task_types[template.task_type_id]),
+            title_template=template.title_template,
+            description=template.description,
+            checklist=template.checklist or [],
+            estimate_minutes=template.estimate_minutes,
+            default_priority=template.default_priority,
+            version=template.version_no,
+        )
+        for template in templates
+    ]
+
+
+async def list_task_templates(
+    session: AsyncSession, org_id: uuid.UUID, limit: int, cursor: Optional[str]
+) -> PageResponse[TaskTemplateResponse]:
+    query = select(TaskTemplate).where(TaskTemplate.organization_id == org_id)
+    rows, page = await paginate(session, query, TaskTemplate, limit, cursor, order_by=TaskTemplate.code)
+    return PageResponse(data=await _task_template_responses(session, rows), page=page)
+
+
+async def create_task_template(session: AsyncSession, org_id: uuid.UUID, data: TaskTemplateCreate) -> TaskTemplateResponse:
+    taken = (
+        await session.execute(
+            select(TaskTemplate.id).where(TaskTemplate.organization_id == org_id, TaskTemplate.code == data.code)
+        )
+    ).first()
+    if taken:
+        raise DuplicateCodeError(data.code)
+    task_type = await _find_task_type(session, org_id, data.task_type_code)
+    template = TaskTemplate(
+        organization_id=org_id,
+        task_type_id=task_type.id,
+        code=data.code,
+        title_template=data.title_template,
+        description=data.description,
+        checklist=[item.model_dump() for item in data.checklist],
+        estimate_minutes=data.estimate_minutes,
+        default_priority=data.default_priority,
+        version_no=1,
+    )
+    session.add(template)
+    await session.flush()
+    return (await _task_template_responses(session, [template]))[0]
+
+
+async def update_task_template(
+    session: AsyncSession, org_id: uuid.UUID, template_id: uuid.UUID, data: TaskTemplateUpdate, if_match: Optional[str]
+) -> TaskTemplateResponse:
+    template = (
+        await session.execute(
+            select(TaskTemplate).where(TaskTemplate.id == template_id, TaskTemplate.organization_id == org_id)
+        )
+    ).scalars().first()
+    if not template:
+        raise TaskTemplateNotFoundError(str(template_id))
+    _check_if_match(if_match, template.version_no)
+
+    changes = data.model_dump(exclude_unset=True)
+    if changes.get("task_type_code"):
+        template.task_type_id = (await _find_task_type(session, org_id, changes.pop("task_type_code"))).id
+    if "checklist" in changes:
+        template.checklist = [item.model_dump() for item in data.checklist or []]
+        changes.pop("checklist")
+    for field, value in changes.items():
+        if value is not None or field in ("description", "estimate_minutes"):
+            setattr(template, field, value)
+    template.version_no += 1
+    await session.flush()
+    return (await _task_template_responses(session, [template]))[0]
+
+
 # --- Tasks ---------------------------------------------------------------
 
 
@@ -266,9 +416,7 @@ async def _find_task_type(session: AsyncSession, org_id: uuid.UUID, code: str) -
     """The organization's own task type with this code, or the built-in one."""
     task_type = (
         await session.execute(
-            select(TaskType).where(
-                or_(TaskType.organization_id == org_id, TaskType.organization_id.is_(None)), TaskType.code == code
-            )
+            select(TaskType).where(_visible_task_types(org_id), TaskType.code == code)
         )
     ).scalars().first()
     if not task_type:
@@ -566,6 +714,10 @@ async def review_task(session: AsyncSession, org_id: uuid.UUID, actor: Actor, ta
     await session.flush()
     await session.refresh(review)
 
+    return _review_response(review)
+
+
+def _review_response(review: TaskReview) -> ReviewResponse:
     return ReviewResponse(
         id=review.id,
         round=review.round,
@@ -575,6 +727,12 @@ async def review_task(session: AsyncSession, org_id: uuid.UUID, actor: Actor, ta
         feedback=review.feedback,
         reviewed_at=review.reviewed_at,
     )
+
+
+async def list_reviews(session: AsyncSession, org_id: uuid.UUID, task_id: uuid.UUID) -> list[ReviewResponse]:
+    await _get_task(session, org_id, task_id)
+    reviews = await session.execute(select(TaskReview).where(TaskReview.task_id == task_id).order_by(TaskReview.reviewed_at))
+    return [_review_response(r) for r in reviews.scalars().all()]
 
 
 async def cancel_task(session: AsyncSession, org_id: uuid.UUID, user_id: uuid.UUID, task_id: uuid.UUID, data: TaskCancel, if_match: Optional[str]) -> TaskResponse:
@@ -682,6 +840,20 @@ async def log_time(session: AsyncSession, org_id: uuid.UUID, user_id: uuid.UUID,
     return _to_time_entry_response(entry)
 
 
+async def delete_time_entry(session: AsyncSession, org_id: uuid.UUID, actor: Actor, entry_id: uuid.UUID) -> None:
+    entry = (
+        await session.execute(select(TimeEntry).where(TimeEntry.id == entry_id, TimeEntry.organization_id == org_id))
+    ).scalars().first()
+    if not entry:
+        raise TimeEntryNotFoundError(str(entry_id))
+    if entry.user_id != actor.user_id:
+        raise TimeEntryNotOwnError()
+    task = await session.get(Task, entry.task_id)
+    task.logged_minutes = max(0, task.logged_minutes - entry.minutes)
+    await session.delete(entry)
+    await session.flush()
+
+
 async def list_time_entries(
     session: AsyncSession, org_id: uuid.UUID, actor: Actor, user_id_filter: Optional[str], date_from: date, date_to: date, limit: int, cursor: Optional[str]
 ) -> PageResponse[TimeEntryResponse]:
@@ -783,8 +955,39 @@ async def add_dependency(session: AsyncSession, org_id: uuid.UUID, task_id: uuid
     return await _build_task_response(session, task)
 
 
+_DB_DEPENDENCY_TYPES = {"finish_to_start": "FS", "start_to_start": "SS", "finish_to_finish": "FF"}
+_API_DEPENDENCY_TYPES = {db: api for api, db in _DB_DEPENDENCY_TYPES.items()}
+
+
 def _to_db_dependency_type(value: Optional[str]) -> str:
-    return {"finish_to_start": "FS", "start_to_start": "SS", "finish_to_finish": "FF"}.get(value or "finish_to_start", "FS")
+    return _DB_DEPENDENCY_TYPES.get(value or "finish_to_start", "FS")
+
+
+async def list_dependencies(session: AsyncSession, org_id: uuid.UUID, task_id: uuid.UUID) -> list[DependencyResponse]:
+    """The tasks this one waits for."""
+    await _get_task(session, org_id, task_id)
+    rows = await session.execute(
+        select(TaskDependency.dependency_type, Task)
+        .join(Task, Task.id == TaskDependency.depends_on_task_id)
+        .where(TaskDependency.task_id == task_id)
+        .order_by(Task.code)
+    )
+    return [
+        DependencyResponse(
+            task_id=blocker.id, code=blocker.code, title=blocker.title, status=blocker.status,
+            dependency_type=_API_DEPENDENCY_TYPES.get(dependency_type, "finish_to_start"),
+        )
+        for dependency_type, blocker in rows.all()
+    ]
+
+
+async def remove_dependency(session: AsyncSession, org_id: uuid.UUID, task_id: uuid.UUID, depends_on_task_id: uuid.UUID) -> None:
+    """Idempotent: removing a dependency that isn't there changes nothing."""
+    await _get_task(session, org_id, task_id)
+    dependency = await session.get(TaskDependency, (task_id, depends_on_task_id))
+    if dependency:
+        await session.delete(dependency)
+        await session.flush()
 
 
 # --- Handovers -------------------------------------------------------------
@@ -893,6 +1096,10 @@ async def _move_to_receiving_unit(session: AsyncSession, org_id: uuid.UUID, hand
         await _record_status_history(session, handed_over, "assigned", "open", user_id, "Handed over to another unit")
     handed_over.assignee_user_id = None
     handed_over.status = "open"
+
+
+async def get_handover(session: AsyncSession, org_id: uuid.UUID, handover_id: uuid.UUID) -> HandoverResponse:
+    return _to_handover_response(await _get_handover(session, org_id, handover_id))
 
 
 HANDOVER_ETAG = "1"  # Handover has no version column; see the workflow-version note for the same pattern.

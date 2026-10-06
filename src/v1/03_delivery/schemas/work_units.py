@@ -10,6 +10,7 @@ WorkUnitStatus = Literal["draft", "planned", "active", "on_hold", "completed", "
 WorkUnitPriority = Literal["low", "medium", "high", "critical"]
 WorkUnitHealth = Literal["green", "amber", "red", "unknown"]
 MilestoneStatus = Literal["pending", "in_progress", "submitted", "accepted", "rejected", "completed"]
+RiskStatus = Literal["open", "mitigating", "closed", "occurred"]
 
 
 # --- Work unit types & templates -------------------------------------------
@@ -291,9 +292,6 @@ class RiskResponse(BaseModel):
     mitigation: Optional[str] = None
     owner: UserRef
     status: RiskStatus
-
-
-RiskStatus = Literal["open", "mitigating", "closed", "occurred"]
 
 
 class RiskUpdate(BaseModel):

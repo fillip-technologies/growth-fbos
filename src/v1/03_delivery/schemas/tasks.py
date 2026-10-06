@@ -10,6 +10,7 @@ TaskStatus = Literal[
     "draft", "open", "assigned", "in_progress", "blocked", "submitted", "in_review", "rework", "done", "cancelled"
 ]
 TaskPriority = Literal["p1", "p2", "p3", "p4"]
+DependencyType = Literal["finish_to_start", "start_to_start", "finish_to_finish"]
 TaskSource = Literal[
     "manual", "workflow", "sla_escalation", "corrective_action", "asset_renewal", "recurring", "followup", "handover"
 ]
@@ -129,6 +130,73 @@ class TaskTypeRef(BaseModel):
     id: uuid.UUID
     code: str
     name: str
+
+
+CODE_PATTERN = r"^[A-Za-z0-9_\-]+$"
+
+
+class TaskTypeResponse(BaseModel):
+    id: uuid.UUID
+    code: str
+    name: str
+    category: str
+    requires_review: bool
+    default_estimate_minutes: Optional[int] = None
+    built_in: bool = Field(False, description="Shared by every organization; can't be changed.")
+
+
+class TaskTypeCreate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    code: str = Field(..., min_length=1, max_length=100, pattern=CODE_PATTERN)
+    name: str = Field(..., min_length=1, max_length=255)
+    category: str = Field(..., min_length=1, max_length=100)
+    requires_review: bool = False
+    default_estimate_minutes: Optional[int] = Field(None, ge=1)
+
+
+class TaskTypeUpdate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    name: Optional[str] = Field(None, min_length=1, max_length=255)
+    category: Optional[str] = Field(None, min_length=1, max_length=100)
+    requires_review: Optional[bool] = None
+    default_estimate_minutes: Optional[int] = Field(None, ge=1)
+
+
+class TaskTemplateResponse(BaseModel):
+    id: uuid.UUID
+    code: str
+    task_type: TaskTypeRef
+    title_template: str
+    description: Optional[str] = None
+    checklist: list[ChecklistItemInput] = Field(default_factory=list)
+    estimate_minutes: Optional[int] = None
+    default_priority: TaskPriority
+    version: int = Field(..., description="Send it back as If-Match when changing the template.")
+
+
+class TaskTemplateCreate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    code: str = Field(..., min_length=1, max_length=100, pattern=CODE_PATTERN)
+    task_type_code: str
+    title_template: str = Field(..., min_length=1, max_length=255)
+    description: Optional[str] = None
+    checklist: list[ChecklistItemInput] = Field(default_factory=list)
+    estimate_minutes: Optional[int] = Field(None, ge=1)
+    default_priority: TaskPriority = "p3"
+
+
+class TaskTemplateUpdate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    task_type_code: Optional[str] = None
+    title_template: Optional[str] = Field(None, min_length=1, max_length=255)
+    description: Optional[str] = None
+    checklist: Optional[list[ChecklistItemInput]] = None
+    estimate_minutes: Optional[int] = Field(None, ge=1)
+    default_priority: Optional[TaskPriority] = None
 
 
 class TaskResponse(BaseModel):
@@ -255,7 +323,17 @@ class DependencyCreate(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     depends_on_task_id: uuid.UUID
-    dependency_type: Optional[Literal["finish_to_start", "start_to_start", "finish_to_finish"]] = "finish_to_start"
+    dependency_type: Optional[DependencyType] = "finish_to_start"
+
+
+class DependencyResponse(BaseModel):
+    """A task this one waits for."""
+
+    task_id: uuid.UUID
+    code: str
+    title: str
+    status: str
+    dependency_type: DependencyType
 
 
 # --- Handovers -------------------------------------------------------------
