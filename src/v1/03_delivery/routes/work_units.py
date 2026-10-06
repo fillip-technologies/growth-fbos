@@ -1,10 +1,11 @@
 import uuid
 from typing import Optional
 
-from fastapi import APIRouter, Header, Query, Response, status
+from fastapi import APIRouter, Depends, Header, Query, Response, status
 
+import permissions
 import services.work_units as service
-from dependencies import DatabaseSession, OrgId
+from dependencies import DatabaseSession, OrgId, UserId, require_permission
 from schemas.common import PageResponse
 from schemas.work_units import (
     ChangeRequestCreate,
@@ -31,11 +32,15 @@ from schemas.work_units import (
 
 router = APIRouter(tags=["work-units"])
 
+CAN_READ = Depends(require_permission(permissions.WORK_UNIT_READ))
+CAN_WRITE = Depends(require_permission(permissions.WORK_UNIT_WRITE))
+CAN_MANAGE_TEMPLATES = Depends(require_permission(permissions.TEMPLATE_MANAGE))
+
 
 # --- Work unit types & templates -------------------------------------------
 
 
-@router.get("/work-unit-types", response_model=PageResponse[WorkUnitTypeResponse])
+@router.get("/work-unit-types", response_model=PageResponse[WorkUnitTypeResponse], dependencies=[CAN_READ])
 async def list_work_unit_types(
     session: DatabaseSession,
     org_id: OrgId,
@@ -47,7 +52,7 @@ async def list_work_unit_types(
     return await service.list_work_unit_types(session, org_id, limit, cursor)
 
 
-@router.get("/templates", response_model=PageResponse[WorkTemplateResponse])
+@router.get("/templates", response_model=PageResponse[WorkTemplateResponse], dependencies=[CAN_READ])
 async def list_templates(
     session: DatabaseSession,
     org_id: OrgId,
@@ -65,6 +70,7 @@ async def list_templates(
     "/templates/{template_code}/versions",
     response_model=WorkTemplateVersionResponse,
     status_code=status.HTTP_201_CREATED,
+    dependencies=[CAN_MANAGE_TEMPLATES],
 )
 async def create_template_version(
     template_code: str,
@@ -82,6 +88,7 @@ async def create_template_version(
 @router.post(
     "/templates/{template_code}/versions/{version_no}/publish",
     response_model=WorkTemplateVersionResponse,
+    dependencies=[CAN_MANAGE_TEMPLATES],
 )
 async def publish_template_version(
     template_code: str,
@@ -99,7 +106,7 @@ async def publish_template_version(
 # --- Work units --------------------------------------------------------
 
 
-@router.get("/work-units", response_model=PageResponse[WorkUnitResponse])
+@router.get("/work-units", response_model=PageResponse[WorkUnitResponse], dependencies=[CAN_READ])
 async def list_work_units(
     session: DatabaseSession,
     org_id: OrgId,
@@ -120,22 +127,23 @@ async def list_work_units(
     )
 
 
-@router.post("/work-units", response_model=WorkUnitResponse, status_code=status.HTTP_201_CREATED)
+@router.post("/work-units", response_model=WorkUnitResponse, status_code=status.HTTP_201_CREATED, dependencies=[CAN_WRITE])
 async def create_work_unit(
     payload: WorkUnitCreate,
     session: DatabaseSession,
     org_id: OrgId,
+    user_id: UserId,
     response: Response,
     idempotency_key: Optional[str] = Header(None, alias="Idempotency-Key"),
 ) -> WorkUnitResponse:
-    """Create a work unit from a template."""
-    work_unit = await service.create_work_unit(session, org_id, payload)
+    """Create a work unit, from a template or of a given type."""
+    work_unit = await service.create_work_unit(session, org_id, user_id, payload)
     await session.commit()
     response.headers["ETag"] = f'"{work_unit.version}"'
     return work_unit
 
 
-@router.get("/work-units/{work_unit_id}", response_model=WorkUnitResponse)
+@router.get("/work-units/{work_unit_id}", response_model=WorkUnitResponse, dependencies=[CAN_READ])
 async def get_work_unit(
     work_unit_id: uuid.UUID,
     session: DatabaseSession,
@@ -148,7 +156,7 @@ async def get_work_unit(
     return work_unit
 
 
-@router.patch("/work-units/{work_unit_id}", response_model=WorkUnitResponse)
+@router.patch("/work-units/{work_unit_id}", response_model=WorkUnitResponse, dependencies=[CAN_WRITE])
 async def update_work_unit(
     work_unit_id: uuid.UUID,
     payload: WorkUnitUpdate,
@@ -164,23 +172,24 @@ async def update_work_unit(
     return work_unit
 
 
-@router.post("/work-units/{work_unit_id}/status", response_model=WorkUnitResponse)
+@router.post("/work-units/{work_unit_id}/status", response_model=WorkUnitResponse, dependencies=[CAN_WRITE])
 async def change_work_unit_status(
     work_unit_id: uuid.UUID,
     payload: WorkUnitStatusChange,
     session: DatabaseSession,
     org_id: OrgId,
+    user_id: UserId,
     response: Response,
     if_match: Optional[str] = Header(None, alias="If-Match"),
 ) -> WorkUnitResponse:
     """Change a work unit's status."""
-    work_unit = await service.change_work_unit_status(session, org_id, work_unit_id, payload, if_match)
+    work_unit = await service.change_work_unit_status(session, org_id, user_id, work_unit_id, payload, if_match)
     await session.commit()
     response.headers["ETag"] = f'"{work_unit.version}"'
     return work_unit
 
 
-@router.get("/work-units/{work_unit_id}/summary", response_model=WorkUnitSummaryResponse)
+@router.get("/work-units/{work_unit_id}/summary", response_model=WorkUnitSummaryResponse, dependencies=[CAN_READ])
 async def get_work_unit_summary(
     work_unit_id: uuid.UUID,
     session: DatabaseSession,
@@ -193,7 +202,7 @@ async def get_work_unit_summary(
 # --- Milestones ----------------------------------------------------------
 
 
-@router.get("/work-units/{work_unit_id}/milestones", response_model=PageResponse[MilestoneResponse])
+@router.get("/work-units/{work_unit_id}/milestones", response_model=PageResponse[MilestoneResponse], dependencies=[CAN_READ])
 async def list_milestones(
     work_unit_id: uuid.UUID,
     session: DatabaseSession,
@@ -206,7 +215,7 @@ async def list_milestones(
     return await service.list_milestones(session, org_id, work_unit_id, limit, cursor)
 
 
-@router.patch("/milestones/{milestone_id}", response_model=MilestoneResponse)
+@router.patch("/milestones/{milestone_id}", response_model=MilestoneResponse, dependencies=[CAN_WRITE])
 async def update_milestone(
     milestone_id: uuid.UUID,
     payload: MilestoneUpdate,
@@ -220,7 +229,7 @@ async def update_milestone(
     return milestone
 
 
-@router.post("/milestones/{milestone_id}/submit", response_model=MilestoneResponse)
+@router.post("/milestones/{milestone_id}/submit", response_model=MilestoneResponse, dependencies=[CAN_WRITE])
 async def submit_milestone(
     milestone_id: uuid.UUID,
     payload: MilestoneSubmit,
@@ -234,7 +243,7 @@ async def submit_milestone(
     return milestone
 
 
-@router.post("/milestones/{milestone_id}/accept", response_model=MilestoneResponse)
+@router.post("/milestones/{milestone_id}/accept", response_model=MilestoneResponse, dependencies=[CAN_WRITE])
 async def accept_milestone(
     milestone_id: uuid.UUID,
     payload: MilestoneAccept,
@@ -248,7 +257,7 @@ async def accept_milestone(
     return milestone
 
 
-@router.post("/milestones/{milestone_id}/reject", response_model=MilestoneResponse)
+@router.post("/milestones/{milestone_id}/reject", response_model=MilestoneResponse, dependencies=[CAN_WRITE])
 async def reject_milestone(
     milestone_id: uuid.UUID,
     payload: MilestoneReject,
@@ -266,7 +275,7 @@ async def reject_milestone(
 
 
 @router.post(
-    "/work-units/{work_unit_id}/risks", response_model=RiskResponse, status_code=status.HTTP_201_CREATED
+    "/work-units/{work_unit_id}/risks", response_model=RiskResponse, status_code=status.HTTP_201_CREATED, dependencies=[CAN_WRITE]
 )
 async def create_risk(
     work_unit_id: uuid.UUID,
@@ -285,6 +294,7 @@ async def create_risk(
     "/work-units/{work_unit_id}/change-requests",
     response_model=ChangeRequestResponse,
     status_code=status.HTTP_201_CREATED,
+    dependencies=[CAN_WRITE],
 )
 async def create_change_request(
     work_unit_id: uuid.UUID,
@@ -299,7 +309,7 @@ async def create_change_request(
     return change_request
 
 
-@router.post("/change-requests/{change_request_id}/submit", response_model=ChangeRequestResponse)
+@router.post("/change-requests/{change_request_id}/submit", response_model=ChangeRequestResponse, dependencies=[CAN_WRITE])
 async def submit_change_request(
     change_request_id: uuid.UUID,
     session: DatabaseSession,
@@ -315,7 +325,7 @@ async def submit_change_request(
 # --- Members & progress ------------------------------------------------------
 
 
-@router.put("/work-units/{work_unit_id}/members", response_model=WorkUnitResponse)
+@router.put("/work-units/{work_unit_id}/members", response_model=WorkUnitResponse, dependencies=[CAN_WRITE])
 async def replace_members(
     work_unit_id: uuid.UUID,
     payload: MembersReplace,
@@ -331,7 +341,7 @@ async def replace_members(
     return work_unit
 
 
-@router.get("/work-units/{work_unit_id}/progress", response_model=ProgressResponse)
+@router.get("/work-units/{work_unit_id}/progress", response_model=ProgressResponse, dependencies=[CAN_READ])
 async def get_progress(
     work_unit_id: uuid.UUID,
     session: DatabaseSession,

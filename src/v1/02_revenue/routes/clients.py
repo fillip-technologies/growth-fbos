@@ -3,9 +3,10 @@ from typing import Optional
 
 from fastapi import APIRouter, Depends, Header, Query, Response, status
 
-from dependencies import DatabaseSession, OrgId, require_permission
+from dependencies import CurrentActor, DatabaseSession, OrgId, require_permission
 from schemas.client import ClientCreate, ClientResponse, ClientUpdate, ContactCreate, ContactResponse
 from schemas.common import PageResponse
+from services import notifications
 from services.client_service import ClientService
 
 router = APIRouter(prefix="/clients", tags=["clients"])
@@ -37,12 +38,14 @@ async def create_client(
     payload: ClientCreate,
     session: DatabaseSession,
     org_id: OrgId,
+    actor: CurrentActor,
     response: Response,
     idempotency_key: Optional[str] = Header(None, alias="Idempotency-Key"),
 ) -> ClientResponse:
     """Create a new client with GSTIN verification."""
     client = await ClientService.create_client(session=session, org_id=org_id, payload=payload)
     await session.commit()
+    notifications.customer_assigned(actor, client)
     response.headers["ETag"] = f'"{client.version}"'
     return client
 
@@ -66,6 +69,7 @@ async def update_client(
     payload: ClientUpdate,
     session: DatabaseSession,
     org_id: OrgId,
+    actor: CurrentActor,
     response: Response,
     if_match: Optional[str] = Header(None, alias="If-Match"),
 ) -> ClientResponse:
@@ -78,6 +82,8 @@ async def update_client(
         if_match=if_match,
     )
     await session.commit()
+    if payload.owner_user_id is not None:
+        notifications.customer_assigned(actor, client)
     response.headers["ETag"] = f'"{client.version}"'
     return client
 

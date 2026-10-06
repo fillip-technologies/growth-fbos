@@ -1,13 +1,14 @@
 from typing import Optional
 
-from fastapi import APIRouter, Header, Query, status
+from fastapi import APIRouter, Depends, Header, Query, status
 
 import services.rules_service as service
-from dependencies import DatabaseSession, OrgId
+from dependencies import DatabaseSession, OrgId, require_org_admin
 from schemas.common import PageResponse
 from schemas.rules import NotificationRuleCreate, NotificationRuleResponse
 
-router = APIRouter(prefix="/notification-rules", tags=["notification-rules"])
+# Organization-wide settings: client admins only.
+router = APIRouter(prefix="/notification-rules", tags=["notification-rules"], dependencies=[Depends(require_org_admin)])
 
 
 @router.get("", response_model=PageResponse[NotificationRuleResponse])

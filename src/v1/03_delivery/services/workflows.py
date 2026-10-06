@@ -22,6 +22,7 @@ instances, transition history) is fully implemented against the local
 models.
 """
 
+from collections import Counter
 import uuid
 from datetime import datetime, timezone
 from typing import Optional
@@ -34,6 +35,7 @@ from exceptions import (
     InstanceAlreadyRunningError,
     InstanceNotRunningError,
     InvalidStateTransitionError,
+    PermissionDeniedError,
     PreconditionRequiredError,
     SubjectNotFoundError,
     SubjectTypeMismatchError,
@@ -70,7 +72,8 @@ from schemas.workflows import (
     WorkflowVersionContent,
     WorkflowVersionResponse,
 )
-from services.pagination import paginate_by_id
+from services.identity_client import Actor
+from services.pagination import paginate
 from services.refs import unit_ref, vertical_ref
 
 _TERMINAL_INSTANCE_STATUSES = {"completed", "cancelled", "failed"}
@@ -108,25 +111,35 @@ async def list_workflow_definitions(
         query = query.where(WorkflowDefinition.subject_type == subject_type)
     if vertical_id is not None:
         query = query.where(WorkflowDefinition.vertical_id == vertical_id)
-    rows, page = await paginate_by_id(session, query, WorkflowDefinition, limit, cursor)
-    data = [await _to_definition_response(session, d) for d in rows]
-    return PageResponse(data=data, page=page)
+    rows, page = await paginate(session, query, WorkflowDefinition, limit, cursor, order_by=WorkflowDefinition.code)
+    return PageResponse(data=await _definition_responses(session, rows), page=page)
 
 
-async def _to_definition_response(session: AsyncSession, definition: WorkflowDefinition) -> WorkflowDefinitionResponse:
-    current_version_no = None
-    if definition.current_version_id is not None:
-        version = await session.get(WorkflowVersion, definition.current_version_id)
-        current_version_no = version.version_no if version else None
-    return WorkflowDefinitionResponse(
-        id=definition.id,
-        code=definition.code,
-        name=definition.name,
-        subject_type=definition.subject_type,
-        vertical=vertical_ref(definition.vertical_id),
-        status=definition.status,
-        current_version_no=current_version_no,
-    )
+async def _definition_responses(
+    session: AsyncSession, definitions: list[WorkflowDefinition]
+) -> list[WorkflowDefinitionResponse]:
+    version_ids = {d.current_version_id for d in definitions if d.current_version_id is not None}
+    version_nos = {}
+    if version_ids:
+        version_nos = dict(
+            (
+                await session.execute(
+                    select(WorkflowVersion.id, WorkflowVersion.version_no).where(WorkflowVersion.id.in_(version_ids))
+                )
+            ).all()
+        )
+    return [
+        WorkflowDefinitionResponse(
+            id=definition.id,
+            code=definition.code,
+            name=definition.name,
+            subject_type=definition.subject_type,
+            vertical=vertical_ref(definition.vertical_id),
+            status=definition.status,
+            current_version_no=version_nos.get(definition.current_version_id),
+        )
+        for definition in definitions
+    ]
 
 
 async def create_workflow_definition(
@@ -148,7 +161,7 @@ async def create_workflow_definition(
     )
     session.add(definition)
     await session.flush()
-    return await _to_definition_response(session, definition)
+    return (await _definition_responses(session, [definition]))[0]
 
 
 async def _get_definition_by_code(session: AsyncSession, org_id: uuid.UUID, definition_code: str) -> WorkflowDefinition:
@@ -234,6 +247,9 @@ async def _to_version_response(session: AsyncSession, version: WorkflowVersion, 
 
 
 async def _write_content(session: AsyncSession, version: WorkflowVersion, content: WorkflowVersionContent) -> None:
+    issues = _reference_issues(content)
+    if issues:
+        raise WorkflowVersionInvalidError([i.model_dump() for i in issues])
     # Clear any existing graph for this version (only draft versions reach here).
     for model in (AutomationRule, Transition, Stage):
         rows = (await session.execute(select(model).where(model.version_id == version.id))).scalars().all()
@@ -259,10 +275,8 @@ async def _write_content(session: AsyncSession, version: WorkflowVersion, conten
         stage_id_by_code[stage_def.code] = stage.id
 
     for transition_def in content.transitions:
-        from_id = stage_id_by_code.get(transition_def.from_)
-        to_id = stage_id_by_code.get(transition_def.to)
-        if from_id is None or to_id is None:
-            continue
+        from_id = stage_id_by_code[transition_def.from_]
+        to_id = stage_id_by_code[transition_def.to]
         session.add(
             Transition(
                 version_id=version.id,
@@ -336,16 +350,21 @@ async def replace_workflow_version(
     return await _to_version_response(session, version, definition.code)
 
 
-def _validate_content(content: WorkflowVersionContent) -> list[ValidationIssue]:
-    issues: list[ValidationIssue] = []
-    start_stages = [s for s in content.stages if s.stage_type == "start"]
-    end_stages = [s for s in content.stages if s.stage_type == "end"]
+def _duplicates(codes: list[str]) -> set[str]:
+    return {code for code, uses in Counter(codes).items() if uses > 1}
 
-    if len(start_stages) != 1:
-        issues.append(ValidationIssue(code="START_STAGE_COUNT", message="Exactly one start stage is required."))
-    if not end_stages:
-        issues.append(ValidationIssue(code="END_STAGE_MISSING", message="At least one end stage is required."))
 
+def _reference_issues(content: WorkflowVersionContent) -> list[ValidationIssue]:
+    """Problems that keep a version from being stored at all: transitions are saved against
+    their stages, so every stage they name must exist, once."""
+    issues = [
+        ValidationIssue(code="DUPLICATE_STAGE", message=f"Stage code '{code}' is used more than once.")
+        for code in sorted(_duplicates([s.code for s in content.stages]))
+    ]
+    issues += [
+        ValidationIssue(code="DUPLICATE_TRANSITION", message=f"Transition code '{code}' is used more than once.")
+        for code in sorted(_duplicates([t.code for t in content.transitions]))
+    ]
     stage_codes = {s.code for s in content.stages}
     for index, transition in enumerate(content.transitions):
         if transition.from_ not in stage_codes:
@@ -364,6 +383,21 @@ def _validate_content(content: WorkflowVersionContent) -> list[ValidationIssue]:
                     path=f"transitions[{index}]",
                 )
             )
+
+    return issues
+
+
+def _validate_content(content: WorkflowVersionContent) -> list[ValidationIssue]:
+    issues: list[ValidationIssue] = []
+    start_stages = [s for s in content.stages if s.stage_type == "start"]
+    end_stages = [s for s in content.stages if s.stage_type == "end"]
+
+    if len(start_stages) != 1:
+        issues.append(ValidationIssue(code="START_STAGE_COUNT", message="Exactly one start stage is required."))
+    if not end_stages:
+        issues.append(ValidationIssue(code="END_STAGE_MISSING", message="At least one end stage is required."))
+
+    issues.extend(_reference_issues(content))
 
     if start_stages:
         reachable = {start_stages[0].code}
@@ -478,41 +512,66 @@ async def start_workflow_instance(
         session.add(StageRun(instance_id=instance.id, stage_id=start_stage.id, status="active"))
         await session.flush()
 
-    return await _to_instance_response(session, instance, version.version_no)
+    return await _instance_response(session, instance)
 
 
-async def _to_instance_response(session: AsyncSession, instance: WorkflowInstance, version_no: int) -> WorkflowInstanceResponse:
-    stage_runs_res = await session.execute(
-        select(StageRun).where(StageRun.instance_id == instance.id, StageRun.exited_at.is_(None))
+async def _instance_responses(
+    session: AsyncSession, instances: list[WorkflowInstance]
+) -> list[WorkflowInstanceResponse]:
+    """Responses for a page of instances: definitions and open stages loaded once for the page."""
+    if not instances:
+        return []
+    versions = {
+        version_id: (version_no, code, name)
+        for version_id, version_no, code, name in (
+            await session.execute(
+                select(WorkflowVersion.id, WorkflowVersion.version_no, WorkflowDefinition.code, WorkflowDefinition.name)
+                .join(WorkflowDefinition, WorkflowDefinition.id == WorkflowVersion.definition_id)
+                .where(WorkflowVersion.id.in_({i.version_id for i in instances}))
+            )
+        ).all()
+    }
+    current_stages: dict[uuid.UUID, list[StageRunSummary]] = {i.id: [] for i in instances}
+    open_runs = await session.execute(
+        select(StageRun, Stage.code, Stage.name)
+        .join(Stage, Stage.id == StageRun.stage_id)
+        .where(StageRun.instance_id.in_(current_stages), StageRun.exited_at.is_(None))
+        .order_by(StageRun.entered_at)
     )
-    current_stages = []
-    for stage_run in stage_runs_res.scalars().all():
-        stage = await session.get(Stage, stage_run.stage_id)
-        current_stages.append(
+    for stage_run, stage_code, stage_name in open_runs.all():
+        current_stages[stage_run.instance_id].append(
             StageRunSummary(
                 stage_run_id=stage_run.id,
-                stage_code=stage.code if stage else "",
-                stage_name=stage.name if stage else "",
+                stage_code=stage_code,
+                stage_name=stage_name,
                 entered_at=stage_run.entered_at,
                 iteration=stage_run.iteration,
-                owner_unit=unit_ref(stage_run.owner_unit_id, "Owning Unit") if stage_run.owner_unit_id else None,
+                owner_unit=unit_ref(stage_run.owner_unit_id),
             )
         )
 
-    definition = await session.get(WorkflowDefinition, (await session.get(WorkflowVersion, instance.version_id)).definition_id)
+    responses = []
+    for instance in instances:
+        version_no, definition_code, definition_name = versions[instance.version_id]
+        responses.append(
+            WorkflowInstanceResponse(
+                id=instance.id,
+                definition={"code": definition_code, "name": definition_name},
+                version_no=version_no,
+                subject={"type": instance.subject_type, "id": instance.subject_id},
+                status=instance.status,
+                current_stages=current_stages[instance.id],
+                context=instance.context or {},
+                started_at=instance.started_at,
+                completed_at=instance.completed_at,
+                version=instance.version,
+            )
+        )
+    return responses
 
-    return WorkflowInstanceResponse(
-        id=instance.id,
-        definition={"code": definition.code, "name": definition.name} if definition else {},
-        version_no=version_no,
-        subject={"type": instance.subject_type, "id": instance.subject_id},
-        status=instance.status,
-        current_stages=current_stages,
-        context=instance.context or {},
-        started_at=instance.started_at,
-        completed_at=instance.completed_at,
-        version=instance.version,
-    )
+
+async def _instance_response(session: AsyncSession, instance: WorkflowInstance) -> WorkflowInstanceResponse:
+    return (await _instance_responses(session, [instance]))[0]
 
 
 async def list_workflow_instances(
@@ -538,12 +597,10 @@ async def list_workflow_instances(
             WorkflowInstance.version_id.in_(select(WorkflowVersion.id).where(WorkflowVersion.definition_id == definition.id))
         )
 
-    rows, page = await paginate_by_id(session, query, WorkflowInstance, limit, cursor)
-    data = []
-    for instance in rows:
-        version = await session.get(WorkflowVersion, instance.version_id)
-        data.append(await _to_instance_response(session, instance, version.version_no if version else 0))
-    return PageResponse(data=data, page=page)
+    rows, page = await paginate(
+        session, query, WorkflowInstance, limit, cursor, order_by=WorkflowInstance.started_at, descending=True
+    )
+    return PageResponse(data=await _instance_responses(session, rows), page=page)
 
 
 async def _get_instance(session: AsyncSession, org_id: uuid.UUID, instance_id: uuid.UUID) -> WorkflowInstance:
@@ -558,12 +615,16 @@ async def _get_instance(session: AsyncSession, org_id: uuid.UUID, instance_id: u
 
 async def get_workflow_instance(session: AsyncSession, org_id: uuid.UUID, instance_id: uuid.UUID) -> WorkflowInstanceResponse:
     instance = await _get_instance(session, org_id, instance_id)
-    version = await session.get(WorkflowVersion, instance.version_id)
-    return await _to_instance_response(session, instance, version.version_no if version else 0)
+    return await _instance_response(session, instance)
+
+
+def _may_perform(actor: Actor, transition: Transition) -> bool:
+    """A transition may name a permission its performer needs on top of operating workflows."""
+    return not transition.allowed_permission or actor.has(transition.allowed_permission)
 
 
 async def list_available_transitions(
-    session: AsyncSession, org_id: uuid.UUID, instance_id: uuid.UUID, limit: int, cursor: Optional[str]
+    session: AsyncSession, org_id: uuid.UUID, actor: Actor, instance_id: uuid.UUID, limit: int, cursor: Optional[str]
 ) -> PageResponse[AvailableTransitionResponse]:
     instance = await _get_instance(session, org_id, instance_id)
 
@@ -578,17 +639,26 @@ async def list_available_transitions(
         transitions = list(transitions_res.scalars().all())
 
     page_rows = transitions[:limit]
+    stage_codes = {}
+    if page_rows:
+        stage_codes = dict(
+            (
+                await session.execute(
+                    select(Stage.id, Stage.code).where(Stage.id.in_({t.to_stage_id for t in page_rows}))
+                )
+            ).all()
+        )
     data = []
     for transition in page_rows:
-        to_stage = await session.get(Stage, transition.to_stage_id)
+        allowed = _may_perform(actor, transition)
         data.append(
             AvailableTransitionResponse(
                 code=transition.code,
                 name=transition.name,
-                to_stage=to_stage.code if to_stage else "",
+                to_stage=stage_codes[transition.to_stage_id],
                 requires_approval=bool(transition.approval_policy_code),
-                allowed=True,
-                blocked_reasons=[],
+                allowed=allowed,
+                blocked_reasons=[] if allowed else [f"Needs the '{transition.allowed_permission}' permission"],
             )
         )
 
@@ -597,7 +667,7 @@ async def list_available_transitions(
 
 
 async def perform_transition(
-    session: AsyncSession, org_id: uuid.UUID, instance_id: uuid.UUID, data: TransitionRequest, if_match: Optional[str]
+    session: AsyncSession, org_id: uuid.UUID, actor: Actor, instance_id: uuid.UUID, data: TransitionRequest, if_match: Optional[str]
 ) -> TransitionResult:
     instance = await _get_instance(session, org_id, instance_id)
     _check_instance_if_match(if_match, instance.version)
@@ -617,20 +687,21 @@ async def perform_transition(
     transition = transition_res.scalars().first()
     if not transition:
         raise TransitionNotAvailableError(data.transition_code)
+    if not _may_perform(actor, transition):
+        raise PermissionDeniedError(transition.allowed_permission)
 
     if data.context_patch:
         merged = dict(instance.context or {})
         merged.update(data.context_patch)
         instance.context = merged
 
-    version = await session.get(WorkflowVersion, instance.version_id)
 
     if transition.approval_policy_code:
         instance.status = "waiting_approval"
         await session.flush()
         return TransitionResult(
             outcome="approval_pending",
-            instance=await _to_instance_response(session, instance, version.version_no if version else 0),
+            instance=await _instance_response(session, instance),
             approval_request_id=None,
         )
 
@@ -651,6 +722,7 @@ async def perform_transition(
             transition_id=transition.id,
             from_stage_run_id=from_run.id if from_run else None,
             to_stage_run_id=new_run.id,
+            performed_by=actor.user_id,
             reason=data.reason,
         )
     )
@@ -666,7 +738,7 @@ async def perform_transition(
 
     return TransitionResult(
         outcome="transitioned",
-        instance=await _to_instance_response(session, instance, version.version_no if version else 0),
+        instance=await _instance_response(session, instance),
         approval_request_id=None,
     )
 
@@ -683,8 +755,7 @@ async def hold_instance(
     instance.status = "on_hold"
     instance.version += 1
     await session.flush()
-    version = await session.get(WorkflowVersion, instance.version_id)
-    return await _to_instance_response(session, instance, version.version_no if version else 0)
+    return await _instance_response(session, instance)
 
 
 async def resume_instance(
@@ -699,8 +770,7 @@ async def resume_instance(
     instance.status = "running"
     instance.version += 1
     await session.flush()
-    version = await session.get(WorkflowVersion, instance.version_id)
-    return await _to_instance_response(session, instance, version.version_no if version else 0)
+    return await _instance_response(session, instance)
 
 
 async def cancel_instance(
@@ -716,8 +786,7 @@ async def cancel_instance(
     instance.completed_at = datetime.now(timezone.utc)
     instance.version += 1
     await session.flush()
-    version = await session.get(WorkflowVersion, instance.version_id)
-    return await _to_instance_response(session, instance, version.version_no if version else 0)
+    return await _instance_response(session, instance)
 
 
 async def get_instance_history(
@@ -726,18 +795,26 @@ async def get_instance_history(
     instance = await _get_instance(session, org_id, instance_id)
 
     query = select(TransitionLog).where(TransitionLog.instance_id == instance.id)
-    rows, page = await paginate_by_id(session, query, TransitionLog, limit, cursor)
-
-    data = []
-    for log in rows:
-        transition = await session.get(Transition, log.transition_id)
-        to_stage = await session.get(Stage, transition.to_stage_id) if transition else None
-        data.append(
-            InstanceHistoryItemResponse(
-                at=log.performed_at,
-                type="transition",
-                stage_code=to_stage.code if to_stage else None,
-                details={"transition_code": transition.code if transition else None, "reason": log.reason},
-            )
+    rows, page = await paginate(session, query, TransitionLog, limit, cursor, order_by=TransitionLog.performed_at)
+    transitions = {}
+    if rows:
+        transitions = {
+            transition_id: (transition_code, stage_code)
+            for transition_id, transition_code, stage_code in (
+                await session.execute(
+                    select(Transition.id, Transition.code, Stage.code)
+                    .join(Stage, Stage.id == Transition.to_stage_id)
+                    .where(Transition.id.in_({log.transition_id for log in rows}))
+                )
+            ).all()
+        }
+    data = [
+        InstanceHistoryItemResponse(
+            at=log.performed_at,
+            type="transition",
+            stage_code=transitions[log.transition_id][1],
+            details={"transition_code": transitions[log.transition_id][0], "reason": log.reason},
         )
+        for log in rows
+    ]
     return PageResponse(data=data, page=page)

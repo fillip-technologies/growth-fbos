@@ -2,7 +2,7 @@ import uuid
 from datetime import date, datetime, timezone
 from typing import Optional
 
-from sqlalchemy import Boolean, Date, DateTime, ForeignKey, Integer, String, Text, func
+from sqlalchemy import Boolean, Date, DateTime, ForeignKey, Integer, JSON, String, Text, func
 from sqlalchemy.orm import Mapped, mapped_column
 
 from database.base import Base
@@ -65,7 +65,8 @@ class TaskComment(Base):
     )
     author_id: Mapped[uuid.UUID] = mapped_column(UUIDType, nullable=False, index=True)
     body: Mapped[str] = mapped_column(Text, nullable=False)
-    mentions: Mapped[Optional[uuid.UUID]] = mapped_column(UUIDType, nullable=True)
+    # Ids (as strings) of the users the comment mentions.
+    mentions: Mapped[Optional[list]] = mapped_column(JSON, nullable=True)
     edited_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
     deleted_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), server_default=func.now(), nullable=False)

@@ -39,5 +39,10 @@ class Settings(BaseSettings):
     internal_service_token: str = ""
     identity_timeout_seconds: float = 5.0
 
+    # In-app notifications (lead assigned, quotation approved...) go to the communication
+    # service's /internal/notifications. Empty turns them off.
+    communication_service_url: str = ""
+    notification_timeout_seconds: float = 3.0
+
 
 settings = Settings()

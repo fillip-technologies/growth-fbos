@@ -1,7 +1,7 @@
 import uuid
 from typing import Optional
 
-from fastapi import APIRouter, Query, Response, status
+from fastapi import APIRouter, Query, status
 
 import services.inbox_service as service
 from dependencies import DatabaseSession, UserId
@@ -19,9 +19,8 @@ async def list_inbox(
     urgency: Optional[str] = Query(None),
     limit: int = Query(25, ge=1, le=100),
     cursor: Optional[str] = Query(None),
-    sort: Optional[str] = Query(None),
 ) -> PageResponse[InboxItemResponse]:
-    """List my in-app notifications."""
+    """List my in-app notifications, newest first (archived ones are left out)."""
     return await service.list_inbox(session, user_id, unread, urgency, limit, cursor)
 
 
@@ -52,4 +51,26 @@ async def mark_read(
 ) -> None:
     """Mark a notification read."""
     await service.mark_read(session, user_id, item_id)
+    await session.commit()
+
+
+@router.post("/{item_id}/unread", status_code=status.HTTP_204_NO_CONTENT)
+async def mark_unread(
+    item_id: uuid.UUID,
+    session: DatabaseSession,
+    user_id: UserId,
+) -> None:
+    """Mark a notification unread again."""
+    await service.mark_unread(session, user_id, item_id)
+    await session.commit()
+
+
+@router.post("/{item_id}/archive", status_code=status.HTTP_204_NO_CONTENT)
+async def archive(
+    item_id: uuid.UUID,
+    session: DatabaseSession,
+    user_id: UserId,
+) -> None:
+    """Remove a notification from my inbox."""
+    await service.archive(session, user_id, item_id)
     await session.commit()

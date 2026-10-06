@@ -16,6 +16,13 @@ class Settings(BaseSettings):
     db_pool_timeout: int = 30
     db_pool_recycle: int = 1800
 
+    # Every request is authenticated by asking identity who the caller is.
+    identity_service_url: str = "http://localhost:8001"
+    # Shared secret: sent as X-FBOS-Internal-Token on identity's /internal/* calls, and
+    # required from other services on this service's own /internal/* endpoints.
+    internal_service_token: str = ""
+    identity_timeout_seconds: float = 5.0
+
     # Mail (SMTP)
     mail_mailer: str = "smtp"
     mail_host: str = ""
