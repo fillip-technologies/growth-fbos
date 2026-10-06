@@ -1,0 +1,24 @@
+#!/bin/bash
+# SSH forced command for the GitHub Actions deploy key, installed on the server as
+# /usr/local/bin/fbos-deploy (see DEPLOY_AAPANEL.md). Whatever the client asks to run,
+# the key can only fast-forward one FBOS checkout to origin/main and run its deploy script.
+set -euo pipefail
+
+case "${SSH_ORIGINAL_COMMAND:-}" in
+  backend)  dir=/www/wwwroot/fbos/backend ;;
+  frontend) dir=/www/wwwroot/fbos/frontend ;;
+  *)
+    echo "fbos-deploy: expected 'backend' or 'frontend'" >&2
+    exit 2
+    ;;
+esac
+
+# One deploy per checkout at a time; a second run waits for the first.
+exec 9> "/run/lock/fbos-deploy-$SSH_ORIGINAL_COMMAND.lock"
+flock 9
+
+cd "$dir"
+git fetch --quiet origin main
+git merge --ff-only --quiet origin/main
+echo "Deploying $SSH_ORIGINAL_COMMAND at $(git log --oneline -1)"
+exec bash scripts/deploy_aapanel.sh

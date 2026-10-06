@@ -1,0 +1,20 @@
+# aaPanel server override — used by scripts/deploy_aapanel.sh:
+#   docker compose -f docker-compose.yml -f docker-compose.aapanel.yml up -d --build
+#
+# Databases live on Hostinger (set in each service .env), so the local MySQL container is
+# off (start it with --profile local-db). Only the gateway is published, on localhost:
+# aaPanel nginx proxies /api to it. Port 8000 on that host is taken, hence 8100.
+name: fbos
+services:
+  db:            { restart: always, ports: !reset [], profiles: ["local-db"] }
+  redis:         { restart: always }
+  gateway:       { restart: always, ports: !override ["127.0.0.1:8100:8000"] }
+  identity:      { restart: always, ports: !reset [], depends_on: !override { redis: { condition: service_started } } }
+  revenue:       { restart: always, ports: !reset [], depends_on: !reset {} }
+  delivery:      { restart: always, ports: !reset [], depends_on: !reset {} }
+  control:       { restart: always, ports: !reset [], depends_on: !reset {} }
+  documents:     { restart: always, ports: !reset [], depends_on: !reset {} }
+  communication: { restart: always, ports: !reset [], depends_on: !reset {} }
+  management:    { restart: always, ports: !reset [], depends_on: !reset {} }
+  insight:       { restart: always, ports: !reset [], depends_on: !reset {} }
+  assets:        { restart: always, ports: !reset [], depends_on: !reset {} }
