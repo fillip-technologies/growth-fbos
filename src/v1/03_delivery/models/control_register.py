@@ -71,6 +71,9 @@ class ChangeRequest(Base):
     decided_by: Mapped[Optional[uuid.UUID]] = mapped_column(UUIDType, nullable=True)
     decided_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
     decision_note: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    # The impact decided on approval (the fields above keep what was asked for).
+    approved_schedule_impact_days: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    approved_cost_impact: Mapped[Optional[float]] = mapped_column(Numeric(15, 2), nullable=True)
 
 
 class Closure(Base):

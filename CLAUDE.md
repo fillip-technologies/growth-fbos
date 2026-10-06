@@ -25,6 +25,10 @@ Before analyzing, writing, modifying, or reviewing any code in this repository, 
    - **Standard HTTP methods**: `GET` for retrieval, `POST` for creation, `PUT`/`PATCH` for updates, `DELETE` for removal.
    - Proper status codes (e.g. 200, 201, 204, 400, 401, 403, 404, 422, 500).
 
+4. **[Permissions](.agents/AGENT_PERMISSIONS.md)** (`.agents/AGENT_PERMISSIONS.md`):
+   - **Every endpoint change ships with its permissions, in the same change**: callers authenticated through Identity (never trusted headers), `<service>.<entity>.<action>` codes in Identity's catalog, a `require_permission` guard on every route, and tests that no route is left unguarded.
+   - Record-level rules (assignee, reviewer, requester, "own records only") go in the service layer on top of the permission.
+
 ---
 
 ## ⚙️ Development Commands

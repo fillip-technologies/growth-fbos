@@ -235,10 +235,13 @@ async def resolve_actor(
     the organization the request acts in with the user's permission codes.
     """
     _verify_internal_caller(x_fbos_internal_token)
+    own_records_only: list[str] = []
     if actor.is_superuser:
         permissions = await _permission_catalog(db)
     else:
         permissions = sorted({grant.permission for grant in actor.grants})
+        # One grant beyond the user's own records (a unit or the whole company) lifts the limit.
+        own_records_only = [code for code in permissions if all(g.self_only for g in actor.grants_for(code))]
     return ActorResponse(
         user_id=actor.user_id,
         organization_id=actor.organization_id,
@@ -246,6 +249,7 @@ async def resolve_actor(
         name=actor.name,
         is_superuser=actor.is_superuser,
         permissions=permissions,
+        own_records_only=own_records_only,
     )
 
 

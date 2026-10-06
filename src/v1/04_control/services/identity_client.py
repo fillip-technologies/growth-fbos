@@ -1,7 +1,7 @@
 """
 Authentication through the identity service.
 
-Delivery holds no users or sessions, so it never trusts caller-supplied ids. Each request's
+Control holds no users or sessions, so it never trusts caller-supplied ids. Each request's
 `Authorization` and `X-Organization-Id` headers are forwarded to identity's internal
 `/authz/actor` endpoint, which runs identity's own checks (token, revoked session, client
 lock, active user, organization within the client) and answers with who the caller is,
@@ -14,7 +14,7 @@ import uuid
 
 import httpx
 
-from exceptions import AuthServiceUnavailableError, DeliveryServiceError
+from exceptions import AuthServiceUnavailableError, ControlServiceError
 
 ACTOR_PATH = "/api/identity/v1/internal/authz/actor"
 
@@ -76,7 +76,7 @@ class IdentityClient:
         )
 
 
-def _relayed_error(response: httpx.Response) -> Optional[DeliveryServiceError]:
+def _relayed_error(response: httpx.Response) -> Optional[ControlServiceError]:
     """
     Identity's rejection (expired token, revoked session, unknown organization...) passed on
     with its status and code, so the console reacts exactly as it does to identity itself
@@ -97,4 +97,4 @@ def _relayed_error(response: httpx.Response) -> Optional[DeliveryServiceError]:
         return None
     detail = problem.get("detail")
     message = problem.get("message") or (detail if isinstance(detail, str) else code)
-    return DeliveryServiceError(response.status_code, code, message, meta=problem.get("meta"))
+    return ControlServiceError(response.status_code, code, message, meta=problem.get("meta"))

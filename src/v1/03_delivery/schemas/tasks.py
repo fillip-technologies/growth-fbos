@@ -234,6 +234,17 @@ class TaskResponse(BaseModel):
     updated_at: datetime
 
 
+class AssignmentResponse(BaseModel):
+    """Who was given the task, in which role, and until when (`end_reason` says why it ended)."""
+
+    user: Optional[UserRef] = None
+    role: str
+    assigned_by: Optional[UserRef] = None
+    assigned_at: datetime
+    ended_at: Optional[datetime] = None
+    end_reason: Optional[str] = None
+
+
 class TaskHistoryItemResponse(BaseModel):
     at: datetime
     from_status: Optional[str] = None

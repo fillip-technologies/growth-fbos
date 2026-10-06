@@ -26,6 +26,39 @@ class ControlServiceError(HTTPException):
         super().__init__(status_code=status_code, detail=payload)
 
 
+# --- Authentication and permissions (401 / 403 / 503) -------------------------
+
+
+class AuthenticationRequiredError(ControlServiceError):
+    """401: The request carries no bearer access token."""
+
+    def __init__(self) -> None:
+        super().__init__(status.HTTP_401_UNAUTHORIZED, "UNAUTHORIZED", "Authentication required")
+
+
+class PermissionDeniedError(ControlServiceError):
+    """403: The caller is signed in but lacks the permission for this action."""
+
+    def __init__(self, required_permission: str) -> None:
+        super().__init__(
+            status.HTTP_403_FORBIDDEN,
+            "PERMISSION_DENIED",
+            f"You need the '{required_permission}' permission to do this",
+            meta={"required_permission": required_permission},
+        )
+
+
+class AuthServiceUnavailableError(ControlServiceError):
+    """503: Identity could not be reached to authenticate the request."""
+
+    def __init__(self) -> None:
+        super().__init__(
+            status.HTTP_503_SERVICE_UNAVAILABLE,
+            "AUTH_SERVICE_UNAVAILABLE",
+            "Sign-in could not be checked right now. Try again shortly.",
+        )
+
+
 # --- Not found (404) ---------------------------------------------------------
 
 
@@ -98,6 +131,13 @@ class DelegationOverlapError(ControlServiceError):
 
 
 # --- Forbidden (403) ---------------------------------------------------------
+
+
+class NotRequesterError(ControlServiceError):
+    """403: Only whoever raised a request cancels it, unless they may manage approvals."""
+
+    def __init__(self) -> None:
+        super().__init__(status.HTTP_403_FORBIDDEN, "NOT_REQUESTER", "Only whoever raised this request can cancel it")
 
 
 class NotAnApproverError(ControlServiceError):

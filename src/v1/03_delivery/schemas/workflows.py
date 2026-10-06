@@ -32,6 +32,18 @@ class WorkflowDefinitionResponse(BaseModel):
     current_version_no: Optional[int] = None
 
 
+class StageTaskDef(BaseModel):
+    """A task created from a task template whenever the stage is entered."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    task_template_code: str
+    title: Optional[str] = Field(None, description="Defaults to the template's title.")
+    required: bool = Field(True, description="The workflow can't leave the stage while it is open.")
+    assignee_selector: dict = Field(default_factory=dict, description='{"user_id": ...}; empty leaves it in the team queue.')
+    due_offset_minutes: Optional[int] = Field(None, ge=0, description="Due this long after the stage is entered.")
+
+
 class StageDef(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -39,11 +51,11 @@ class StageDef(BaseModel):
     name: str
     seq: int
     stage_type: Literal["start", "normal", "approval_gate", "end", "join"]
-    owner_unit_selector: dict = Field(default_factory=dict)
+    owner_unit_selector: dict = Field(default_factory=dict, description="{'unit_id': ...}: the team owning the stage's tasks.")
     sla_policy_code: Optional[str] = None
     exit_criteria: Optional[dict] = Field(None, description="JSON Logic evaluated against the instance context.")
     allow_parallel: Optional[bool] = False
-    task_templates: Optional[list[dict]] = None
+    task_templates: list[StageTaskDef] = Field(default_factory=list)
 
 
 class TransitionDef(BaseModel):
@@ -142,6 +154,18 @@ class TransitionRequest(BaseModel):
     context_patch: Optional[dict] = Field(
         None, description="Merged into the instance context before conditions are evaluated."
     )
+
+
+class ApprovalDecision(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    note: Optional[str] = None
+
+
+class ApprovalRejection(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    reason: str = Field(..., min_length=1)
 
 
 class TransitionResult(BaseModel):

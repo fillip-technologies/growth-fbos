@@ -4,10 +4,13 @@ from typing import Optional
 from fastapi import APIRouter, Depends, Header, Query, Response, status
 
 import permissions
+import services.workflow_instances as instances
 import services.workflows as service
 from dependencies import CurrentActor, DatabaseSession, OrgId, UserId, require_permission
 from schemas.common import PageResponse
 from schemas.workflows import (
+    ApprovalDecision,
+    ApprovalRejection,
     AvailableTransitionResponse,
     HoldRequest,
     InstanceHistoryItemResponse,
@@ -27,6 +30,7 @@ router = APIRouter(prefix="/workflow", tags=["workflow"])
 CAN_READ = Depends(require_permission(permissions.WORKFLOW_READ))
 CAN_DESIGN = Depends(require_permission(permissions.WORKFLOW_MANAGE))
 CAN_OPERATE = Depends(require_permission(permissions.WORKFLOW_OPERATE))
+CAN_APPROVE = Depends(require_permission(permissions.WORKFLOW_APPROVE))
 
 
 # --- Workflow definitions & versions ----------------------------------------
@@ -145,7 +149,7 @@ async def start_workflow_instance(
     idempotency_key: Optional[str] = Header(None, alias="Idempotency-Key"),
 ) -> WorkflowInstanceResponse:
     """Start a workflow instance."""
-    instance = await service.start_workflow_instance(session, org_id, user_id, payload)
+    instance = await instances.start_workflow_instance(session, org_id, user_id, payload)
     await session.commit()
     response.headers["ETag"] = f'"{instance.version}"'
     return instance
@@ -164,7 +168,7 @@ async def list_workflow_instances(
     sort: Optional[str] = Query(None),
 ) -> PageResponse[WorkflowInstanceResponse]:
     """List workflow instances."""
-    return await service.list_workflow_instances(
+    return await instances.list_workflow_instances(
         session, org_id, subject_type, subject_id, status_, definition_code, limit, cursor
     )
 
@@ -177,7 +181,7 @@ async def get_workflow_instance(
     response: Response,
 ) -> WorkflowInstanceResponse:
     """Get a workflow instance."""
-    instance = await service.get_workflow_instance(session, org_id, instance_id)
+    instance = await instances.get_workflow_instance(session, org_id, instance_id)
     response.headers["ETag"] = f'"{instance.version}"'
     return instance
 
@@ -195,7 +199,7 @@ async def list_available_transitions(
     sort: Optional[str] = Query(None),
 ) -> PageResponse[AvailableTransitionResponse]:
     """List transitions available now, and whether the caller may perform each."""
-    return await service.list_available_transitions(session, org_id, actor, instance_id, limit, cursor)
+    return await instances.list_available_transitions(session, org_id, actor, instance_id, limit, cursor)
 
 
 @router.post("/instances/{instance_id}/transitions", response_model=TransitionResult, dependencies=[CAN_OPERATE])
@@ -208,7 +212,7 @@ async def perform_transition(
     if_match: Optional[str] = Header(None, alias="If-Match"),
 ) -> TransitionResult:
     """Perform a transition (plus the transition's own permission, when it names one)."""
-    result = await service.perform_transition(session, org_id, actor, instance_id, payload, if_match)
+    result = await instances.perform_transition(session, org_id, actor, instance_id, payload, if_match)
     await session.commit()
     return result
 
@@ -222,7 +226,7 @@ async def hold_instance(
     if_match: Optional[str] = Header(None, alias="If-Match"),
 ) -> WorkflowInstanceResponse:
     """Put an instance on hold."""
-    instance = await service.hold_instance(session, org_id, instance_id, payload, if_match)
+    instance = await instances.hold_instance(session, org_id, instance_id, payload, if_match)
     await session.commit()
     return instance
 
@@ -235,7 +239,7 @@ async def resume_instance(
     if_match: Optional[str] = Header(None, alias="If-Match"),
 ) -> WorkflowInstanceResponse:
     """Resume an instance on hold."""
-    instance = await service.resume_instance(session, org_id, instance_id, if_match)
+    instance = await instances.resume_instance(session, org_id, instance_id, if_match)
     await session.commit()
     return instance
 
@@ -249,7 +253,7 @@ async def cancel_instance(
     if_match: Optional[str] = Header(None, alias="If-Match"),
 ) -> WorkflowInstanceResponse:
     """Cancel an instance."""
-    instance = await service.cancel_instance(session, org_id, instance_id, payload, if_match)
+    instance = await instances.cancel_instance(session, org_id, instance_id, payload, if_match)
     await session.commit()
     return instance
 
@@ -266,4 +270,34 @@ async def get_instance_history(
     sort: Optional[str] = Query(None),
 ) -> PageResponse[InstanceHistoryItemResponse]:
     """Get the instance timeline."""
-    return await service.get_instance_history(session, org_id, instance_id, limit, cursor)
+    return await instances.get_instance_history(session, org_id, instance_id, limit, cursor)
+
+
+@router.post("/instances/{instance_id}/approve", response_model=WorkflowInstanceResponse, dependencies=[CAN_APPROVE])
+async def approve_step(
+    instance_id: uuid.UUID,
+    payload: ApprovalDecision,
+    session: DatabaseSession,
+    org_id: OrgId,
+    user_id: UserId,
+    if_match: Optional[str] = Header(None, alias="If-Match"),
+) -> WorkflowInstanceResponse:
+    """Approve the step the instance is waiting for; the transition is taken."""
+    instance = await instances.approve_step(session, org_id, user_id, instance_id, payload.note, if_match)
+    await session.commit()
+    return instance
+
+
+@router.post("/instances/{instance_id}/reject", response_model=WorkflowInstanceResponse, dependencies=[CAN_APPROVE])
+async def reject_step(
+    instance_id: uuid.UUID,
+    payload: ApprovalRejection,
+    session: DatabaseSession,
+    org_id: OrgId,
+    user_id: UserId,
+    if_match: Optional[str] = Header(None, alias="If-Match"),
+) -> WorkflowInstanceResponse:
+    """Reject the step the instance is waiting for; it stays in its stage."""
+    instance = await instances.reject_step(session, org_id, user_id, instance_id, payload.reason, if_match)
+    await session.commit()
+    return instance
