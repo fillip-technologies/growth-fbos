@@ -1,16 +1,15 @@
-# Tests every service on pushes and pull requests; a push to main that passes is deployed
-# to the aaPanel server. Setup (secrets, deploy key): DEPLOY_AAPANEL.md.
+# On every push to main: tests each service, then deploys to the aaPanel server if they pass.
+# Setup (secrets, deploy key): DEPLOY_AAPANEL.md.
 name: CI/CD
 
 on:
   push:
-    branches: [main, gkr]
-  pull_request:
+    branches: [main]
   workflow_dispatch:
 
 concurrency:
-  group: ci-${{ github.ref }}
-  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+  group: ci-cd-${{ github.ref }}
+  cancel-in-progress: false
 
 jobs:
   test:
@@ -23,9 +22,13 @@ jobs:
     defaults:
       run:
         working-directory: src/v1/${{ matrix.service }}
+    env:
+      # No .env in CI. Engines are created at import, so the URL must parse (and take pool
+      # options); it is never connected to: the tests swap in their own SQLite database.
+      DATABASE_URL: mysql+aiomysql://ci:ci@127.0.0.1:3306/ci
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: "3.12"
           cache: pip
@@ -36,7 +39,7 @@ jobs:
   deploy:
     name: Deploy to aaPanel
     needs: test
-    if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+    if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     environment:
       name: production
