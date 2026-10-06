@@ -11,26 +11,29 @@ using the same field names as the corresponding response schema) and copies
 whatever is present; an organization free to shape ``structure`` however it
 likes would need a real template-authoring contract, which is out of scope
 here.
+
+List responses load related rows (types, templates, budgets, deliverables) for the whole
+page in one query each, never one query per row.
 """
 
 import uuid
 from datetime import date, datetime, timezone
 from typing import Optional
 
-from sqlalchemy import select
+from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from exceptions import (
     BaselineChangeRequiresCrError,
     ChangeRequestNotFoundError,
     ClientRequiredError,
-    DuplicateCodeError,
     InvalidStateTransitionError,
     MilestoneNotFoundError,
     PreconditionRequiredError,
     TemplateNotFoundError,
     TemplateNotPublishedError,
     TemplateVersionNotFoundError,
+    ValidationFailedError,
     VersionConflictError,
     VersionNotDraftError,
     WorkUnitHasOpenItemsError,
@@ -43,7 +46,7 @@ from models.financial import WorkBudget
 from models.task import Task
 from models.work_unit import WorkUnit, WorkUnitMember
 from models.work_unit_template import WorkTemplate, WorkTemplateVersion, WorkUnitType
-from models.work_unit_tracking import ProgressSnapshot
+from models.work_unit_tracking import ProgressSnapshot, StatusHistory
 from schemas.common import Money, PageResponse
 from schemas.work_units import (
     ChangeRequestCreate,
@@ -68,7 +71,8 @@ from schemas.work_units import (
     WorkUnitTypeResponse,
     WorkUnitUpdate,
 )
-from services.pagination import paginate_by_id
+from services.codes import next_change_request_no, next_work_unit_code
+from services.pagination import paginate
 from services.refs import client_ref, unit_ref, user_ref, vertical_ref
 
 WORK_UNIT_TRANSITIONS: dict[str, set[str]] = {
@@ -80,6 +84,8 @@ WORK_UNIT_TRANSITIONS: dict[str, set[str]] = {
     "closed": set(),
     "cancelled": set(),
 }
+_CLOSED_RISK_STATUSES = ("closed", "occurred")
+_CLOSED_CHANGE_REQUEST_STATUSES = ("implemented", "rejected", "withdrawn")
 
 
 def _check_if_match(if_match: Optional[str], current_version: int) -> None:
@@ -93,69 +99,25 @@ def _check_if_match(if_match: Optional[str], current_version: int) -> None:
 # --- Work unit types & templates -----------------------------------------
 
 
-async def _ensure_work_unit_types_and_templates(session: AsyncSession, org_id: uuid.UUID) -> None:
-    default_types = [
-        ("project", "Project", "project", True),
-        ("retainer", "Retainer", "retainer", True),
-        ("internal", "Internal Initiative", "internal", False),
-        ("milestone", "Milestone Deliverable", "milestone", True),
-    ]
-    type_map = {}
-    for code, name, category, req_client in default_types:
-        res = await session.execute(
-            select(WorkUnitType).where(WorkUnitType.organization_id == org_id, WorkUnitType.code == code)
-        )
-        wut = res.scalars().first()
-        if not wut:
-            wut = WorkUnitType(
-                id=uuid.uuid4(),
-                organization_id=org_id,
-                code=code,
-                name=name,
-                category=category,
-                requires_client=req_client,
-            )
-            session.add(wut)
-            await session.flush()
-        type_map[code] = wut
+def _visible_types(org_id: uuid.UUID):
+    """The organization's own work unit types plus the built-in ones every organization shares."""
+    return or_(WorkUnitType.organization_id == org_id, WorkUnitType.organization_id.is_(None))
 
-    t_res = await session.execute(
-        select(WorkTemplate).where(WorkTemplate.organization_id == org_id, WorkTemplate.code == "STANDARD-PROJECT")
-    )
-    tmpl = t_res.scalars().first()
-    if not tmpl:
-        project_type = type_map.get("project")
-        if project_type:
-            tmpl = WorkTemplate(
-                id=uuid.uuid4(),
-                work_unit_type_id=project_type.id,
-                organization_id=org_id,
-                code="STANDARD-PROJECT",
-                name="Standard Project Template",
-                status="active",
-            )
-            session.add(tmpl)
-            await session.flush()
 
-            tmpl_ver = WorkTemplateVersion(
-                id=uuid.uuid4(),
-                template_id=tmpl.id,
-                version_no=1,
-                status="published",
-                structure={"phases": [], "milestones": []},
-                published_at=datetime.utcnow(),
-            )
-            session.add(tmpl_ver)
-            await session.flush()
-    await session.commit()
+async def _find_work_unit_type(session: AsyncSession, org_id: uuid.UUID, code: str) -> WorkUnitType:
+    unit_type = (
+        await session.execute(select(WorkUnitType).where(_visible_types(org_id), WorkUnitType.code == code))
+    ).scalars().first()
+    if not unit_type:
+        raise WorkUnitTypeNotFoundError(code)
+    return unit_type
 
 
 async def list_work_unit_types(
     session: AsyncSession, org_id: uuid.UUID, limit: int, cursor: Optional[str]
 ) -> PageResponse[WorkUnitTypeResponse]:
-    await _ensure_work_unit_types_and_templates(session, org_id)
-    query = select(WorkUnitType).where(WorkUnitType.organization_id == org_id)
-    rows, page = await paginate_by_id(session, query, WorkUnitType, limit, cursor)
+    query = select(WorkUnitType).where(_visible_types(org_id))
+    rows, page = await paginate(session, query, WorkUnitType, limit, cursor, order_by=WorkUnitType.code)
     return PageResponse(data=[WorkUnitTypeResponse.model_validate(r) for r in rows], page=page)
 
 
@@ -167,19 +129,17 @@ async def list_templates(
     limit: int,
     cursor: Optional[str],
 ) -> PageResponse[WorkTemplateResponse]:
-    await _ensure_work_unit_types_and_templates(session, org_id)
     query = select(WorkTemplate).where(WorkTemplate.organization_id == org_id)
     if vertical_id is not None:
         query = query.where(WorkTemplate.vertical_id == vertical_id)
     if status is not None:
         query = query.where(WorkTemplate.status == status)
-    rows, page = await paginate_by_id(session, query, WorkTemplate, limit, cursor)
-    data = [await _build_template_response(session, t) for t in rows]
-    return PageResponse(data=data, page=page)
+    rows, page = await paginate(session, query, WorkTemplate, limit, cursor, order_by=WorkTemplate.code)
+    return PageResponse(data=await _template_responses(session, rows), page=page)
 
 
 async def _get_template_by_code(session: AsyncSession, org_id: uuid.UUID, template_code: str) -> WorkTemplate:
-    await _ensure_work_unit_types_and_templates(session, org_id)
+    # Templates are always the organization's own: nothing global can be versioned from here.
     res = await session.execute(
         select(WorkTemplate).where(WorkTemplate.organization_id == org_id, WorkTemplate.code == template_code)
     )
@@ -189,27 +149,42 @@ async def _get_template_by_code(session: AsyncSession, org_id: uuid.UUID, templa
     return template
 
 
-async def _build_template_response(session: AsyncSession, template: WorkTemplate) -> WorkTemplateResponse:
-    published_version_no: Optional[int] = None
-    res = await session.execute(
-        select(WorkTemplateVersion)
-        .where(WorkTemplateVersion.template_id == template.id, WorkTemplateVersion.status == "published")
-        .order_by(WorkTemplateVersion.version_no.desc())
+async def _template_responses(session: AsyncSession, templates: list[WorkTemplate]) -> list[WorkTemplateResponse]:
+    if not templates:
+        return []
+    type_codes = dict(
+        (
+            await session.execute(
+                select(WorkUnitType.id, WorkUnitType.code).where(
+                    WorkUnitType.id.in_({t.work_unit_type_id for t in templates})
+                )
+            )
+        ).all()
     )
-    published = res.scalars().first()
-    if published:
-        published_version_no = published.version_no
-
-    unit_type = await session.get(WorkUnitType, template.work_unit_type_id)
-    return WorkTemplateResponse(
-        id=template.id,
-        code=template.code,
-        name=template.name,
-        vertical=vertical_ref(template.vertical_id),
-        work_unit_type_code=unit_type.code if unit_type else "",
-        status=template.status,
-        published_version_no=published_version_no,
+    published_version_nos = dict(
+        (
+            await session.execute(
+                select(WorkTemplateVersion.template_id, func.max(WorkTemplateVersion.version_no))
+                .where(
+                    WorkTemplateVersion.template_id.in_({t.id for t in templates}),
+                    WorkTemplateVersion.status == "published",
+                )
+                .group_by(WorkTemplateVersion.template_id)
+            )
+        ).all()
     )
+    return [
+        WorkTemplateResponse(
+            id=template.id,
+            code=template.code,
+            name=template.name,
+            vertical=vertical_ref(template.vertical_id),
+            work_unit_type_code=type_codes[template.work_unit_type_id],
+            status=template.status,
+            published_version_no=published_version_nos.get(template.id),
+        )
+        for template in templates
+    ]
 
 
 async def create_template_version(
@@ -218,11 +193,9 @@ async def create_template_version(
     template = await _get_template_by_code(session, org_id, template_code)
 
     res = await session.execute(
-        select(WorkTemplateVersion.version_no)
-        .where(WorkTemplateVersion.template_id == template.id)
-        .order_by(WorkTemplateVersion.version_no.desc())
+        select(func.max(WorkTemplateVersion.version_no)).where(WorkTemplateVersion.template_id == template.id)
     )
-    last_version_no = res.scalars().first() or 0
+    last_version_no = res.scalar_one() or 0
 
     version = WorkTemplateVersion(
         template_id=template.id,
@@ -267,6 +240,27 @@ async def _get_template_version(session: AsyncSession, template: WorkTemplate, v
     return version
 
 
+async def _published_version(
+    session: AsyncSession, template: WorkTemplate, version_no: Optional[int]
+) -> WorkTemplateVersion:
+    """The version a new project copies: the one asked for, or the latest published."""
+    if version_no is not None:
+        version = await _get_template_version(session, template, version_no)
+        if version.status != "published":
+            raise TemplateNotPublishedError()
+        return version
+    version = (
+        await session.execute(
+            select(WorkTemplateVersion)
+            .where(WorkTemplateVersion.template_id == template.id, WorkTemplateVersion.status == "published")
+            .order_by(WorkTemplateVersion.version_no.desc())
+        )
+    ).scalars().first()
+    if not version:
+        raise TemplateNotPublishedError()
+    return version
+
+
 def _to_template_version_response(version: WorkTemplateVersion, template_code: str) -> WorkTemplateVersionResponse:
     return WorkTemplateVersionResponse(
         id=version.id,
@@ -282,66 +276,93 @@ def _to_template_version_response(version: WorkTemplateVersion, template_code: s
 # --- Work units --------------------------------------------------------
 
 
-async def _build_work_unit_response(session: AsyncSession, work_unit: WorkUnit) -> WorkUnitResponse:
-    unit_type = await session.get(WorkUnitType, work_unit.work_unit_type_id)
-    template_response: WorkTemplateResponse
-    if work_unit.template_version_id is not None:
-        version = await session.get(WorkTemplateVersion, work_unit.template_version_id)
-        template = await session.get(WorkTemplate, version.template_id) if version else None
-        template_response = await _build_template_response(session, template) if template else _empty_template_response()
-    else:
-        template_response = _empty_template_response()
+async def _work_unit_responses(session: AsyncSession, work_units: list[WorkUnit]) -> list[WorkUnitResponse]:
+    """Responses for a page of work units, loading what they refer to once for the whole page."""
+    if not work_units:
+        return []
+    work_unit_ids = [w.id for w in work_units]
+    unit_types = {
+        t.id: t
+        for t in (
+            await session.execute(
+                select(WorkUnitType).where(WorkUnitType.id.in_({w.work_unit_type_id for w in work_units}))
+            )
+        ).scalars()
+    }
 
-    budget_row = (
-        (await session.execute(select(WorkBudget).where(WorkBudget.work_unit_id == work_unit.id)))
-        .scalars()
-        .first()
-    )
-    budget = (
-        {
-            "planned": Money(amount=budget_row.planned_amount, currency=budget_row.currency).model_dump(mode="json"),
-            "approved": Money(amount=budget_row.approved_amount, currency=budget_row.currency).model_dump(mode="json"),
-        }
-        if budget_row
-        else {}
-    )
+    template_by_version: dict[uuid.UUID, WorkTemplate] = {}
+    version_ids = {w.template_version_id for w in work_units if w.template_version_id is not None}
+    if version_ids:
+        template_by_version = dict(
+            (
+                await session.execute(
+                    select(WorkTemplateVersion.id, WorkTemplate)
+                    .join(WorkTemplate, WorkTemplate.id == WorkTemplateVersion.template_id)
+                    .where(WorkTemplateVersion.id.in_(version_ids))
+                )
+            ).all()
+        )
+    templates = list({t.id: t for t in template_by_version.values()}.values())
+    template_responses = {r.id: r for r in await _template_responses(session, templates)}
 
-    return WorkUnitResponse(
-        id=work_unit.id,
-        code=work_unit.code,
-        name=work_unit.name,
-        objective=work_unit.objective,
-        type=WorkUnitTypeResponse.model_validate(unit_type) if unit_type else _empty_type_response(),
-        template=template_response,
-        status=work_unit.status,
-        priority=work_unit.priority,
-        health=work_unit.health,
-        progress_pct=float(work_unit.progress_pct),
-        owning_unit=unit_ref(work_unit.owning_unit_id, "Owning Unit"),
-        vertical=vertical_ref(work_unit.vertical_id, "Vertical"),
-        client=client_ref(work_unit.client_id),
-        contract={"id": str(work_unit.contract_id)} if work_unit.contract_id else None,
-        manager=user_ref(work_unit.manager_user_id, "Manager"),
-        planned_start=work_unit.planned_start,
-        planned_end=work_unit.planned_end,
-        actual_start=work_unit.actual_start,
-        actual_end=work_unit.actual_end,
-        billable=work_unit.billable,
-        budget=budget,
-        workflow_instance_id=None,
-        attributes=work_unit.attributes or {},
-        version=work_unit.version,
-        created_at=work_unit.created_at,
-        updated_at=work_unit.updated_at,
-    )
+    # The latest budget version of each work unit.
+    budgets = {
+        b.work_unit_id: b
+        for b in (
+            await session.execute(
+                select(WorkBudget).where(WorkBudget.work_unit_id.in_(work_unit_ids)).order_by(WorkBudget.version_no)
+            )
+        ).scalars()
+    }
+
+    responses = []
+    for work_unit in work_units:
+        template = template_by_version.get(work_unit.template_version_id)
+        budget = budgets.get(work_unit.id)
+        responses.append(
+            WorkUnitResponse(
+                id=work_unit.id,
+                code=work_unit.code,
+                name=work_unit.name,
+                objective=work_unit.objective,
+                type=WorkUnitTypeResponse.model_validate(unit_types[work_unit.work_unit_type_id]),
+                template=template_responses[template.id] if template else None,
+                status=work_unit.status,
+                priority=work_unit.priority,
+                health=work_unit.health,
+                progress_pct=float(work_unit.progress_pct),
+                owning_unit=unit_ref(work_unit.owning_unit_id),
+                vertical=vertical_ref(work_unit.vertical_id),
+                client=client_ref(work_unit.client_id),
+                contract={"id": str(work_unit.contract_id)} if work_unit.contract_id else None,
+                manager=user_ref(work_unit.manager_user_id),
+                planned_start=work_unit.planned_start,
+                planned_end=work_unit.planned_end,
+                actual_start=work_unit.actual_start,
+                actual_end=work_unit.actual_end,
+                billable=work_unit.billable,
+                budget=_budget_amounts(budget),
+                workflow_instance_id=None,
+                attributes=work_unit.attributes or {},
+                version=work_unit.version,
+                created_at=work_unit.created_at,
+                updated_at=work_unit.updated_at,
+            )
+        )
+    return responses
 
 
-def _empty_type_response() -> WorkUnitTypeResponse:
-    return WorkUnitTypeResponse(id=uuid.uuid4(), code="", name="", category="internal_project", requires_client=False)
+def _budget_amounts(budget: Optional[WorkBudget]) -> dict:
+    if budget is None:
+        return {}
+    return {
+        "planned": Money(amount=budget.planned_amount, currency=budget.currency).model_dump(mode="json"),
+        "approved": Money(amount=budget.approved_amount, currency=budget.currency).model_dump(mode="json"),
+    }
 
 
-def _empty_template_response() -> WorkTemplateResponse:
-    return WorkTemplateResponse(id=uuid.uuid4(), code="", name="", work_unit_type_code="", status="active")
+async def _work_unit_response(session: AsyncSession, work_unit: WorkUnit) -> WorkUnitResponse:
+    return (await _work_unit_responses(session, [work_unit]))[0]
 
 
 async def list_work_units(
@@ -374,44 +395,41 @@ async def list_work_units(
         term = f"%{q}%"
         query = query.where((WorkUnit.name.ilike(term)) | (WorkUnit.code.ilike(term)))
 
-    rows, page = await paginate_by_id(session, query, WorkUnit, limit, cursor)
-    data = [await _build_work_unit_response(session, w) for w in rows]
-    return PageResponse(data=data, page=page)
+    rows, page = await paginate(session, query, WorkUnit, limit, cursor, order_by=WorkUnit.created_at, descending=True)
+    return PageResponse(data=await _work_unit_responses(session, rows), page=page)
 
 
-async def create_work_unit(session: AsyncSession, org_id: uuid.UUID, data: WorkUnitCreate) -> WorkUnitResponse:
+async def _type_and_template_version(
+    session: AsyncSession, org_id: uuid.UUID, data: WorkUnitCreate
+) -> tuple[WorkUnitType, Optional[WorkTemplateVersion]]:
+    """What a new work unit is: a template's type and published version, or just a type."""
+    if not data.template_code:
+        return await _find_work_unit_type(session, org_id, data.work_unit_type_code), None
+
     template = await _get_template_by_code(session, org_id, data.template_code)
-
-    if data.template_version_no is not None:
-        version = await _get_template_version(session, template, data.template_version_no)
-        if version.status != "published":
-            raise TemplateNotPublishedError()
-    else:
-        res = await session.execute(
-            select(WorkTemplateVersion)
-            .where(WorkTemplateVersion.template_id == template.id, WorkTemplateVersion.status == "published")
-            .order_by(WorkTemplateVersion.version_no.desc())
-        )
-        version = res.scalars().first()
-        if not version:
-            raise TemplateNotPublishedError()
-
+    version = await _published_version(session, template, data.template_version_no)
     unit_type = await session.get(WorkUnitType, template.work_unit_type_id)
-    if unit_type and unit_type.requires_client and data.client_id is None:
-        raise ClientRequiredError()
+    if data.work_unit_type_code and data.work_unit_type_code != unit_type.code:
+        raise ValidationFailedError("work_unit_type_code", f"The template makes '{unit_type.code}' projects")
+    return unit_type, version
 
-    code = await _generate_work_unit_code(session, org_id)
-    existing = await session.execute(select(WorkUnit).where(WorkUnit.organization_id == org_id, WorkUnit.code == code))
-    if existing.scalars().first():
-        raise DuplicateCodeError(code)
+
+async def create_work_unit(
+    session: AsyncSession, org_id: uuid.UUID, user_id: uuid.UUID, data: WorkUnitCreate
+) -> WorkUnitResponse:
+    if data.start_workflow:
+        raise ValidationFailedError("start_workflow", "Starting a workflow with the project isn't available yet")
+    unit_type, template_version = await _type_and_template_version(session, org_id, data)
+    if unit_type.requires_client and data.client_id is None:
+        raise ClientRequiredError()
 
     work_unit = WorkUnit(
         organization_id=org_id,
-        code=code,
+        code=await next_work_unit_code(session, org_id),
         name=data.name,
         objective=data.objective,
-        work_unit_type_id=template.work_unit_type_id,
-        template_version_id=version.id,
+        work_unit_type_id=unit_type.id,
+        template_version_id=template_version.id if template_version else None,
         vertical_id=data.vertical_id,
         owning_unit_id=data.owning_unit_id,
         client_id=data.client_id,
@@ -429,17 +447,12 @@ async def create_work_unit(session: AsyncSession, org_id: uuid.UUID, data: WorkU
     )
     session.add(work_unit)
     await session.flush()
+    session.add(StatusHistory(work_unit_id=work_unit.id, from_status=None, to_status=work_unit.status, changed_by=user_id))
 
-    await _copy_template_structure(session, work_unit, version.structure or {})
+    if template_version:
+        await _copy_template_structure(session, work_unit, template_version.structure or {})
 
-    return await _build_work_unit_response(session, work_unit)
-
-
-async def _generate_work_unit_code(session: AsyncSession, org_id: uuid.UUID) -> str:
-    year = datetime.now(timezone.utc).year
-    res = await session.execute(select(WorkUnit).where(WorkUnit.organization_id == org_id))
-    count = len(res.scalars().all())
-    return f"WU-{year}-{count + 1:04d}"
+    return await _work_unit_response(session, work_unit)
 
 
 async def _copy_template_structure(session: AsyncSession, work_unit: WorkUnit, structure: dict) -> None:
@@ -502,7 +515,7 @@ async def _get_work_unit(session: AsyncSession, org_id: uuid.UUID, work_unit_id:
 
 async def get_work_unit(session: AsyncSession, org_id: uuid.UUID, work_unit_id: uuid.UUID) -> WorkUnitResponse:
     work_unit = await _get_work_unit(session, org_id, work_unit_id)
-    return await _build_work_unit_response(session, work_unit)
+    return await _work_unit_response(session, work_unit)
 
 
 async def update_work_unit(
@@ -536,12 +549,13 @@ async def update_work_unit(
     work_unit.updated_at = datetime.now(timezone.utc)
     work_unit.version += 1
     await session.flush()
-    return await _build_work_unit_response(session, work_unit)
+    return await _work_unit_response(session, work_unit)
 
 
 async def change_work_unit_status(
     session: AsyncSession,
     org_id: uuid.UUID,
+    user_id: uuid.UUID,
     work_unit_id: uuid.UUID,
     data: WorkUnitStatusChange,
     if_match: Optional[str],
@@ -558,8 +572,14 @@ async def change_work_unit_status(
 
     if data.to_status == "closed":
         await _require_no_open_items(session, work_unit.id)
-        session.add(Closure(work_unit_id=work_unit.id, summary=data.reason, closed_by=None))
+        session.add(Closure(work_unit_id=work_unit.id, summary=data.reason, closed_by=user_id))
 
+    session.add(
+        StatusHistory(
+            work_unit_id=work_unit.id, from_status=work_unit.status, to_status=data.to_status,
+            changed_by=user_id, reason=data.reason,
+        )
+    )
     work_unit.status = data.to_status
     effective_on = data.effective_on or date.today()
     if data.to_status == "active" and work_unit.actual_start is None:
@@ -570,45 +590,38 @@ async def change_work_unit_status(
     work_unit.updated_at = datetime.now(timezone.utc)
     work_unit.version += 1
     await session.flush()
-    return await _build_work_unit_response(session, work_unit)
+    return await _work_unit_response(session, work_unit)
 
 
 async def _require_all_milestones_completed(session: AsyncSession, work_unit_id: uuid.UUID) -> None:
     res = await session.execute(
-        select(Milestone).where(Milestone.work_unit_id == work_unit_id, Milestone.status != "completed")
+        select(Milestone.id).where(Milestone.work_unit_id == work_unit_id, Milestone.status != "completed")
     )
-    if res.scalars().first():
+    if res.first():
         raise WorkUnitHasOpenItemsError()
 
 
 async def _require_no_open_items(session: AsyncSession, work_unit_id: uuid.UUID) -> None:
-    open_tasks = await session.execute(
-        select(Task).where(Task.work_unit_id == work_unit_id, Task.status.notin_(["done", "cancelled"]))
+    open_items = (
+        select(Task.id).where(Task.work_unit_id == work_unit_id, Task.status.notin_(["done", "cancelled"])),
+        select(Risk.id).where(Risk.work_unit_id == work_unit_id, Risk.status.notin_(_CLOSED_RISK_STATUSES)),
+        select(ChangeRequest.id).where(
+            ChangeRequest.work_unit_id == work_unit_id, ChangeRequest.status.notin_(_CLOSED_CHANGE_REQUEST_STATUSES)
+        ),
     )
-    if open_tasks.scalars().first():
-        raise WorkUnitHasOpenItemsError()
-
-    open_risks = await session.execute(
-        select(Risk).where(Risk.work_unit_id == work_unit_id, Risk.status.notin_(["closed", "occurred"]))
-    )
-    if open_risks.scalars().first():
-        raise WorkUnitHasOpenItemsError()
-
-    open_crs = await session.execute(
-        select(ChangeRequest).where(
-            ChangeRequest.work_unit_id == work_unit_id,
-            ChangeRequest.status.notin_(["implemented", "rejected", "withdrawn"]),
-        )
-    )
-    if open_crs.scalars().first():
-        raise WorkUnitHasOpenItemsError()
-
+    for query in open_items:
+        if (await session.execute(query.limit(1))).first():
+            raise WorkUnitHasOpenItemsError()
     await _require_all_milestones_completed(session, work_unit_id)
+
+
+async def _count(session: AsyncSession, query) -> int:
+    return int((await session.execute(query)).scalar_one() or 0)
 
 
 async def get_work_unit_summary(session: AsyncSession, org_id: uuid.UUID, work_unit_id: uuid.UUID) -> WorkUnitSummaryResponse:
     work_unit = await _get_work_unit(session, org_id, work_unit_id)
-    work_unit_response = await _build_work_unit_response(session, work_unit)
+    work_unit_response = await _work_unit_response(session, work_unit)
 
     phases_res = await session.execute(select(Phase).where(Phase.work_unit_id == work_unit_id).order_by(Phase.seq))
     phases = [
@@ -623,25 +636,29 @@ async def get_work_unit_summary(session: AsyncSession, org_id: uuid.UUID, work_u
         for p in phases_res.scalars().all()
     ]
 
-    milestones = await _list_milestone_responses(session, work_unit_id)
-
-    tasks_res = await session.execute(select(Task).where(Task.work_unit_id == work_unit_id))
-    tasks_by_status: dict[str, int] = {}
-    for task in tasks_res.scalars().all():
-        tasks_by_status[task.status] = tasks_by_status.get(task.status, 0) + 1
-
-    risks_open_res = await session.execute(
-        select(Risk).where(Risk.work_unit_id == work_unit_id, Risk.status.notin_(["closed", "occurred"]))
+    milestones_res = await session.execute(
+        select(Milestone).where(Milestone.work_unit_id == work_unit_id).order_by(Milestone.seq, Milestone.id)
     )
-    risks_open = len(risks_open_res.scalars().all())
+    milestones = await _milestone_responses(session, list(milestones_res.scalars().all()))
 
-    crs_open_res = await session.execute(
-        select(ChangeRequest).where(
-            ChangeRequest.work_unit_id == work_unit_id,
-            ChangeRequest.status.notin_(["implemented", "rejected", "withdrawn"]),
-        )
+    tasks_by_status = dict(
+        (
+            await session.execute(
+                select(Task.status, func.count(Task.id)).where(Task.work_unit_id == work_unit_id).group_by(Task.status)
+            )
+        ).all()
     )
-    pending_approvals = len(crs_open_res.scalars().all())
+    risks_open = await _count(
+        session,
+        select(func.count(Risk.id)).where(Risk.work_unit_id == work_unit_id, Risk.status.notin_(_CLOSED_RISK_STATUSES)),
+    )
+    # Change requests waiting for a decision (drafts aren't asking for one yet).
+    pending_approvals = await _count(
+        session,
+        select(func.count(ChangeRequest.id)).where(
+            ChangeRequest.work_unit_id == work_unit_id, ChangeRequest.status == "submitted"
+        ),
+    )
 
     return WorkUnitSummaryResponse(
         work_unit=work_unit_response,
@@ -658,30 +675,34 @@ async def get_work_unit_summary(session: AsyncSession, org_id: uuid.UUID, work_u
 # --- Milestones ----------------------------------------------------------
 
 
-async def _list_milestone_responses(session: AsyncSession, work_unit_id: uuid.UUID) -> list[MilestoneResponse]:
-    res = await session.execute(select(Milestone).where(Milestone.work_unit_id == work_unit_id).order_by(Milestone.seq))
-    milestones = res.scalars().all()
-    return [await _build_milestone_response(session, m) for m in milestones]
+async def _milestone_responses(session: AsyncSession, milestones: list[Milestone]) -> list[MilestoneResponse]:
+    deliverables: dict[uuid.UUID, list[DeliverableResponse]] = {m.id: [] for m in milestones}
+    if milestones:
+        res = await session.execute(select(Deliverable).where(Deliverable.milestone_id.in_(deliverables)))
+        for deliverable in res.scalars().all():
+            deliverables[deliverable.milestone_id].append(DeliverableResponse.model_validate(deliverable))
+    return [
+        MilestoneResponse(
+            id=milestone.id,
+            code=milestone.code,
+            name=milestone.name,
+            phase_id=milestone.phase_id,
+            seq=milestone.seq,
+            weight=float(milestone.weight),
+            planned_date=milestone.planned_date,
+            forecast_date=milestone.forecast_date,
+            actual_date=milestone.actual_date,
+            is_billing_milestone=milestone.is_billing_milestone,
+            requires_client_acceptance=milestone.requires_client_acceptance,
+            status=milestone.status,
+            deliverables=deliverables[milestone.id],
+        )
+        for milestone in milestones
+    ]
 
 
-async def _build_milestone_response(session: AsyncSession, milestone: Milestone) -> MilestoneResponse:
-    res = await session.execute(select(Deliverable).where(Deliverable.milestone_id == milestone.id))
-    deliverables = [DeliverableResponse.model_validate(d) for d in res.scalars().all()]
-    return MilestoneResponse(
-        id=milestone.id,
-        code=milestone.code,
-        name=milestone.name,
-        phase_id=milestone.phase_id,
-        seq=milestone.seq,
-        weight=float(milestone.weight),
-        planned_date=milestone.planned_date,
-        forecast_date=milestone.forecast_date,
-        actual_date=milestone.actual_date,
-        is_billing_milestone=milestone.is_billing_milestone,
-        requires_client_acceptance=milestone.requires_client_acceptance,
-        status=milestone.status,
-        deliverables=deliverables,
-    )
+async def _milestone_response(session: AsyncSession, milestone: Milestone) -> MilestoneResponse:
+    return (await _milestone_responses(session, [milestone]))[0]
 
 
 async def list_milestones(
@@ -689,9 +710,8 @@ async def list_milestones(
 ) -> PageResponse[MilestoneResponse]:
     await _get_work_unit(session, org_id, work_unit_id)
     query = select(Milestone).where(Milestone.work_unit_id == work_unit_id)
-    rows, page = await paginate_by_id(session, query, Milestone, limit, cursor)
-    data = [await _build_milestone_response(session, m) for m in rows]
-    return PageResponse(data=data, page=page)
+    rows, page = await paginate(session, query, Milestone, limit, cursor, order_by=Milestone.seq)
+    return PageResponse(data=await _milestone_responses(session, rows), page=page)
 
 
 async def _get_milestone(session: AsyncSession, org_id: uuid.UUID, milestone_id: uuid.UUID) -> Milestone:
@@ -701,9 +721,6 @@ async def _get_milestone(session: AsyncSession, org_id: uuid.UUID, milestone_id:
     # Ownership check via the parent work unit's organization.
     await _get_work_unit(session, org_id, milestone.work_unit_id)
     return milestone
-
-
-MILESTONE_ETAG = "1"  # Milestone has no version column; see report's concurrency note.
 
 
 async def update_milestone(
@@ -722,7 +739,7 @@ async def update_milestone(
         milestone.planned_date = data.planned_date
 
     await session.flush()
-    return await _build_milestone_response(session, milestone)
+    return await _milestone_response(session, milestone)
 
 
 async def submit_milestone(
@@ -739,7 +756,7 @@ async def submit_milestone(
 
     milestone.status = "submitted"
     await session.flush()
-    return await _build_milestone_response(session, milestone)
+    return await _milestone_response(session, milestone)
 
 
 async def accept_milestone(
@@ -761,7 +778,7 @@ async def accept_milestone(
         deliverable.accepted_at = datetime.now(timezone.utc)
 
     await session.flush()
-    return await _build_milestone_response(session, milestone)
+    return await _milestone_response(session, milestone)
 
 
 async def reject_milestone(
@@ -775,7 +792,7 @@ async def reject_milestone(
 
     milestone.status = "rejected"
     await session.flush()
-    return await _build_milestone_response(session, milestone)
+    return await _milestone_response(session, milestone)
 
 
 # --- Risks & change requests ------------------------------------------------
@@ -791,7 +808,7 @@ async def create_risk(session: AsyncSession, org_id: uuid.UUID, work_unit_id: uu
         score=data.probability * data.impact,
         mitigation=data.mitigation,
         owner_user_id=data.owner_user_id,
-        status="identified",
+        status="open",
     )
     session.add(risk)
     await session.flush()
@@ -806,8 +823,8 @@ def _to_risk_response(risk: Risk) -> RiskResponse:
         impact=risk.impact,
         score=risk.score,
         mitigation=risk.mitigation,
-        owner=user_ref(risk.owner_user_id, "Risk Owner"),
-        status="open" if risk.status == "identified" else risk.status,
+        owner=user_ref(risk.owner_user_id),
+        status=risk.status,
     )
 
 
@@ -815,11 +832,9 @@ async def create_change_request(
     session: AsyncSession, org_id: uuid.UUID, work_unit_id: uuid.UUID, data: ChangeRequestCreate
 ) -> ChangeRequestResponse:
     await _get_work_unit(session, org_id, work_unit_id)
-    res = await session.execute(select(ChangeRequest).where(ChangeRequest.work_unit_id == work_unit_id))
-    seq = len(res.scalars().all()) + 1
     cr = ChangeRequest(
         work_unit_id=work_unit_id,
-        cr_no=f"CR-{seq:03d}",
+        cr_no=await next_change_request_no(session, org_id, work_unit_id),
         title=data.title,
         reason=data.reason,
         scope_impact=data.scope_impact,
@@ -895,7 +910,7 @@ async def replace_members(
     work_unit.updated_at = datetime.now(timezone.utc)
     work_unit.version += 1
     await session.flush()
-    return await _build_work_unit_response(session, work_unit)
+    return await _work_unit_response(session, work_unit)
 
 
 # --- Progress --------------------------------------------------------------

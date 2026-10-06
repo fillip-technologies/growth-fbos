@@ -48,26 +48,24 @@ class PageResponse(BaseModel, Generic[T]):
     page: PageMeta
 
 
-class UserRef(BaseModel):
-    """Compact reference to a user. name is a placeholder: this service has no
-    direct access to the identity service's user directory, so it is not
-    resolved here (see the report for this simplification)."""
+# References to records other services own (users and units in identity, customers in
+# revenue). Delivery stores only their ids, so `name` is null: consoles name them from
+# their own lookups rather than show a made-up name.
 
+
+class UserRef(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
     id: uuid.UUID
-    name: str
+    name: Optional[str] = None
     avatar_url: Optional[str] = None
 
 
 class UnitRef(BaseModel):
-    """Compact reference to an org unit. name/unit_type are placeholders for
-    the same cross-service resolution reason as UserRef."""
-
     model_config = ConfigDict(from_attributes=True)
 
     id: uuid.UUID
-    name: str
+    name: Optional[str] = None
     unit_type: Optional[str] = None
 
 
@@ -75,14 +73,14 @@ class VerticalRef(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
     id: uuid.UUID
-    name: str
+    name: Optional[str] = None
 
 
 class ClientRef(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
     id: uuid.UUID
-    name: str
+    name: Optional[str] = None
 
 
 class SubjectRef(BaseModel):

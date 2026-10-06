@@ -5,10 +5,43 @@ from fastapi import HTTPException, status
 
 class CommunicationServiceError(HTTPException):
     def __init__(self, status_code: int, code: str, message: str, meta: Optional[dict[str, Any]] = None) -> None:
+        self.code = code
+        self.message = message
+        self.meta = meta
         payload: dict[str, Any] = {"code": code, "message": message, "status": status_code}
         if meta is not None:
             payload["meta"] = meta
         super().__init__(status_code=status_code, detail=payload)
+
+
+class AuthenticationRequiredError(CommunicationServiceError):
+    """401: The request carries no bearer access token."""
+
+    def __init__(self) -> None:
+        super().__init__(status.HTTP_401_UNAUTHORIZED, "UNAUTHORIZED", "Authentication required")
+
+
+class PermissionDeniedError(CommunicationServiceError):
+    """403: The caller is signed in but may not do this."""
+
+    def __init__(self, required: str, message: Optional[str] = None) -> None:
+        super().__init__(
+            status.HTTP_403_FORBIDDEN,
+            "PERMISSION_DENIED",
+            message or f"You need the '{required}' permission to do this",
+            meta={"required_permission": required},
+        )
+
+
+class AuthServiceUnavailableError(CommunicationServiceError):
+    """503: Identity could not be reached to authenticate the request."""
+
+    def __init__(self) -> None:
+        super().__init__(
+            status.HTTP_503_SERVICE_UNAVAILABLE,
+            "AUTH_SERVICE_UNAVAILABLE",
+            "Sign-in could not be checked right now. Try again shortly.",
+        )
 
 
 class InboxItemNotFoundError(CommunicationServiceError):
@@ -41,11 +74,9 @@ class DuplicateRuleCodeError(CommunicationServiceError):
 
 class ValidationFailedError(CommunicationServiceError):
     def __init__(self, errors: Optional[list[dict[str, Any]]] = None) -> None:
-        payload: dict[str, Any] = {
-            "code": "VALIDATION_FAILED",
-            "message": "Schema or field-level business rules failed.",
-            "status": status.HTTP_422_UNPROCESSABLE_ENTITY,
-        }
-        if errors:
-            payload["errors"] = errors
-        super().__init__(status.HTTP_422_UNPROCESSABLE_ENTITY, "VALIDATION_FAILED", "Schema or field-level business rules failed.")
+        super().__init__(
+            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            "VALIDATION_FAILED",
+            "Schema or field-level business rules failed.",
+            meta={"errors": errors} if errors else None,
+        )

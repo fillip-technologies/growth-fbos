@@ -14,6 +14,7 @@ from schemas.lead import (
     LeadResponse,
     LeadUpdate,
 )
+from services import notifications
 from services.lead_service import LeadService
 
 router = APIRouter(prefix="/leads", tags=["leads"])
@@ -59,6 +60,7 @@ async def create_lead(
     payload: LeadCreate,
     session: DatabaseSession,
     org_id: OrgId,
+    actor: CurrentActor,
     response: Response,
     idempotency_key: Optional[str] = Header(None, alias="Idempotency-Key"),
 ) -> LeadResponse:
@@ -69,6 +71,7 @@ async def create_lead(
         payload=payload,
     )
     await session.commit()
+    notifications.lead_assigned(actor, lead)
     response.headers["ETag"] = f'"{lead.version}"'
     return lead
 
@@ -102,6 +105,7 @@ async def update_lead(
     payload: LeadUpdate,
     session: DatabaseSession,
     org_id: OrgId,
+    actor: CurrentActor,
     response: Response,
     if_match: Optional[str] = Header(None, alias="If-Match"),
 ) -> LeadResponse:
@@ -114,6 +118,8 @@ async def update_lead(
         if_match=if_match,
     )
     await session.commit()
+    if payload.owner_user_id is not None:
+        notifications.lead_assigned(actor, lead)
     response.headers["ETag"] = f'"{lead.version}"'
     return lead
 

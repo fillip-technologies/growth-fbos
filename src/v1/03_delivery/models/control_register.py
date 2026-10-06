@@ -26,7 +26,7 @@ class Risk(Base):
     score: Mapped[int] = mapped_column(Integer, nullable=False)
     mitigation: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     owner_user_id: Mapped[Optional[uuid.UUID]] = mapped_column(UUIDType, nullable=True)
-    status: Mapped[str] = mapped_column(String(50), nullable=False, default="identified", index=True)
+    status: Mapped[str] = mapped_column(String(50), nullable=False, default="open", index=True)
 
 
 class Issue(Base):
@@ -64,9 +64,13 @@ class ChangeRequest(Base):
     scope_impact: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     schedule_impact_days: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     cost_impact: Mapped[float] = mapped_column(Numeric(15, 2), nullable=False, default=0.00)
-    status: Mapped[str] = mapped_column(String(50), nullable=False, default="requested", index=True)
+    status: Mapped[str] = mapped_column(String(50), nullable=False, default="draft", index=True)
     approval_request_id: Mapped[Optional[uuid.UUID]] = mapped_column(UUIDType, nullable=True)
     amends_contract: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    # The approve/reject decision (recorded here until approvals move to the control service).
+    decided_by: Mapped[Optional[uuid.UUID]] = mapped_column(UUIDType, nullable=True)
+    decided_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    decision_note: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
 
 
 class Closure(Base):

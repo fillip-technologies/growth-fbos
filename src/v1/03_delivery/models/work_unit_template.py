@@ -11,15 +11,18 @@ from database.types import UUIDType
 
 class WorkUnitType(Base):
     """
-    Catalog of work unit categories (e.g., project, retainer, milestone, internal).
+    Catalog of work unit categories (e.g., project, retainer, internal).
     Defines default behavior like whether client linkage is mandatory.
+
+    Built-in types (see services/builtins.py) have no organization and are shared by all;
+    an organization's own types sit next to them and may not reuse a built-in code.
     """
 
     __tablename__ = "work_unit_types"
     __table_args__ = (UniqueConstraint("organization_id", "code", name="uq_work_unit_types_org_code"),)
 
     id: Mapped[uuid.UUID] = mapped_column(UUIDType, primary_key=True, default=uuid.uuid4)
-    organization_id: Mapped[uuid.UUID] = mapped_column(UUIDType, nullable=False, index=True)
+    organization_id: Mapped[Optional[uuid.UUID]] = mapped_column(UUIDType, nullable=True, index=True)
     code: Mapped[str] = mapped_column(String(100), nullable=False, index=True)
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     category: Mapped[str] = mapped_column(String(100), nullable=False)

@@ -88,7 +88,7 @@ class Deliverable(Base):
     )
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     document_id: Mapped[Optional[uuid.UUID]] = mapped_column(UUIDType, nullable=True)
-    status: Mapped[str] = mapped_column(String(50), nullable=False, default="draft", index=True)
+    status: Mapped[str] = mapped_column(String(50), nullable=False, default="pending", index=True)
     accepted_by: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     accepted_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
 

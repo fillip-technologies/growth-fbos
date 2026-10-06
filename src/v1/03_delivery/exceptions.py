@@ -30,6 +30,39 @@ class DeliveryServiceError(HTTPException):
         super().__init__(status_code=status_code, detail=payload)
 
 
+# --- Authentication & authorization ------------------------------------------
+
+
+class AuthenticationRequiredError(DeliveryServiceError):
+    """401: The request carries no bearer access token."""
+
+    def __init__(self) -> None:
+        super().__init__(status.HTTP_401_UNAUTHORIZED, "UNAUTHORIZED", "Authentication required")
+
+
+class PermissionDeniedError(DeliveryServiceError):
+    """403: The caller is signed in but lacks the permission for this action."""
+
+    def __init__(self, required_permission: str) -> None:
+        super().__init__(
+            status.HTTP_403_FORBIDDEN,
+            "PERMISSION_DENIED",
+            f"You need the '{required_permission}' permission to do this",
+            meta={"required_permission": required_permission},
+        )
+
+
+class AuthServiceUnavailableError(DeliveryServiceError):
+    """503: Identity could not be reached to authenticate the request."""
+
+    def __init__(self) -> None:
+        super().__init__(
+            status.HTTP_503_SERVICE_UNAVAILABLE,
+            "AUTH_SERVICE_UNAVAILABLE",
+            "Sign-in could not be checked right now. Try again shortly.",
+        )
+
+
 # --- Not found (404) -----------------------------------------------------
 
 
@@ -355,7 +388,37 @@ class HandoverAlreadyOpenError(DeliveryServiceError):
         )
 
 
+class BuiltInReadOnlyError(DeliveryServiceError):
+    """409: Built-in types are shared by every organization and can't be changed."""
+
+    def __init__(self, code: str) -> None:
+        super().__init__(
+            status.HTTP_409_CONFLICT,
+            "BUILT_IN_READ_ONLY",
+            f"'{code}' is built in and can't be changed; create your own type instead.",
+        )
+
+
+class TimeEntryNotOwnError(DeliveryServiceError):
+    """403: Only the person who logged time can remove it."""
+
+    def __init__(self) -> None:
+        super().__init__(status.HTTP_403_FORBIDDEN, "NOT_TIME_ENTRY_OWNER", "You can only remove time you logged yourself.")
+
+
 # --- Validation (422) -------------------------------------------------------
+
+
+class ValidationFailedError(DeliveryServiceError):
+    """422: A request value the schema couldn't check (e.g. 'me' or a user id) is invalid."""
+
+    def __init__(self, field: str, issue: str) -> None:
+        super().__init__(
+            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            "VALIDATION_ERROR",
+            "One or more fields are invalid.",
+            details=[{"field": field, "issue": issue}],
+        )
 
 
 class TemplateInvalidError(DeliveryServiceError):

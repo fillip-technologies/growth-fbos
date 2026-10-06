@@ -2,13 +2,12 @@
 entries, comments, dependencies, handovers and recurring task rules.
 
 Simplification notes:
-  * Permission/RBAC scoping (grants, scope paths) is not enforced anywhere
-    in this service, matching the existing convention in
-    02_revenue/services/* (no permission checks beyond organization
-    isolation). The two identity-specific checks the spec calls out by error
-    code -- ``NOT_ASSIGNEE`` and ``NOT_REVIEWER`` -- are implemented because
-    they are structural (compare the caller to a stored user id), not
-    permission-scope lookups.
+  * Routes require ``delivery.*`` permissions (see ``permissions.py``), but
+    not within a scope: identity reports the codes a user holds in any of
+    their scopes, so access is organization-wide. The rules that compare the
+    caller to the task live here (``_works_on``, ``_may_review``): the
+    assignee may block their own task and tick its checklist, the named
+    reviewer may review it (``NOT_ASSIGNEE`` / ``NOT_REVIEWER``).
   * ``TIME_ENTRY_LOCKED`` (a timesheet week approved and locked) has no
     backing "timesheet week" model in this service, so it is defined in
     exceptions.py but never raised.
@@ -25,7 +24,7 @@ import uuid
 from datetime import date, datetime, timezone
 from typing import Optional
 
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from exceptions import (
@@ -41,6 +40,7 @@ from exceptions import (
     InvalidStateTransitionError,
     NotAssigneeError,
     NotReviewerError,
+    PermissionDeniedError,
     PreconditionRequiredError,
     RRuleInvalidError,
     SameUnitError,
@@ -50,6 +50,7 @@ from exceptions import (
     TaskTemplateNotFoundError,
     TaskTypeNotFoundError,
     TimeEntryNotFoundError,
+    ValidationFailedError,
     VersionConflictError,
 )
 from models.task import ChecklistItem, Task, TaskDependency
@@ -84,10 +85,17 @@ from schemas.tasks import (
     TimeEntryCreate,
     TimeEntryResponse,
 )
-from services.pagination import paginate_by_id
+import permissions
+from services.identity_client import Actor
+from services.codes import next_task_code
+from services.pagination import paginate
 from services.refs import unit_ref, user_ref
 
 _OPEN_TASK_STATUSES = {"draft", "open", "assigned", "in_progress", "blocked", "submitted", "in_review", "rework"}
+_NOT_STARTED_TASK_STATUSES = {"open", "assigned"}
+# Subject types, as identity's object-type registry names them.
+WORK_UNIT_SUBJECT = "work.work_unit"
+TASK_SUBJECT = "task.task"
 _TERMINAL_TASK_STATUSES = {"done", "cancelled"}
 _RRULE_KEY_RE = re.compile(r"^[A-Z]+=[^;]+$")
 _RRULE_VALID_FREQ = {"SECONDLY", "MINUTELY", "HOURLY", "DAILY", "WEEKLY", "MONTHLY", "YEARLY"}
@@ -101,35 +109,50 @@ def _check_if_match(if_match: Optional[str], current_version: int) -> None:
         raise VersionConflictError(current_version)
 
 
-async def _generate_task_code(session: AsyncSession, org_id: uuid.UUID) -> str:
-    year = datetime.now(timezone.utc).year
-    res = await session.execute(select(Task).where(Task.organization_id == org_id))
-    count = len(res.scalars().all())
-    return f"TSK-{year}-{count + 1:06d}"
+def _works_on(actor: Actor, task: Task) -> bool:
+    """May move the task along day to day (block, tick its checklist): its assignee, or a task manager."""
+    return task.assignee_user_id == actor.user_id or actor.has(permissions.TASK_WRITE)
+
+
+def _may_review(actor: Actor, task: Task) -> bool:
+    """The task's named reviewer, or anyone allowed to review tasks in general."""
+    return task.reviewer_user_id == actor.user_id or actor.has(permissions.TASK_REVIEW)
 
 
 # --- Response builders -----------------------------------------------------
 
 
-async def _build_checklist_item_response(item: ChecklistItem) -> ChecklistItemResponse:
+def _checklist_item_response(item: ChecklistItem) -> ChecklistItemResponse:
     return ChecklistItemResponse(
         id=item.id,
         seq=item.seq,
         text=item.text,
         mandatory=item.mandatory,
         done=item.done_at is not None,
-        done_by=user_ref(item.done_by, "User") if item.done_by else None,
+        done_by=user_ref(item.done_by),
         done_at=item.done_at,
     )
 
 
-async def _build_task_response(session: AsyncSession, task: Task) -> TaskResponse:
-    task_type = await session.get(TaskType, task.task_type_id)
-    checklist_res = await session.execute(select(ChecklistItem).where(ChecklistItem.task_id == task.id).order_by(ChecklistItem.seq))
-    checklist = [await _build_checklist_item_response(i) for i in checklist_res.scalars().all()]
+async def _task_responses(session: AsyncSession, tasks: list[Task]) -> list[TaskResponse]:
+    """Responses for a page of tasks, loading their types and checklists once for the whole page."""
+    if not tasks:
+        return []
+    task_types = {
+        t.id: t
+        for t in (await session.execute(select(TaskType).where(TaskType.id.in_({t.task_type_id for t in tasks})))).scalars()
+    }
+    checklists: dict[uuid.UUID, list[ChecklistItemResponse]] = {t.id: [] for t in tasks}
+    items = await session.execute(
+        select(ChecklistItem).where(ChecklistItem.task_id.in_(checklists)).order_by(ChecklistItem.seq)
+    )
+    for item in items.scalars().all():
+        checklists[item.task_id].append(_checklist_item_response(item))
+    return [_task_response(task, task_types[task.task_type_id], checklists[task.id]) for task in tasks]
 
-    creator = task.created_by or task.assignee_user_id or uuid.uuid4()
 
+def _task_response(task: Task, task_type: TaskType, checklist: list[ChecklistItemResponse]) -> TaskResponse:
+    attributes = task.attributes or {}
     return TaskResponse(
         id=task.id,
         code=task.code,
@@ -137,17 +160,15 @@ async def _build_task_response(session: AsyncSession, task: Task) -> TaskRespons
         description=task.description,
         status=task.status,
         priority=task.priority,
-        task_type=TaskTypeRef(id=task_type.id, code=task_type.code, name=task_type.name)
-        if task_type
-        else TaskTypeRef(id=uuid.uuid4(), code="", name=""),
-        subject={"type": task.subject_type or "", "id": task.subject_id or uuid.uuid4()},
+        task_type=TaskTypeRef(id=task_type.id, code=task_type.code, name=task_type.name),
+        subject={"type": task.subject_type, "id": task.subject_id} if task.subject_type and task.subject_id else None,
         work_unit_id=task.work_unit_id,
         workflow={"instance_id": str(task.workflow_instance_id), "stage_run_id": str(task.stage_run_id)}
         if task.workflow_instance_id
         else None,
-        owning_unit=unit_ref(task.owning_unit_id, "Owning Unit"),
-        assignee=user_ref(task.assignee_user_id, "Assignee") if task.assignee_user_id else None,
-        reviewer=user_ref(task.reviewer_user_id, "Reviewer") if task.reviewer_user_id else None,
+        owning_unit=unit_ref(task.owning_unit_id),
+        assignee=user_ref(task.assignee_user_id),
+        reviewer=user_ref(task.reviewer_user_id),
         parent_task_id=task.parent_task_id,
         source=task.source,
         start_at=task.start_at,
@@ -158,14 +179,18 @@ async def _build_task_response(session: AsyncSession, task: Task) -> TaskRespons
         progress_pct=task.progress_pct,
         review_round=task.review_round,
         checklist=checklist,
-        labels=(task.attributes or {}).get("labels", []),
+        labels=attributes.get("labels", []),
         sla=None,
-        attributes={k: v for k, v in (task.attributes or {}).items() if k != "labels"},
+        attributes={k: v for k, v in attributes.items() if k != "labels"},
         version=task.version,
-        created_by=user_ref(creator, "Creator"),
+        created_by=user_ref(task.created_by),
         created_at=task.created_at,
         updated_at=task.updated_at,
     )
+
+
+async def _build_task_response(session: AsyncSession, task: Task) -> TaskResponse:
+    return (await _task_responses(session, [task]))[0]
 
 
 async def _get_task(session: AsyncSession, org_id: uuid.UUID, task_id: uuid.UUID) -> Task:
@@ -197,7 +222,6 @@ async def list_tasks(
     subject_id: Optional[uuid.UUID],
     due_before: Optional[datetime],
     overdue: Optional[bool],
-    label: Optional[str],
     q: Optional[str],
     limit: int,
     cursor: Optional[str],
@@ -207,7 +231,7 @@ async def list_tasks(
     if assignee == "me":
         query = query.where(Task.assignee_user_id == caller_user_id)
     elif assignee:
-        query = query.where(Task.assignee_user_id == uuid.UUID(assignee))
+        query = query.where(Task.assignee_user_id == _user_id_filter("assignee", assignee))
 
     if owning_unit_id is not None:
         query = query.where(Task.owning_unit_id == owning_unit_id)
@@ -227,61 +251,53 @@ async def list_tasks(
         term = f"%{q}%"
         query = query.where((Task.title.ilike(term)) | (Task.code.ilike(term)) | (Task.description.ilike(term)))
 
-    rows, page = await paginate_by_id(session, query, Task, limit, cursor)
-    # label filtering happens in Python: labels live inside the JSON attributes column.
-    if label:
-        rows = [t for t in rows if label in (t.attributes or {}).get("labels", [])]
-
-    data = [await _build_task_response(session, t) for t in rows]
-    return PageResponse(data=data, page=page)
+    rows, page = await paginate(session, query, Task, limit, cursor, order_by=Task.created_at, descending=True)
+    return PageResponse(data=await _task_responses(session, rows), page=page)
 
 
-async def _ensure_task_types(session: AsyncSession, org_id: uuid.UUID) -> None:
-    default_task_types = [
-        ("task", "Standard Task", "general", False, 60),
-        ("bug", "Bug Fix", "defect", True, 120),
-        ("feature", "Feature Delivery", "development", True, 240),
-        ("review", "Review Task", "review", False, 60),
-    ]
-    for code, name, category, req_rev, est in default_task_types:
-        res = await session.execute(
-            select(TaskType).where(TaskType.organization_id == org_id, TaskType.code == code)
-        )
-        if not res.scalars().first():
-            session.add(
-                TaskType(
-                    id=uuid.uuid4(),
-                    organization_id=org_id,
-                    code=code,
-                    name=name,
-                    category=category,
-                    requires_review=req_rev,
-                    default_estimate_minutes=est,
-                )
+def _user_id_filter(field: str, value: str) -> uuid.UUID:
+    try:
+        return uuid.UUID(value)
+    except ValueError:
+        raise ValidationFailedError(field, "Must be 'me' or a user id") from None
+
+
+async def _find_task_type(session: AsyncSession, org_id: uuid.UUID, code: str) -> TaskType:
+    """The organization's own task type with this code, or the built-in one."""
+    task_type = (
+        await session.execute(
+            select(TaskType).where(
+                or_(TaskType.organization_id == org_id, TaskType.organization_id.is_(None)), TaskType.code == code
             )
-    await session.commit()
+        )
+    ).scalars().first()
+    if not task_type:
+        raise TaskTypeNotFoundError(code)
+    return task_type
+
+
+async def _subject_work_unit(
+    session: AsyncSession, org_id: uuid.UUID, subject_type: str, subject_id: uuid.UUID
+) -> Optional[WorkUnit]:
+    """The work unit a task is about, checked to be the organization's; None for other subjects."""
+    if subject_type != WORK_UNIT_SUBJECT:
+        return None
+    work_unit = (
+        await session.execute(select(WorkUnit).where(WorkUnit.id == subject_id, WorkUnit.organization_id == org_id))
+    ).scalars().first()
+    if not work_unit:
+        raise SubjectNotFoundError()
+    return work_unit
 
 
 async def create_task(session: AsyncSession, org_id: uuid.UUID, user_id: uuid.UUID, data: TaskCreate) -> TaskResponse:
-    await _ensure_task_types(session, org_id)
-    type_res = await session.execute(
-        select(TaskType).where(TaskType.organization_id == org_id, TaskType.code == data.task_type_code)
-    )
-    task_type = type_res.scalars().first()
-    if not task_type:
-        raise TaskTypeNotFoundError(data.task_type_code)
+    task_type = await _find_task_type(session, org_id, data.task_type_code)
+    work_unit = await _subject_work_unit(session, org_id, data.subject.type, data.subject.id)
+    if data.parent_task_id is not None:
+        await _get_task(session, org_id, data.parent_task_id)
+    # Unit membership lives in identity, so ASSIGNEE_NOT_IN_UNIT can't be checked here yet.
 
-    if data.subject.type == "work.work_unit":
-        exists = await session.execute(select(WorkUnit).where(WorkUnit.id == data.subject.id, WorkUnit.organization_id == org_id))
-        if not exists.scalars().first():
-            raise SubjectNotFoundError()
-
-    if data.assignee_user_id is not None:
-        # This service has no local roster of unit membership (that lives in
-        # Identity's org-unit service); membership cannot be verified here.
-        pass
-
-    code = await _generate_task_code(session, org_id)
+    code = await next_task_code(session, org_id)
     status_value = "assigned" if data.assignee_user_id else "open"
 
     task = Task(
@@ -289,6 +305,7 @@ async def create_task(session: AsyncSession, org_id: uuid.UUID, user_id: uuid.UU
         code=code,
         subject_type=data.subject.type,
         subject_id=data.subject.id,
+        work_unit_id=work_unit.id if work_unit else None,
         source="manual",
         title=data.title,
         description=data.description,
@@ -317,6 +334,8 @@ async def create_task(session: AsyncSession, org_id: uuid.UUID, user_id: uuid.UU
 
     for seq, item in enumerate(data.checklist or [], start=1):
         session.add(ChecklistItem(task_id=task.id, seq=seq, text=item.text, mandatory=item.mandatory if item.mandatory is not None else True))
+    if data.assignee_user_id is not None:
+        session.add(TaskAssignment(task_id=task.id, unit_id=task.owning_unit_id, user_id=data.assignee_user_id, assigned_by=user_id))
 
     await _record_status_history(session, task, None, status_value, user_id)
     await session.flush()
@@ -431,8 +450,10 @@ async def start_task(session: AsyncSession, org_id: uuid.UUID, user_id: uuid.UUI
     return await _build_task_response(session, task)
 
 
-async def block_task(session: AsyncSession, org_id: uuid.UUID, user_id: uuid.UUID, task_id: uuid.UUID, data: TaskBlock, if_match: Optional[str]) -> TaskResponse:
+async def block_task(session: AsyncSession, org_id: uuid.UUID, actor: Actor, task_id: uuid.UUID, data: TaskBlock, if_match: Optional[str]) -> TaskResponse:
     task = await _get_task(session, org_id, task_id)
+    if not _works_on(actor, task):
+        raise NotAssigneeError()
     _check_if_match(if_match, task.version)
 
     if task.status in _TERMINAL_TASK_STATUSES or task.status == "blocked":
@@ -445,7 +466,7 @@ async def block_task(session: AsyncSession, org_id: uuid.UUID, user_id: uuid.UUI
     if data.blocked_by_task_id:
         attrs["blocked_by_task_id"] = str(data.blocked_by_task_id)
     task.attributes = attrs
-    await _record_status_history(session, task, from_status, task.status, user_id, data.reason)
+    await _record_status_history(session, task, from_status, task.status, actor.user_id, data.reason)
 
     task.updated_at = datetime.now(timezone.utc)
     task.version += 1
@@ -453,15 +474,17 @@ async def block_task(session: AsyncSession, org_id: uuid.UUID, user_id: uuid.UUI
     return await _build_task_response(session, task)
 
 
-async def unblock_task(session: AsyncSession, org_id: uuid.UUID, user_id: uuid.UUID, task_id: uuid.UUID, if_match: Optional[str]) -> TaskResponse:
+async def unblock_task(session: AsyncSession, org_id: uuid.UUID, actor: Actor, task_id: uuid.UUID, if_match: Optional[str]) -> TaskResponse:
     task = await _get_task(session, org_id, task_id)
+    if not _works_on(actor, task):
+        raise NotAssigneeError()
     _check_if_match(if_match, task.version)
 
     if task.status != "blocked":
         raise InvalidStateTransitionError(task.status, "in_progress")
 
     task.status = "in_progress"
-    await _record_status_history(session, task, "blocked", task.status, user_id)
+    await _record_status_history(session, task, "blocked", task.status, actor.user_id)
 
     task.updated_at = datetime.now(timezone.utc)
     task.version += 1
@@ -501,10 +524,11 @@ async def submit_task(session: AsyncSession, org_id: uuid.UUID, user_id: uuid.UU
     return await _build_task_response(session, task)
 
 
-async def review_task(session: AsyncSession, org_id: uuid.UUID, user_id: uuid.UUID, task_id: uuid.UUID, data: ReviewCreate) -> ReviewResponse:
+async def review_task(session: AsyncSession, org_id: uuid.UUID, actor: Actor, task_id: uuid.UUID, data: ReviewCreate) -> ReviewResponse:
     task = await _get_task(session, org_id, task_id)
+    user_id = actor.user_id
 
-    if task.reviewer_user_id is not None and task.reviewer_user_id != user_id:
+    if not _may_review(actor, task):
         raise NotReviewerError()
     if task.status not in ("submitted", "in_review"):
         raise InvalidStateTransitionError(task.status, "reviewed")
@@ -545,7 +569,7 @@ async def review_task(session: AsyncSession, org_id: uuid.UUID, user_id: uuid.UU
     return ReviewResponse(
         id=review.id,
         round=review.round,
-        reviewer=user_ref(review.reviewer_id, "Reviewer"),
+        reviewer=user_ref(review.reviewer_id),
         result=review.result,
         rating=review.rating,
         feedback=review.feedback,
@@ -570,8 +594,10 @@ async def cancel_task(session: AsyncSession, org_id: uuid.UUID, user_id: uuid.UU
     return await _build_task_response(session, task)
 
 
-async def update_checklist_item(session: AsyncSession, org_id: uuid.UUID, user_id: uuid.UUID, task_id: uuid.UUID, item_id: uuid.UUID, data: ChecklistItemUpdate) -> ChecklistItemResponse:
+async def update_checklist_item(session: AsyncSession, org_id: uuid.UUID, actor: Actor, task_id: uuid.UUID, item_id: uuid.UUID, data: ChecklistItemUpdate) -> ChecklistItemResponse:
     task = await _get_task(session, org_id, task_id)
+    if not _works_on(actor, task):
+        raise NotAssigneeError()
     if task.status in _TERMINAL_TASK_STATUSES:
         raise InvalidStateTransitionError(task.status, "checklist_update")
 
@@ -580,18 +606,18 @@ async def update_checklist_item(session: AsyncSession, org_id: uuid.UUID, user_i
         raise ChecklistItemNotFoundError(str(item_id))
 
     item.done_at = datetime.now(timezone.utc) if data.done else None
-    item.done_by = user_id if data.done else None
+    item.done_by = actor.user_id if data.done else None
     await session.flush()
-    return await _build_checklist_item_response(item)
+    return _checklist_item_response(item)
 
 
 async def get_task_history(session: AsyncSession, org_id: uuid.UUID, task_id: uuid.UUID, limit: int, cursor: Optional[str]) -> PageResponse[TaskHistoryItemResponse]:
     await _get_task(session, org_id, task_id)
     query = select(TaskStatusHistory).where(TaskStatusHistory.task_id == task_id)
-    rows, page = await paginate_by_id(session, query, TaskStatusHistory, limit, cursor)
+    rows, page = await paginate(session, query, TaskStatusHistory, limit, cursor, order_by=TaskStatusHistory.changed_at)
     data = [
         TaskHistoryItemResponse(
-            at=h.changed_at, from_status=h.from_status, to_status=h.to_status, by=user_ref(h.changed_by, "User"), reason=h.reason
+            at=h.changed_at, from_status=h.from_status, to_status=h.to_status, by=user_ref(h.changed_by), reason=h.reason
         )
         for h in rows
     ]
@@ -601,10 +627,13 @@ async def get_task_history(session: AsyncSession, org_id: uuid.UUID, task_id: uu
 # --- Time entries ------------------------------------------------------
 
 
-async def list_task_time_entries(session: AsyncSession, org_id: uuid.UUID, task_id: uuid.UUID, limit: int, cursor: Optional[str]) -> PageResponse[TimeEntryResponse]:
+async def list_task_time_entries(session: AsyncSession, org_id: uuid.UUID, actor: Actor, task_id: uuid.UUID, limit: int, cursor: Optional[str]) -> PageResponse[TimeEntryResponse]:
     await _get_task(session, org_id, task_id)
     query = select(TimeEntry).where(TimeEntry.task_id == task_id, TimeEntry.organization_id == org_id)
-    rows, page = await paginate_by_id(session, query, TimeEntry, limit, cursor)
+    if not actor.has(permissions.TIME_ENTRY_READ):
+        # Without access to everyone's time, people see only what they logged themselves.
+        query = query.where(TimeEntry.user_id == actor.user_id)
+    rows, page = await paginate(session, query, TimeEntry, limit, cursor, order_by=TimeEntry.created_at, descending=True)
     return PageResponse(data=[_to_time_entry_response(e) for e in rows], page=page)
 
 
@@ -612,7 +641,7 @@ def _to_time_entry_response(entry: TimeEntry) -> TimeEntryResponse:
     return TimeEntryResponse(
         id=entry.id,
         task_id=entry.task_id,
-        user=user_ref(entry.user_id, "User"),
+        user=user_ref(entry.user_id),
         work_date=entry.work_date,
         minutes=entry.minutes,
         billable=entry.billable,
@@ -654,18 +683,27 @@ async def log_time(session: AsyncSession, org_id: uuid.UUID, user_id: uuid.UUID,
 
 
 async def list_time_entries(
-    session: AsyncSession, org_id: uuid.UUID, caller_user_id: uuid.UUID, user_id_filter: Optional[str], date_from: date, date_to: date, limit: int, cursor: Optional[str]
+    session: AsyncSession, org_id: uuid.UUID, actor: Actor, user_id_filter: Optional[str], date_from: date, date_to: date, limit: int, cursor: Optional[str]
 ) -> PageResponse[TimeEntryResponse]:
+    timesheet_owner_id = _timesheet_owner(actor, user_id_filter)
     query = select(TimeEntry).where(
-        TimeEntry.organization_id == org_id, TimeEntry.work_date >= date_from, TimeEntry.work_date <= date_to
+        TimeEntry.organization_id == org_id,
+        TimeEntry.user_id == timesheet_owner_id,
+        TimeEntry.work_date >= date_from,
+        TimeEntry.work_date <= date_to,
     )
-    if user_id_filter == "me" or user_id_filter is None:
-        query = query.where(TimeEntry.user_id == caller_user_id)
-    else:
-        query = query.where(TimeEntry.user_id == uuid.UUID(user_id_filter))
-
-    rows, page = await paginate_by_id(session, query, TimeEntry, limit, cursor)
+    rows, page = await paginate(session, query, TimeEntry, limit, cursor, order_by=TimeEntry.work_date)
     return PageResponse(data=[_to_time_entry_response(e) for e in rows], page=page)
+
+
+def _timesheet_owner(actor: Actor, user_id_filter: Optional[str]) -> uuid.UUID:
+    """Whose time to list: the caller's own, unless another user is named (needs TIME_ENTRY_READ)."""
+    if user_id_filter is None or user_id_filter == "me":
+        return actor.user_id
+    owner_id = _user_id_filter("user_id", user_id_filter)
+    if owner_id != actor.user_id and not actor.has(permissions.TIME_ENTRY_READ):
+        raise PermissionDeniedError(permissions.TIME_ENTRY_READ)
+    return owner_id
 
 
 # --- Comments ------------------------------------------------------------
@@ -674,13 +712,13 @@ async def list_time_entries(
 async def list_comments(session: AsyncSession, org_id: uuid.UUID, task_id: uuid.UUID, limit: int, cursor: Optional[str]) -> PageResponse[CommentResponse]:
     await _get_task(session, org_id, task_id)
     query = select(TaskComment).where(TaskComment.task_id == task_id, TaskComment.deleted_at.is_(None))
-    rows, page = await paginate_by_id(session, query, TaskComment, limit, cursor)
+    rows, page = await paginate(session, query, TaskComment, limit, cursor, order_by=TaskComment.created_at)
     data = [
         CommentResponse(
             id=c.id,
-            author=user_ref(c.author_id, "Author"),
+            author=user_ref(c.author_id),
             body=c.body,
-            mentions=[user_ref(c.mentions, "Mentioned User")] if c.mentions else [],
+            mentions=[user_ref(uuid.UUID(user_id)) for user_id in c.mentions or []],
             created_at=c.created_at,
             edited_at=c.edited_at,
         )
@@ -696,16 +734,16 @@ async def add_comment(session: AsyncSession, org_id: uuid.UUID, user_id: uuid.UU
         task_id=task_id,
         author_id=user_id,
         body=body,
-        mentions=(data.mention_user_ids or [None])[0],
+        mentions=[str(user_id) for user_id in data.mention_user_ids or []],
         created_at=datetime.now(timezone.utc),
     )
     session.add(comment)
     await session.flush()
     return CommentResponse(
         id=comment.id,
-        author=user_ref(user_id, "Author"),
+        author=user_ref(user_id),
         body=comment.body,
-        mentions=[user_ref(uid, "Mentioned User") for uid in (data.mention_user_ids or [])],
+        mentions=[user_ref(uid) for uid in (data.mention_user_ids or [])],
         created_at=comment.created_at,
         edited_at=comment.edited_at,
     )
@@ -735,6 +773,8 @@ async def add_dependency(session: AsyncSession, org_id: uuid.UUID, task_id: uuid
     task = await _get_task(session, org_id, task_id)
     await _get_task(session, org_id, data.depends_on_task_id)
 
+    if await session.get(TaskDependency, (task_id, data.depends_on_task_id)):
+        return await _build_task_response(session, task)
     if await _has_path(session, data.depends_on_task_id, task_id):
         raise DependencyCycleError()
 
@@ -754,13 +794,13 @@ def _to_handover_response(h: Handover) -> HandoverResponse:
     return HandoverResponse(
         id=h.id,
         subject={"type": h.subject_type, "id": h.subject_id},
-        from_unit=unit_ref(h.from_unit_id, "From Unit"),
-        to_unit=unit_ref(h.to_unit_id, "To Unit"),
+        from_unit=unit_ref(h.from_unit_id),
+        to_unit=unit_ref(h.to_unit_id),
         status=h.status,
-        requested_by=user_ref(h.requested_by, "Requester"),
+        requested_by=user_ref(h.requested_by),
         reason=h.reason,
         notes=h.notes,
-        responded_by=user_ref(h.responded_by, "Responder") if h.responded_by else None,
+        responded_by=user_ref(h.responded_by) if h.responded_by else None,
         responded_at=h.responded_at,
         rejection_reason=h.rejection_reason,
         created_at=h.created_at,
@@ -773,7 +813,7 @@ async def list_handovers(session: AsyncSession, org_id: uuid.UUID, to_unit_id: O
         query = query.where(Handover.to_unit_id == to_unit_id)
     if status is not None:
         query = query.where(Handover.status == status)
-    rows, page = await paginate_by_id(session, query, Handover, limit, cursor)
+    rows, page = await paginate(session, query, Handover, limit, cursor, order_by=Handover.created_at, descending=True)
     return PageResponse(data=[_to_handover_response(h) for h in rows], page=page)
 
 
@@ -781,10 +821,9 @@ async def request_handover(session: AsyncSession, org_id: uuid.UUID, user_id: uu
     if data.from_unit_id == data.to_unit_id:
         raise SameUnitError()
 
-    if data.subject.type == "work.work_unit":
-        exists = await session.execute(select(WorkUnit).where(WorkUnit.id == data.subject.id, WorkUnit.organization_id == org_id))
-        if not exists.scalars().first():
-            raise SubjectNotFoundError()
+    handed_over = await _handover_subject(session, org_id, data.subject.type, data.subject.id)
+    if handed_over.owning_unit_id is not None and handed_over.owning_unit_id != data.from_unit_id:
+        raise ValidationFailedError("from_unit_id", "The work isn't owned by this unit")
 
     open_res = await session.execute(
         select(Handover).where(
@@ -822,6 +861,40 @@ async def _get_handover(session: AsyncSession, org_id: uuid.UUID, handover_id: u
     return handover
 
 
+async def _handover_subject(
+    session: AsyncSession, org_id: uuid.UUID, subject_type: str, subject_id: uuid.UUID
+) -> Task | WorkUnit:
+    """The task or project being handed over, checked to be the organization's and still open."""
+    if subject_type == TASK_SUBJECT:
+        task = await _get_task(session, org_id, subject_id)
+        if task.status in _TERMINAL_TASK_STATUSES:
+            raise InvalidStateTransitionError(task.status, "handed_over")
+        return task
+    if subject_type == WORK_UNIT_SUBJECT:
+        return await _subject_work_unit(session, org_id, subject_type, subject_id)
+    raise ValidationFailedError(
+        "subject.type", f"Only tasks ({TASK_SUBJECT}) and projects ({WORK_UNIT_SUBJECT}) can be handed over"
+    )
+
+
+async def _move_to_receiving_unit(session: AsyncSession, org_id: uuid.UUID, handover: Handover, user_id: uuid.UUID) -> None:
+    """
+    An accepted handover makes the receiving unit the owner. A task nobody has started yet goes
+    back to the unit's queue so they assign it themselves; work in progress keeps its assignee
+    and status.
+    """
+    handed_over = await _handover_subject(session, org_id, handover.subject_type, handover.subject_id)
+    handed_over.owning_unit_id = handover.to_unit_id
+    handed_over.version += 1
+    handed_over.updated_at = datetime.now(timezone.utc)
+    if not isinstance(handed_over, Task) or handed_over.status not in _NOT_STARTED_TASK_STATUSES:
+        return
+    if handed_over.status == "assigned":
+        await _record_status_history(session, handed_over, "assigned", "open", user_id, "Handed over to another unit")
+    handed_over.assignee_user_id = None
+    handed_over.status = "open"
+
+
 HANDOVER_ETAG = "1"  # Handover has no version column; see the workflow-version note for the same pattern.
 
 
@@ -835,6 +908,7 @@ async def accept_handover(session: AsyncSession, org_id: uuid.UUID, user_id: uui
     handover.status = "accepted"
     handover.responded_by = user_id
     handover.responded_at = datetime.now(timezone.utc)
+    await _move_to_receiving_unit(session, org_id, handover, user_id)
     if data.note:
         handover.notes = f"{handover.notes}\n{data.note}" if handover.notes else data.note
 
@@ -880,8 +954,8 @@ def _to_recurring_rule_response(rule: RecurringTaskRule, template_code: str) -> 
     return RecurringRuleResponse(
         id=rule.id,
         template_code=template_code,
-        subject={"type": rule.subject_type or "", "id": rule.subject_id or uuid.uuid4()},
-        owning_unit=unit_ref(rule.owning_unit_id, "Owning Unit"),
+        subject={"type": rule.subject_type, "id": rule.subject_id} if rule.subject_type and rule.subject_id else None,
+        owning_unit=unit_ref(rule.owning_unit_id),
         rrule=rule.rrule,
         timezone=rule.timezone,
         next_run_at=rule.next_run_at,
@@ -894,13 +968,17 @@ async def list_recurring_rules(session: AsyncSession, org_id: uuid.UUID, subject
     query = select(RecurringTaskRule).where(RecurringTaskRule.organization_id == org_id)
     if subject_id is not None:
         query = query.where(RecurringTaskRule.subject_id == subject_id)
-    rows, page = await paginate_by_id(session, query, RecurringTaskRule, limit, cursor)
-
-    data = []
-    for rule in rows:
-        template = await session.get(TaskTemplate, rule.template_id)
-        data.append(_to_recurring_rule_response(rule, template.code if template else ""))
-    return PageResponse(data=data, page=page)
+    rows, page = await paginate(session, query, RecurringTaskRule, limit, cursor, order_by=RecurringTaskRule.next_run_at)
+    template_codes = {}
+    if rows:
+        template_codes = dict(
+            (
+                await session.execute(
+                    select(TaskTemplate.id, TaskTemplate.code).where(TaskTemplate.id.in_({r.template_id for r in rows}))
+                )
+            ).all()
+        )
+    return PageResponse(data=[_to_recurring_rule_response(r, template_codes[r.template_id]) for r in rows], page=page)
 
 
 async def create_recurring_rule(session: AsyncSession, org_id: uuid.UUID, data: RecurringRuleCreate) -> RecurringRuleResponse:
@@ -938,7 +1016,7 @@ async def get_tasks_summary(session: AsyncSession, org_id: uuid.UUID, caller_use
     today_start = datetime(now.year, now.month, now.day, 0, 0, 0, tzinfo=timezone.utc)
     today_end = datetime(now.year, now.month, now.day, 23, 59, 59, 999999, tzinfo=timezone.utc)
 
-    open_statuses = ["todo", "in_progress", "in_review", "blocked"]
+    open_statuses = sorted(_OPEN_TASK_STATUSES)
 
     open_q = select(func.count(Task.id)).where(
         Task.organization_id == org_id,

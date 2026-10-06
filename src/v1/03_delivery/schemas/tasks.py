@@ -141,10 +141,10 @@ class TaskResponse(BaseModel):
     status: TaskStatus
     priority: TaskPriority
     task_type: TaskTypeRef
-    subject: SubjectRef
+    subject: Optional[SubjectRef] = None
     work_unit_id: Optional[uuid.UUID] = None
     workflow: Optional[dict] = None
-    owning_unit: UnitRef
+    owning_unit: Optional[UnitRef] = None
     assignee: Optional[UserRef] = None
     reviewer: Optional[UserRef] = None
     parent_task_id: Optional[uuid.UUID] = None
@@ -161,7 +161,7 @@ class TaskResponse(BaseModel):
     sla: Optional[TaskSla] = None
     attributes: dict = Field(default_factory=dict)
     version: int
-    created_by: UserRef
+    created_by: Optional[UserRef] = None
     created_at: datetime
     updated_at: datetime
 
@@ -170,7 +170,7 @@ class TaskHistoryItemResponse(BaseModel):
     at: datetime
     from_status: Optional[str] = None
     to_status: str
-    by: UserRef
+    by: Optional[UserRef] = None
     reason: Optional[str] = None
 
 
@@ -321,7 +321,7 @@ class RecurringRuleResponse(BaseModel):
 
     id: uuid.UUID
     template_code: str
-    subject: SubjectRef
+    subject: Optional[SubjectRef] = None
     owning_unit: UnitRef
     rrule: str
     timezone: str

@@ -4,6 +4,8 @@ The global permission catalog (`<service>.<entity>.<action>`) and the presets wi
 Shared by the seed script, org bootstrap and tests so the catalog has one definition.
 """
 
+from datetime import datetime, timezone
+
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -67,6 +69,21 @@ PERMISSION_CATALOG: list[tuple[str, str, str]] = [
     ("revenue.client.write", "revenue", "Add and edit customers and their contacts"),
     ("revenue.client_service.read", "revenue", "View the outside services clients use"),
     ("revenue.client_service.write", "revenue", "Add, edit and delete client services, providers and categories"),
+    # Delivery: projects (work units), tasks, time, handovers and workflows
+    ("delivery.work_unit.read", "delivery", "View projects with their milestones, team, risks and change requests"),
+    ("delivery.work_unit.write", "delivery", "Create and update projects, milestones, team, risks and change requests"),
+    ("delivery.change_request.approve", "delivery", "Approve or reject project change requests"),
+    ("delivery.task.read", "delivery", "View tasks and work on the ones assigned to you"),
+    ("delivery.task.write", "delivery", "Create, edit, assign, block and cancel tasks and set up recurring tasks"),
+    ("delivery.task.review", "delivery", "Review submitted tasks even when you aren't the named reviewer"),
+    ("delivery.time_entry.read", "delivery", "View the time everyone has logged"),
+    ("delivery.handover.read", "delivery", "View handovers of work between teams"),
+    ("delivery.handover.write", "delivery", "Request, accept and reject handovers of work between teams"),
+    ("delivery.template.manage", "delivery", "Manage project types, project templates, task types and task templates"),
+    ("delivery.workflow.read", "delivery", "View workflows and where each project is in them"),
+    ("delivery.workflow.manage", "delivery", "Design workflows and publish their versions"),
+    ("delivery.workflow.operate", "delivery", "Start workflows and move them between stages"),
+    ("delivery.workflow.approve", "delivery", "Approve or reject workflow steps that need approval"),
     ("document.read", "documents", "Read documents"),
     ("document.upload", "documents", "Upload documents and attach them to records"),
     ("document.share", "documents", "Share documents with people outside FBOS"),
@@ -93,8 +110,9 @@ async def ensure_permission_catalog(session: AsyncSession) -> list[str]:
     `admin` preset at the full catalog.
 
     Codes added by this call are also granted (organization-wide) to users who hold the
-    `admin` preset, so existing org admins keep full access when the catalog grows. Codes
-    that already existed are never re-granted, so individual revocations stick.
+    `admin` preset, so existing org admins keep full access when the catalog grows; the
+    added read codes likewise join every `member` preset (see `_top_up_member_presets`).
+    Codes that already existed are never re-granted, so individual revocations stick.
     Returns the newly added codes.
     """
     existing = {p.code: p for p in (await session.execute(select(Permission))).scalars().all()}
@@ -132,4 +150,71 @@ async def ensure_permission_catalog(session: AsyncSession) -> list[str]:
                     source_role_id=None, self_only=False,
                 ))
         await session.flush()
+
+    await _top_up_member_presets(session, member_permission_codes(added))
     return added
+
+
+async def _top_up_member_presets(session: AsyncSession, new_read_codes: list[str]) -> None:
+    """
+    New read codes join every org's `member` preset and reach the users holding it, in the
+    scope (and with the self-only limit and expiry) each was given it. Organizations get
+    their `member` preset when they are created, so without this a service whose
+    permissions arrive later would stay closed to every existing member.
+    """
+    if not new_read_codes:
+        return
+    member_role_ids = (
+        await session.execute(select(Role.id).where(Role.code == MEMBER_ROLE_CODE))
+    ).scalars().all()
+    if not member_role_ids:
+        return
+
+    for role_id in member_role_ids:
+        for code in new_read_codes:
+            session.add(RolePermission(role_id=role_id, permission_code=code))
+
+    now = datetime.now(timezone.utc).replace(tzinfo=None)  # naive UTC, like the column
+    current_assignments = (
+        await session.execute(
+            select(
+                RoleAssignment.organization_id,
+                RoleAssignment.user_id,
+                RoleAssignment.role_id,
+                RoleAssignment.scope_unit_id,
+                RoleAssignment.self_only,
+                RoleAssignment.valid_to,
+            ).where(
+                RoleAssignment.role_id.in_(member_role_ids),
+                RoleAssignment.valid_to.is_(None) | (RoleAssignment.valid_to > now),
+            )
+        )
+    ).all()
+
+    # A user may already hold one of these codes in the same scope: from the admin top-up
+    # above, or from the `member` preset applied twice. Grants are unique per scope.
+    granted = set(
+        (
+            await session.execute(
+                select(UserPermission.user_id, UserPermission.permission_code, UserPermission.scope_unit_id).where(
+                    UserPermission.permission_code.in_(new_read_codes)
+                )
+            )
+        ).all()
+    )
+    for assignment in current_assignments:
+        for code in new_read_codes:
+            grant_key = (assignment.user_id, code, assignment.scope_unit_id)
+            if grant_key in granted:
+                continue
+            granted.add(grant_key)
+            session.add(UserPermission(
+                organization_id=assignment.organization_id,
+                user_id=assignment.user_id,
+                permission_code=code,
+                scope_unit_id=assignment.scope_unit_id,
+                self_only=assignment.self_only,
+                source_role_id=assignment.role_id,
+                valid_to=assignment.valid_to,
+            ))
+    await session.flush()

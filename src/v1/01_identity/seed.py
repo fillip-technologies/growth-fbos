@@ -34,7 +34,7 @@ async def seed_identity():
 
     # 1. Tables come from Alembic migrations — run `alembic upgrade head` first.
     async with async_session_factory() as session:
-        # 2. Permission catalog (global) — also tops up every org's `admin` preset
+        # 2. Permission catalog (global) — also tops up every org's `admin` and `member` presets
         added = await ensure_permission_catalog(session)
         if added:
             print(f"   ✅ Added {len(added)} permission(s) to the catalog")

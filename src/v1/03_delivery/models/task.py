@@ -49,13 +49,13 @@ class Task(Base):
     task_type_id: Mapped[uuid.UUID] = mapped_column(
         UUIDType, ForeignKey("task_types.id", ondelete="RESTRICT"), nullable=False, index=True
     )
-    priority: Mapped[str] = mapped_column(String(50), nullable=False, default="medium")
+    priority: Mapped[str] = mapped_column(String(50), nullable=False, default="p3")
     template_id: Mapped[Optional[uuid.UUID]] = mapped_column(
         UUIDType, ForeignKey("task_templates.id", ondelete="SET NULL"), nullable=True, index=True
     )
 
     # Lifecycle & review state
-    status: Mapped[str] = mapped_column(String(50), nullable=False, default="todo", index=True)
+    status: Mapped[str] = mapped_column(String(50), nullable=False, default="open", index=True)
     review_round: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
 
     # Schedule & effort tracking

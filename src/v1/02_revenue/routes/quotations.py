@@ -3,12 +3,13 @@ from typing import Optional
 
 from fastapi import APIRouter, Depends, Header, Response, status
 
-from dependencies import Authorization, DatabaseSession, Documents, OrgId, require_permission
+from dependencies import Authorization, CurrentActor, DatabaseSession, Documents, OrgId, require_permission
 from schemas.quotation import (
     QuotationItemsReplace,
     QuotationReject,
     QuotationResponse,
 )
+from services import notifications
 from services.documents_client import SubjectRef
 from services.quotation_service import QuotationService
 
@@ -97,6 +98,7 @@ async def approve_quotation(
     quotation_id: uuid.UUID,
     session: DatabaseSession,
     org_id: OrgId,
+    actor: CurrentActor,
     response: Response,
     if_match: Optional[str] = Header(None, alias="If-Match"),
 ) -> QuotationResponse:
@@ -105,6 +107,7 @@ async def approve_quotation(
         session=session, quotation_id=quotation_id, org_id=org_id, if_match=if_match
     )
     await session.commit()
+    await notifications.quotation_approved(session, actor, quotation)
     response.headers["ETag"] = f'"{quotation.version}"'
     return quotation
 
@@ -174,6 +177,7 @@ async def accept_quotation(
     quotation_id: uuid.UUID,
     session: DatabaseSession,
     org_id: OrgId,
+    actor: CurrentActor,
     response: Response,
     if_match: Optional[str] = Header(None, alias="If-Match"),
     idempotency_key: Optional[str] = Header(None, alias="Idempotency-Key"),
@@ -186,6 +190,7 @@ async def accept_quotation(
         if_match=if_match,
     )
     await session.commit()
+    await notifications.deal_won(session, actor, quotation)
     response.headers["ETag"] = f'"{quotation.version}"'
     return quotation
 

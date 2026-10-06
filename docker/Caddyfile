@@ -1,4 +1,4 @@
-api.hamsasoham.com {
+api.fbos.com {
     reverse_proxy gateway:8000 {
         header_up X-Forwarded-Proto {scheme}
         header_up X-Real-IP {remote_host}

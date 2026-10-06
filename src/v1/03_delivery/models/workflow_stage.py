@@ -22,7 +22,7 @@ class Stage(Base):
     code: Mapped[str] = mapped_column(String(100), nullable=False, index=True)
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     seq: Mapped[int] = mapped_column(Integer, nullable=False)
-    stage_type: Mapped[str] = mapped_column(String(50), nullable=False, default="standard")
+    stage_type: Mapped[str] = mapped_column(String(50), nullable=False, default="normal")
     owner_unit_selector: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
     sla_policy_code: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
     exit_criteria: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
