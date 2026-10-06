@@ -24,7 +24,7 @@ import uuid
 from datetime import date, datetime, timezone
 from typing import Optional
 
-from sqlalchemy import func, or_, select
+from sqlalchemy import ColumnElement, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from exceptions import (
@@ -63,6 +63,7 @@ from models.task_tracking import TaskComment, TaskReview, TaskStatusHistory, Tim
 from models.work_unit import WorkUnit
 from schemas.common import PageResponse
 from schemas.tasks import (
+    AssignmentResponse,
     ChecklistItemResponse,
     ChecklistItemUpdate,
     CommentCreate,
@@ -102,7 +103,8 @@ from services.pagination import paginate
 from services.refs import unit_ref, user_ref
 
 _OPEN_TASK_STATUSES = {"draft", "open", "assigned", "in_progress", "blocked", "submitted", "in_review", "rework"}
-_NOT_STARTED_TASK_STATUSES = {"open", "assigned"}
+# Submitted work waits for its reviewer, not its assignee.
+_WAITING_FOR_REVIEW = {"submitted", "in_review"}
 # Subject types, as identity's object-type registry names them.
 WORK_UNIT_SUBJECT = "work.work_unit"
 TASK_SUBJECT = "task.task"
@@ -203,12 +205,57 @@ async def _build_task_response(session: AsyncSession, task: Task) -> TaskRespons
     return (await _task_responses(session, [task]))[0]
 
 
+def own_tasks(user_id: uuid.UUID) -> ColumnElement[bool]:
+    """Someone's own tasks: assigned to them, theirs to review, or created by them."""
+    return or_(Task.assignee_user_id == user_id, Task.reviewer_user_id == user_id, Task.created_by == user_id)
+
+
+async def ensure_own_task(session: AsyncSession, org_id: uuid.UUID, task_id: uuid.UUID, user_id: uuid.UUID) -> None:
+    """Anyone else's task is "not found" for someone who may see only their own."""
+    found = await session.execute(
+        select(Task.id).where(Task.id == task_id, Task.organization_id == org_id, own_tasks(user_id))
+    )
+    if found.scalar_one_or_none() is None:
+        raise TaskNotFoundError(str(task_id))
+
+
 async def _get_task(session: AsyncSession, org_id: uuid.UUID, task_id: uuid.UUID) -> Task:
     res = await session.execute(select(Task).where(Task.id == task_id, Task.organization_id == org_id))
     task = res.scalars().first()
     if not task:
         raise TaskNotFoundError(str(task_id))
     return task
+
+
+async def _end_assignments(session: AsyncSession, task: Task, role: str, reason: str) -> None:
+    """Close the task's current `role` assignment records, keeping them as history."""
+    current = await session.execute(
+        select(TaskAssignment).where(
+            TaskAssignment.task_id == task.id, TaskAssignment.assignment_role == role, TaskAssignment.ended_at.is_(None)
+        )
+    )
+    for assignment in current.scalars().all():
+        assignment.ended_at = datetime.now(timezone.utc)
+        assignment.end_reason = reason
+
+
+async def list_assignments(session: AsyncSession, org_id: uuid.UUID, task_id: uuid.UUID) -> list[AssignmentResponse]:
+    """Everyone the task was given to, in which role and until when: oldest first."""
+    await _get_task(session, org_id, task_id)
+    rows = await session.execute(
+        select(TaskAssignment).where(TaskAssignment.task_id == task_id).order_by(TaskAssignment.assigned_at)
+    )
+    return [
+        AssignmentResponse(
+            user=user_ref(a.user_id),
+            role=a.assignment_role,
+            assigned_by=user_ref(a.assigned_by),
+            assigned_at=a.assigned_at,
+            ended_at=a.ended_at,
+            end_reason=a.end_reason,
+        )
+        for a in rows.scalars().all()
+    ]
 
 
 async def _record_status_history(session: AsyncSession, task: Task, from_status: Optional[str], to_status: str, user_id: Optional[uuid.UUID], reason: Optional[str] = None) -> None:
@@ -375,8 +422,12 @@ async def list_tasks(
     q: Optional[str],
     limit: int,
     cursor: Optional[str],
+    own_records_of: Optional[uuid.UUID] = None,
 ) -> PageResponse[TaskResponse]:
+    """Tasks matching the filters; only `own_records_of`'s own ones when it is given."""
     query = select(Task).where(Task.organization_id == org_id)
+    if own_records_of is not None:
+        query = query.where(own_tasks(own_records_of))
 
     if assignee == "me":
         query = query.where(Task.assignee_user_id == caller_user_id)
@@ -484,10 +535,74 @@ async def create_task(session: AsyncSession, org_id: uuid.UUID, user_id: uuid.UU
         session.add(ChecklistItem(task_id=task.id, seq=seq, text=item.text, mandatory=item.mandatory if item.mandatory is not None else True))
     if data.assignee_user_id is not None:
         session.add(TaskAssignment(task_id=task.id, unit_id=task.owning_unit_id, user_id=data.assignee_user_id, assigned_by=user_id))
+    if data.reviewer_user_id is not None:
+        session.add(TaskAssignment(
+            task_id=task.id, unit_id=task.owning_unit_id, user_id=data.reviewer_user_id, assignment_role="reviewer", assigned_by=user_id,
+        ))
 
     await _record_status_history(session, task, None, status_value, user_id)
     await session.flush()
     return await _build_task_response(session, task)
+
+
+async def create_stage_task(
+    session: AsyncSession,
+    organization_id: uuid.UUID,
+    template: TaskTemplate,
+    *,
+    title: Optional[str],
+    subject_type: str,
+    subject_id: uuid.UUID,
+    work_unit_id: Optional[uuid.UUID],
+    owning_unit_id: Optional[uuid.UUID],
+    assignee_user_id: Optional[uuid.UUID],
+    due_at: Optional[datetime],
+    workflow_instance_id: uuid.UUID,
+    stage_run_id: uuid.UUID,
+    required: bool,
+) -> Task:
+    """A task a workflow creates when a stage is entered, from one of the organization's task
+    templates. Nobody created it, so it has no creator; `required` ones hold the stage open."""
+    status_value = "assigned" if assignee_user_id else "open"
+    task = Task(
+        organization_id=organization_id,
+        code=await next_task_code(session, organization_id),
+        subject_type=subject_type,
+        subject_id=subject_id,
+        work_unit_id=work_unit_id,
+        workflow_instance_id=workflow_instance_id,
+        stage_run_id=stage_run_id,
+        source="workflow",
+        title=title or template.title_template,
+        description=template.description,
+        owning_unit_id=owning_unit_id,
+        assignee_user_id=assignee_user_id,
+        task_type_id=template.task_type_id,
+        template_id=template.id,
+        priority=template.default_priority,
+        status=status_value,
+        due_at=due_at,
+        estimate_minutes=template.estimate_minutes,
+        attributes={"labels": [], "required_for_stage": required},
+        created_by=None,
+        version=1,
+    )
+    session.add(task)
+    await session.flush()
+    for seq, item in enumerate(template.checklist or [], start=1):
+        session.add(ChecklistItem(task_id=task.id, seq=seq, text=item["text"], mandatory=item.get("mandatory", True)))
+    if assignee_user_id is not None:
+        session.add(TaskAssignment(task_id=task.id, unit_id=owning_unit_id, user_id=assignee_user_id))
+    await _record_status_history(session, task, None, status_value, None, "Created by the workflow")
+    return task
+
+
+async def open_required_stage_tasks(session: AsyncSession, stage_run_id: uuid.UUID) -> list[Task]:
+    """The stage run's required tasks that are still open: the workflow can't leave the stage yet."""
+    tasks = await session.execute(
+        select(Task).where(Task.stage_run_id == stage_run_id, Task.status.notin_(_TERMINAL_TASK_STATUSES))
+    )
+    return [t for t in tasks.scalars().all() if (t.attributes or {}).get("required_for_stage")]
 
 
 async def get_task(session: AsyncSession, org_id: uuid.UUID, task_id: uuid.UUID) -> TaskResponse:
@@ -536,31 +651,21 @@ async def assign_task(session: AsyncSession, org_id: uuid.UUID, user_id: uuid.UU
         raise InvalidStateTransitionError(task.status, "assigned")
 
     from_status = task.status
-    task.assignee_user_id = data.assignee_user_id
-    if data.reviewer_user_id is not None:
+    # Only a change of person is recorded; the people replaced keep their records, ended, as history.
+    if task.assignee_user_id != data.assignee_user_id:
+        await _end_assignments(session, task, "assignee", "Reassigned")
+        session.add(TaskAssignment(
+            task_id=task.id, unit_id=task.owning_unit_id, user_id=data.assignee_user_id, assignment_role="assignee", assigned_by=user_id,
+        ))
+        task.assignee_user_id = data.assignee_user_id
+    if data.reviewer_user_id is not None and task.reviewer_user_id != data.reviewer_user_id:
+        await _end_assignments(session, task, "reviewer", "Reviewer changed")
+        session.add(TaskAssignment(
+            task_id=task.id, unit_id=task.owning_unit_id, user_id=data.reviewer_user_id, assignment_role="reviewer", assigned_by=user_id,
+        ))
         task.reviewer_user_id = data.reviewer_user_id
     if task.status in ("open", "draft"):
         task.status = "assigned"
-
-    session.add(
-        TaskAssignment(
-            task_id=task.id,
-            unit_id=task.owning_unit_id,
-            user_id=data.assignee_user_id,
-            assignment_role="assignee",
-            assigned_by=user_id,
-        )
-    )
-    if data.reviewer_user_id is not None:
-        session.add(
-            TaskAssignment(
-                task_id=task.id,
-                unit_id=task.owning_unit_id,
-                user_id=data.reviewer_user_id,
-                assignment_role="reviewer",
-                assigned_by=user_id,
-            )
-        )
 
     if task.status != from_status:
         await _record_status_history(session, task, from_status, task.status, user_id, data.note)
@@ -1082,20 +1187,23 @@ async def _handover_subject(
 
 async def _move_to_receiving_unit(session: AsyncSession, org_id: uuid.UUID, handover: Handover, user_id: uuid.UUID) -> None:
     """
-    An accepted handover makes the receiving unit the owner. A task nobody has started yet goes
-    back to the unit's queue so they assign it themselves; work in progress keeps its assignee
-    and status.
+    An accepted handover makes the receiving unit the owner of the work. A task comes off its
+    assignee, started or not, and the receiving unit assigns one of its own people; whoever
+    worked on it stays in the task's history (their ended assignment and its status changes).
+    Work being done goes back to the unit's queue; work waiting for review stays with its
+    reviewer.
     """
     handed_over = await _handover_subject(session, org_id, handover.subject_type, handover.subject_id)
     handed_over.owning_unit_id = handover.to_unit_id
     handed_over.version += 1
     handed_over.updated_at = datetime.now(timezone.utc)
-    if not isinstance(handed_over, Task) or handed_over.status not in _NOT_STARTED_TASK_STATUSES:
+    if not isinstance(handed_over, Task):
         return
-    if handed_over.status == "assigned":
-        await _record_status_history(session, handed_over, "assigned", "open", user_id, "Handed over to another unit")
+    await _end_assignments(session, handed_over, "assignee", "Handed over to another team")
     handed_over.assignee_user_id = None
-    handed_over.status = "open"
+    if handed_over.status not in _WAITING_FOR_REVIEW | {"open"}:
+        await _record_status_history(session, handed_over, handed_over.status, "open", user_id, "Handed over to another team")
+        handed_over.status = "open"
 
 
 async def get_handover(session: AsyncSession, org_id: uuid.UUID, handover_id: uuid.UUID) -> HandoverResponse:

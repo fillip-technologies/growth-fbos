@@ -91,3 +91,9 @@ async def test_new_read_codes_reach_member_presets_and_their_holders(async_clien
 
     # Nothing new the second time: revocations made after the top-up stick.
     assert await permission_catalog.ensure_permission_catalog(db_session) == []
+
+
+def test_member_preset_leaves_out_sensitive_reads():
+    # Approval requests show deals, discounts and costs company-wide: granted per person instead.
+    codes = ["control.approval.read", "control.sla.read", "control.sla.write", "identity.audit_log.read"]
+    assert permission_catalog.member_permission_codes(codes) == ["control.sla.read"]

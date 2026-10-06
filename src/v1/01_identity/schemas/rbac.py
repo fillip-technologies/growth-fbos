@@ -113,6 +113,9 @@ class ActorResponse(BaseModel):
     is_superuser: bool
     # Permission codes held in at least one scope; client admins hold the full catalog.
     permissions: list[str]
+    # Of those, the codes held only for the user's own records (every grant is "own records
+    # only"): services limit what they show under them to records the user owns or works on.
+    own_records_only: list[str] = Field(default_factory=list)
 
 
 class GrantsResponse(BaseModel):

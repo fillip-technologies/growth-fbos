@@ -3,7 +3,7 @@ The endpoints the console's setup pages and detail screens need: types and templ
 a project's team, milestones, risks and change requests, a task's dependencies, reviews
 and time.
 """
-from datetime import date
+from datetime import date, timedelta
 import uuid
 
 import pytest
@@ -102,13 +102,27 @@ async def test_project_team_milestones_risks_and_change_requests(async_client):
     }
     approved = await ok(await async_client.post(f"{BASE}/work-units/{pid}/change-requests", json=change), 201)
     rejected = await ok(await async_client.post(f"{BASE}/work-units/{pid}/change-requests", json=change), 201)
+    # The cost goes into the project's budget, so another currency is refused rather than mixed in.
+    in_dollars = {"cost_impact": {"amount": 60, "currency": "USD"}}
+    refused = await async_client.post(f"{BASE}/work-units/{pid}/change-requests", json={**change, **in_dollars})
+    assert (refused.status_code, error_code(refused)) == (422, "VALIDATION_ERROR")
     draft_refused = await async_client.post(f"{BASE}/change-requests/{rejected['id']}/reject", json={"reason": "No"}, headers={"If-Match": '"1"'})
     assert (draft_refused.status_code, error_code(draft_refused)) == (409, "INVALID_STATE_TRANSITION")
     for cr in (approved, rejected):
         await ok(await async_client.post(f"{BASE}/change-requests/{cr['id']}/submit", headers={"If-Match": '"1"'}))
 
-    approved = await ok(await async_client.post(f"{BASE}/change-requests/{approved['id']}/approve", json={"note": "Go"}, headers={"If-Match": '"1"'}))
+    refused = await async_client.post(f"{BASE}/change-requests/{approved['id']}/approve", json=in_dollars, headers={"If-Match": '"1"'})
+    assert (refused.status_code, error_code(refused)) == (422, "VALIDATION_ERROR")
+
+    # The approver decides the impact from the change in work: 7 days and 4000, not the 10 days and 5000 asked.
+    decision = {"note": "Go", "schedule_impact_days": 7, "cost_impact": {"amount": 4000, "currency": "INR"}}
+    approved = await ok(await async_client.post(f"{BASE}/change-requests/{approved['id']}/approve", json=decision, headers={"If-Match": '"1"'}))
     assert (approved["status"], approved["decided_by"]["id"], approved["decision_note"]) == ("approved", str(TEST_USER_ID), "Go")
+    assert (approved["schedule_impact_days"], approved["cost_impact"]["amount"]) == (10, "5000.00")  # what was asked stays
+    assert (approved["approved_schedule_impact_days"], approved["approved_cost_impact"]["amount"]) == (7, "4000.00")
+    moved = await ok(await async_client.get(f"{BASE}/work-units/{pid}"))
+    assert moved["planned_end"] == (date.fromisoformat(project["planned_end"]) + timedelta(days=7)).isoformat()
+    assert (moved["budget"]["approved"]["amount"], moved["budget"]["planned"]["amount"]) == ("4000.00", "4000.00")
     rejected = await ok(await async_client.post(f"{BASE}/change-requests/{rejected['id']}/reject", json={"reason": "Over budget"}, headers={"If-Match": '"1"'}))
     assert (rejected["status"], rejected["decision_note"]) == ("rejected", "Over budget")
     listed = await ok(await async_client.get(f"{BASE}/work-units/{pid}/change-requests"))
@@ -144,3 +158,56 @@ async def test_task_dependencies_reviews_time_and_handover_details(async_client,
         json={"subject": {"type": "task.task", "id": handed["id"]}, "from_unit_id": team_a, "to_unit_id": team_b, "reason": "Skills"},
     ), 201)
     assert (await ok(await async_client.get(f"{BASE}/handovers/{handover['id']}")))["reason"] == "Skills"
+
+
+async def test_a_handed_over_task_comes_off_its_assignee_and_keeps_the_history(async_client):
+    team_a, team_b, colleague = str(uuid.uuid4()), str(uuid.uuid4()), str(uuid.uuid4())
+    working = await create_task(async_client, owning_unit_id=team_a, assignee_user_id=str(TEST_USER_ID))
+    working = await ok(await async_client.post(f"{BASE}/tasks/{working['id']}/start", headers=if_match(working)))
+    waiting = await create_task(async_client, task_type_code="feature", owning_unit_id=team_a, assignee_user_id=str(TEST_USER_ID))
+    waiting = await ok(await async_client.post(f"{BASE}/tasks/{waiting['id']}/start", headers=if_match(waiting)))
+    waiting = await ok(await async_client.post(f"{BASE}/tasks/{waiting['id']}/submit", json={}, headers=if_match(waiting)))
+    assert (working["status"], waiting["status"]) == ("in_progress", "submitted")
+
+    for task in (working, waiting):
+        handover = await ok(await async_client.post(f"{BASE}/handovers", json={
+            "subject": {"type": "task.task", "id": task["id"]}, "from_unit_id": team_a, "to_unit_id": team_b, "reason": "Re-org",
+        }), 201)
+        await ok(await async_client.post(f"{BASE}/handovers/{handover['id']}/accept", json={}, headers={"If-Match": '"1"'}))
+
+    working = await ok(await async_client.get(f"{BASE}/tasks/{working['id']}"))
+    waiting = await ok(await async_client.get(f"{BASE}/tasks/{waiting['id']}"))
+    # The receiving team assigns its own person; submitted work stays with its reviewer.
+    assert (working["owning_unit"]["id"], working["assignee"], working["status"]) == (team_b, None, "open")
+    assert (waiting["assignee"], waiting["status"]) == (None, "submitted")
+
+    last_change = (await ok(await async_client.get(f"{BASE}/tasks/{working['id']}/history")))["data"][-1]
+    assert (last_change["from_status"], last_change["to_status"], last_change["reason"]) == ("in_progress", "open", "Handed over to another team")
+    [earlier] = await ok(await async_client.get(f"{BASE}/tasks/{working['id']}/assignments"))
+    assert (earlier["user"]["id"], earlier["role"], earlier["end_reason"]) == (str(TEST_USER_ID), "assignee", "Handed over to another team")
+    assert earlier["ended_at"] is not None
+
+    # Reassigning keeps the replaced person's record too.
+    for person in (str(TEST_USER_ID), colleague):
+        working = await ok(await async_client.post(f"{BASE}/tasks/{working['id']}/assign", json={"assignee_user_id": person}, headers=if_match(working)))
+    assignments = await ok(await async_client.get(f"{BASE}/tasks/{working['id']}/assignments"))
+    assert [(a["user"]["id"], a["end_reason"]) for a in assignments] == [
+        (str(TEST_USER_ID), "Handed over to another team"),
+        (str(TEST_USER_ID), "Reassigned"),
+        (colleague, None),
+    ]
+
+    # Sending the same assignee again records nothing new; a new reviewer ends the old one's record.
+    reviewer, next_reviewer = str(uuid.uuid4()), str(uuid.uuid4())
+    for person in (reviewer, next_reviewer):
+        working = await ok(await async_client.post(
+            f"{BASE}/tasks/{working['id']}/assign",
+            json={"assignee_user_id": colleague, "reviewer_user_id": person},
+            headers=if_match(working),
+        ))
+    assignments = await ok(await async_client.get(f"{BASE}/tasks/{working['id']}/assignments"))
+    assert [(a["user"]["id"], a["role"], a["end_reason"]) for a in assignments[2:]] == [
+        (colleague, "assignee", None),
+        (reviewer, "reviewer", "Reviewer changed"),
+        (next_reviewer, "reviewer", None),
+    ]

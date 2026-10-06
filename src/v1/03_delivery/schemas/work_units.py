@@ -332,12 +332,19 @@ class ChangeRequestResponse(BaseModel):
     decided_by: Optional[UserRef] = None
     decided_at: Optional[datetime] = None
     decision_note: Optional[str] = None
+    # What the approver decided; schedule_impact_days / cost_impact keep what was asked for.
+    approved_schedule_impact_days: Optional[int] = None
+    approved_cost_impact: Optional[Money] = None
 
 
 class ChangeRequestApprove(BaseModel):
+    """The approver decides the impact from the change in work; omitted values approve what was asked."""
+
     model_config = ConfigDict(extra="forbid")
 
     note: Optional[str] = None
+    schedule_impact_days: Optional[int] = None
+    cost_impact: Optional[Money] = None
 
 
 class ChangeRequestReject(BaseModel):

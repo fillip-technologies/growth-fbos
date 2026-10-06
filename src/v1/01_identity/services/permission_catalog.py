@@ -70,10 +70,10 @@ PERMISSION_CATALOG: list[tuple[str, str, str]] = [
     ("revenue.client_service.read", "revenue", "View the outside services clients use"),
     ("revenue.client_service.write", "revenue", "Add, edit and delete client services, providers and categories"),
     # Delivery: projects (work units), tasks, time, handovers and workflows
-    ("delivery.work_unit.read", "delivery", "View projects with their milestones, team, risks and change requests"),
+    ("delivery.work_unit.read", "delivery", "View projects with their milestones, team, risks and change requests (own records only: the projects you manage, are on or have tasks in)"),
     ("delivery.work_unit.write", "delivery", "Create and update projects, milestones, team, risks and change requests"),
     ("delivery.change_request.approve", "delivery", "Approve or reject project change requests"),
-    ("delivery.task.read", "delivery", "View tasks and work on the ones assigned to you"),
+    ("delivery.task.read", "delivery", "View tasks and work on the ones assigned to you (own records only: just the tasks you're assigned, review or created)"),
     ("delivery.task.write", "delivery", "Create, edit, assign, block and cancel tasks and set up recurring tasks"),
     ("delivery.task.review", "delivery", "Review submitted tasks even when you aren't the named reviewer"),
     ("delivery.time_entry.read", "delivery", "View the time everyone has logged"),
@@ -84,6 +84,12 @@ PERMISSION_CATALOG: list[tuple[str, str, str]] = [
     ("delivery.workflow.manage", "delivery", "Design workflows and publish their versions"),
     ("delivery.workflow.operate", "delivery", "Start workflows and move them between stages"),
     ("delivery.workflow.approve", "delivery", "Approve or reject workflow steps that need approval"),
+    ("control.approval.read", "control", "View approval requests and policies, decide the requests waiting for you and delegate your own approvals (own records only: just the requests you raised or are asked to decide)"),
+    ("control.approval.write", "control", "Raise approval requests and cancel the ones you raised"),
+    ("control.approval.manage", "control", "Set up approval policies and cancel anyone's approval request"),
+    ("control.sla.read", "control", "View SLA policies, clocks and escalations"),
+    ("control.sla.write", "control", "Request SLA exceptions and acknowledge escalations"),
+    ("control.sla.manage", "control", "Set up SLA policies"),
     ("document.read", "documents", "Read documents"),
     ("document.upload", "documents", "Upload documents"),
 ]
@@ -92,9 +98,10 @@ ADMIN_ROLE_CODE = "admin"
 MEMBER_ROLE_CODE = "member"
 
 
-# Reads of other people's security data (sign-in places, IP addresses); the `member`
-# preset leaves them out.
-SENSITIVE_READ_CODES = {"identity.session.read", "identity.audit_log.read"}
+# Reads the `member` preset leaves out: other people's security data (sign-in places, IP
+# addresses), and approval requests, which show deals, discounts and costs across the
+# company (grant that one per person, "own records only" for people who just decide).
+SENSITIVE_READ_CODES = {"identity.session.read", "identity.audit_log.read", "control.approval.read"}
 
 
 def member_permission_codes(catalog_codes: list[str]) -> list[str]:

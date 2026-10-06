@@ -405,6 +405,40 @@ async def test_user_without_permission_is_denied_and_revocation_is_immediate(asy
 
 
 @pytest.mark.asyncio
+async def test_every_catalog_code_can_be_granted_and_others_are_unknown(async_client, db_session):
+    # The console sends back everything a user holds, so the catalog's two-part codes must save too.
+    person = await make_user(db_session, "documents@example.com")
+    saved = await async_client.put(
+        f"{API}/users/{person.id}/permissions",
+        json={"permissions": [{"code": "document.read"}, {"code": "document.upload"}], "reason": "Documents"},
+    )
+    assert saved.status_code == 200, saved.text
+    assert sorted(p["code"] for p in saved.json()["permissions"]) == ["document.read", "document.upload"]
+
+    unknown = await async_client.put(
+        f"{API}/users/{person.id}/permissions", json={"permissions": [{"code": "document.shred"}], "reason": "x"}
+    )
+    assert unknown.status_code == 422
+    assert "Unknown permission 'document.shred'" in unknown.text
+
+
+@pytest.mark.asyncio
+async def test_internal_actor_names_the_codes_held_only_for_own_records(async_client, db_session):
+    # Other services (delivery) limit what they show under these codes to the caller's own records.
+    units = await make_units(async_client)
+    person = await make_user(db_session, "own.tasks@example.com", grants=[
+        ("delivery.task.read", None, True),
+        ("delivery.work_unit.read", None, True),
+        ("delivery.work_unit.read", uuid.UUID(units["DEPT-A"]), False),  # a unit grant lifts the limit
+        ("identity.user.read", None, False),
+    ])
+    act_as(person.id)
+    actor = (await async_client.get(f"{API}/internal/authz/actor")).json()
+    assert actor["permissions"] == ["delivery.task.read", "delivery.work_unit.read", "identity.user.read"]
+    assert actor["own_records_only"] == ["delivery.task.read"]
+
+
+@pytest.mark.asyncio
 async def test_inactive_actor_is_rejected(async_client, db_session):
     gone = await make_user(db_session, "gone.actor@example.com", status="deactivated",
                            grants=[("identity.user.read", None, False)])
