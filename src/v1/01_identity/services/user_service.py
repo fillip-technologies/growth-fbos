@@ -4,7 +4,7 @@ import secrets
 from typing import Optional
 import uuid
 
-from sqlalchemy import func, select, update
+from sqlalchemy import delete, func, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -13,6 +13,7 @@ from exceptions import (
     IdentityServiceError,
     OrganizationNotFoundError,
     OrganizationUserLimitReachedError,
+    OrgUnitNotFoundError,
     PermissionDeniedError,
     PreconditionFailedError,
     SelfModificationError,
@@ -33,6 +34,7 @@ from schemas.user import (
     HomeUnitRef,
     InvitationResponse,
     ManagerRef,
+    TeamRef,
     UserDeactivateRequest,
     UserInviteRequest,
     UserPermissionsReplace,
@@ -50,7 +52,10 @@ from utils.dates import iso_utc
 logger = logging.getLogger("identity.user_service")
 
 INVITATION_TTL = timedelta(hours=72)
+# `unit_memberships.member_role`: the one row mirroring `users.home_unit_id` (where they work),
+# and extra rows for teams they also belong to. Only teams take extra members.
 HOME_UNIT_ROLE = "home_unit"
+TEAM_MEMBER_ROLE = "team_member"
 
 PERM_READ = "identity.user.read"
 PERM_CREATE = "identity.user.create"
@@ -77,7 +82,13 @@ def _assert_version(if_match: str, current_version: int) -> None:
 class UserService:
     # ------------------------------------------------------------------ helpers
 
-    async def _build_user_response(self, session: AsyncSession, user: User) -> UserResponse:
+    async def _build_user_response(
+        self, session: AsyncSession, user: User, teams: Optional[list[TeamRef]] = None
+    ) -> UserResponse:
+        """`teams` can be passed in when a whole page was loaded at once (see `_teams_of`)."""
+        if teams is None:
+            teams = (await self._teams_of(session, [user.id])).get(user.id, [])
+
         home_unit_ref: Optional[HomeUnitRef] = None
         if user.home_unit_id:
             unit = await session.get(OrgUnit, user.home_unit_id)
@@ -106,6 +117,7 @@ class UserService:
             user_type=user.user_type,
             status=user.status,
             home_unit=home_unit_ref,
+            teams=teams,
             manager=manager_ref,
             mfa_enabled=bool(cred and cred.otp_enabled),
             last_login_at=iso_utc(user.last_login_at),
@@ -113,6 +125,25 @@ class UserService:
             created_at=iso_utc(user.created_at),
             invitation_expires_at=invitation_expires_at,
         )
+
+    async def _teams_of(self, session: AsyncSession, user_ids: list[uuid.UUID]) -> dict[uuid.UUID, list[TeamRef]]:
+        """
+        Teams each user is an extra member of, by name, in one query. `unit_memberships` has no
+        unique index, so a double submit can leave a duplicate row; DISTINCT folds it away.
+        """
+        if not user_ids:
+            return {}
+        rows = await session.execute(
+            select(UnitMembership.user_id, OrgUnit.id, OrgUnit.name)
+            .join(OrgUnit, OrgUnit.id == UnitMembership.unit_id)
+            .where(UnitMembership.user_id.in_(user_ids), UnitMembership.member_role == TEAM_MEMBER_ROLE)
+            .distinct()
+            .order_by(OrgUnit.name)
+        )
+        teams_by_user: dict[uuid.UUID, list[TeamRef]] = {}
+        for user_id, team_id, team_name in rows:
+            teams_by_user.setdefault(user_id, []).append(TeamRef(id=team_id, name=team_name))
+        return teams_by_user
 
     async def _unit_path(self, session: AsyncSession, unit_id: Optional[uuid.UUID]) -> Optional[str]:
         if unit_id is None:
@@ -183,6 +214,59 @@ class UserService:
         if not actor.can(permission, unit.path):
             raise PermissionDeniedError(permission, "You can't place users in this organization unit")
         return unit
+
+    def _assert_changeable(self, actor: Actor, user: User) -> None:
+        """Rules for changing anything about a user: their profile, their place or their teams."""
+        if user.user_type == "client_admin" and not actor.is_superuser:
+            raise PermissionDeniedError(
+                "client_admin", "Only a client administrator can change a client administrator"
+            )
+        if user.status == "deactivated":
+            raise IdentityServiceError(
+                status_code=409, code="USER_DEACTIVATED", message="A deactivated user can't be changed",
+            )
+
+    async def _change_home_unit(
+        self, session: AsyncSession, actor: Actor, user: User, unit_id: Optional[uuid.UUID]
+    ) -> None:
+        """
+        Move the user to `unit_id`, or clear their place when it is None (company-wide rights
+        only). Moving needs update rights in the destination unit too.
+        """
+        unit = await self._resolve_home_unit(session, actor, unit_id, PERM_UPDATE)
+        await session.execute(
+            delete(UnitMembership).where(
+                UnitMembership.user_id == user.id, UnitMembership.member_role == HOME_UNIT_ROLE
+            )
+        )
+        if unit is None:
+            user.home_unit_id = None
+            return
+
+        user.home_unit_id = unit.id
+        # Working in the team now: an extra membership of it would list them there twice.
+        await session.execute(
+            delete(UnitMembership).where(
+                UnitMembership.user_id == user.id,
+                UnitMembership.unit_id == unit.id,
+                UnitMembership.member_role == TEAM_MEMBER_ROLE,
+            )
+        )
+        session.add(UnitMembership(
+            id=uuid.uuid4(), user_id=user.id, unit_id=unit.id, member_role=HOME_UNIT_ROLE,
+        ))
+
+    async def _publish_user_updated(self, actor: Actor, user: User, changed: list[str]) -> None:
+        await event_publisher.publish(
+            "identity.user.updated.v1",
+            {
+                "user_id": str(user.id),
+                "organization_id": str(user.organization_id),
+                "changed": changed,
+                "version": user.version,
+                "actor_id": str(actor.user_id),
+            },
+        )
 
     async def _resolve_manager(
         self,
@@ -295,6 +379,7 @@ class UserService:
         actor: Actor,
         status: Optional[UserStatus] = None,
         unit_id: Optional[uuid.UUID] = None,
+        team_id: Optional[uuid.UUID] = None,
         role_code: Optional[str] = None,
         q: Optional[str] = None,
         limit: int = 25,
@@ -320,6 +405,16 @@ class UserService:
             )
             query = query.where(User.home_unit_id.in_(units_below))
 
+        if team_id:
+            # Everyone in the team: those who work in it and its extra members.
+            team = await session.get(OrgUnit, team_id)
+            if not team or team.organization_id != actor.organization_id or team.unit_type != "team":
+                return PaginatedResponse(data=[], page=PageInfo(next_cursor=None, has_more=False, limit=limit))
+            extra_members = select(UnitMembership.user_id).where(
+                UnitMembership.unit_id == team.id, UnitMembership.member_role == TEAM_MEMBER_ROLE
+            )
+            query = query.where((User.home_unit_id == team.id) | User.id.in_(extra_members))
+
         if role_code:
             holders = (
                 select(RoleAssignment.user_id)
@@ -343,8 +438,9 @@ class UserService:
 
         has_more = len(users) > limit
         users = users[:limit]
+        teams_by_user = await self._teams_of(session, [u.id for u in users])
         return PaginatedResponse(
-            data=[await self._build_user_response(session, u) for u in users],
+            data=[await self._build_user_response(session, u, teams_by_user.get(u.id, [])) for u in users],
             page=PageInfo(next_cursor=str(offset + limit) if has_more else None, has_more=has_more, limit=limit),
         )
 
@@ -478,14 +574,7 @@ class UserService:
     ) -> UserResponse:
         user = await self._load_user(session, actor, user_id, PERM_UPDATE)
         _assert_version(if_match, user.version)
-        if user.user_type == "client_admin" and not actor.is_superuser:
-            raise PermissionDeniedError(
-                "client_admin", "Only a client administrator can change a client administrator"
-            )
-        if user.status == "deactivated":
-            raise IdentityServiceError(
-                status_code=409, code="USER_DEACTIVATED", message="A deactivated user can't be changed",
-            )
+        self._assert_changeable(actor, user)
 
         provided = data.model_fields_set
         changed: list[str] = []
@@ -500,23 +589,8 @@ class UserService:
             await self._resolve_manager(session, user.organization_id, data.manager_user_id, subject_id=user.id)
             user.manager_user_id = data.manager_user_id
             changed.append("manager_user_id")
-        if "home_unit_id" in provided and data.home_unit_id is not None and data.home_unit_id != user.home_unit_id:
-            # Moving a user needs update rights in the destination unit too.
-            unit = await self._resolve_home_unit(session, actor, data.home_unit_id, PERM_UPDATE)
-            user.home_unit_id = unit.id
-            membership = (
-                await session.execute(
-                    select(UnitMembership).where(
-                        UnitMembership.user_id == user.id, UnitMembership.member_role == HOME_UNIT_ROLE
-                    )
-                )
-            ).scalar_one_or_none()
-            if membership:
-                membership.unit_id = unit.id
-            else:
-                session.add(UnitMembership(
-                    id=uuid.uuid4(), user_id=user.id, unit_id=unit.id, member_role=HOME_UNIT_ROLE,
-                ))
+        if "home_unit_id" in provided and data.home_unit_id != user.home_unit_id:
+            await self._change_home_unit(session, actor, user, data.home_unit_id)
             changed.append("home_unit_id")
 
         if not changed:
@@ -526,16 +600,7 @@ class UserService:
         await session.commit()
         await session.refresh(user)
 
-        await event_publisher.publish(
-            "identity.user.updated.v1",
-            {
-                "user_id": str(user.id),
-                "organization_id": str(user.organization_id),
-                "changed": changed,
-                "version": user.version,
-                "actor_id": str(actor.user_id),
-            },
-        )
+        await self._publish_user_updated(actor, user, changed)
         return await self._build_user_response(session, user)
 
     async def deactivate_user(
@@ -595,6 +660,91 @@ class UserService:
             },
         )
         return await self._build_user_response(session, user)
+
+    # ------------------------------------------------------------------ team memberships
+
+    async def join_team(
+        self, session: AsyncSession, actor: Actor, user_id: uuid.UUID, team_id: uuid.UUID
+    ) -> tuple[TeamRef, bool]:
+        """
+        Make the user an extra member of a team; where they work doesn't change. Returns the
+        team and whether they were added (False when they already were a member).
+        """
+        user, team = await self._load_team_change(session, actor, user_id, team_id)
+        if team.status != "active":
+            raise ValidationFailedError.for_field("team_id", "This team is inactive")
+        if team.id == user.home_unit_id:
+            raise ValidationFailedError.for_field("team_id", "They already work in this team")
+
+        team_ref = TeamRef(id=team.id, name=team.name)
+        already_member = (
+            await session.execute(
+                select(UnitMembership.id)
+                .where(
+                    UnitMembership.user_id == user.id,
+                    UnitMembership.unit_id == team.id,
+                    UnitMembership.member_role == TEAM_MEMBER_ROLE,
+                )
+                .limit(1)
+            )
+        ).first()
+        if already_member:
+            return team_ref, False
+
+        session.add(UnitMembership(
+            id=uuid.uuid4(), user_id=user.id, unit_id=team.id, member_role=TEAM_MEMBER_ROLE,
+        ))
+        await self._save_team_change(session, actor, user)
+        return team_ref, True
+
+    async def leave_team(
+        self, session: AsyncSession, actor: Actor, user_id: uuid.UUID, team_id: uuid.UUID
+    ) -> None:
+        """End the user's extra membership of a team. Removing someone who isn't a member changes nothing."""
+        user, team = await self._load_team_change(session, actor, user_id, team_id)
+        if team.id == user.home_unit_id:
+            raise ValidationFailedError.for_field(
+                "team_id", "This is where they work. Move them, or clear their place, instead"
+            )
+
+        removed = await session.execute(
+            delete(UnitMembership).where(
+                UnitMembership.user_id == user.id,
+                UnitMembership.unit_id == team.id,
+                UnitMembership.member_role == TEAM_MEMBER_ROLE,
+            )
+        )
+        if removed.rowcount == 0:
+            return
+        await self._save_team_change(session, actor, user)
+
+    async def _load_team_change(
+        self, session: AsyncSession, actor: Actor, user_id: uuid.UUID, team_id: uuid.UUID
+    ) -> tuple[User, OrgUnit]:
+        """
+        The user and team for a membership change, under the rules for moving someone: update
+        rights over the user and inside the team.
+        """
+        user = await self._load_user(session, actor, user_id, PERM_UPDATE)
+        self._assert_changeable(actor, user)
+
+        team = await session.get(OrgUnit, team_id)
+        if not team or team.organization_id != actor.organization_id:
+            raise OrgUnitNotFoundError()
+        if team.unit_type != "team":
+            raise ValidationFailedError.for_field(
+                "team_id", "Only teams take extra members; to put someone in a branch or department, move them there"
+            )
+        if not actor.can(PERM_UPDATE, team.path):
+            raise PermissionDeniedError(PERM_UPDATE, "You can't change who is in this team")
+        return user, team
+
+    async def _save_team_change(self, session: AsyncSession, actor: Actor, user: User) -> None:
+        # Teams are part of the user's representation, so their version (the ETag) moves on.
+        user.version += 1
+        await session.commit()
+        await session.refresh(user)
+        await self._publish_user_updated(actor, user, ["teams"])
 
     # ------------------------------------------------------------------ per-user access
 

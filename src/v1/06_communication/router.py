@@ -1,6 +1,7 @@
 from fastapi import APIRouter
 
 from routes.inbox import router as inbox_router
+from routes.internal import router as internal_router
 from routes.preferences import router as preferences_router
 from routes.rules import router as rules_router
 from routes.webhooks import router as webhooks_router
@@ -15,3 +16,5 @@ core_router.include_router(webhooks_router)
 router = APIRouter()
 router.include_router(core_router, prefix="/v1")
 router.include_router(core_router, prefix="/api/communication/v1")
+# Other services call these on the service directly (http://communication:8000/internal/...).
+router.include_router(internal_router)

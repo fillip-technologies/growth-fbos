@@ -1,14 +1,15 @@
 import uuid
 from typing import Optional
 
-from fastapi import APIRouter, Header, Query, Request, status
+from fastapi import APIRouter, Depends, Header, Query, Request, status
 
 import services.webhook_service as service
-from dependencies import DatabaseSession, OrgId
+from dependencies import DatabaseSession, OrgId, require_org_admin
 from schemas.common import PageResponse
 from schemas.webhooks import JobResponse, WebhookSubscriptionCreate, WebhookSubscriptionResponse
 
-router = APIRouter(prefix="/webhook-subscriptions", tags=["webhook-subscriptions"])
+# Organization-wide settings: client admins only.
+router = APIRouter(prefix="/webhook-subscriptions", tags=["webhook-subscriptions"], dependencies=[Depends(require_org_admin)])
 
 
 @router.get("", response_model=PageResponse[WebhookSubscriptionResponse])

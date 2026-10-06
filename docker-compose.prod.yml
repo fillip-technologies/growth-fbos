@@ -115,6 +115,9 @@ services:
   db:
     restart: always
 
+  redis:
+    restart: always
+
 volumes:
   caddy_data:
   caddy_config:

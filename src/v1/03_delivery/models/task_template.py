@@ -13,13 +13,16 @@ class TaskType(Base):
     """
     Catalog of task categories (e.g. bug, feature, review, maintenance, client_request).
     Defines defaults like review requirements and default time estimates.
+
+    Built-in types (see services/builtins.py) have no organization and are shared by all;
+    an organization's own types sit next to them and may not reuse a built-in code.
     """
 
     __tablename__ = "task_types"
     __table_args__ = (UniqueConstraint("organization_id", "code", name="uq_task_types_org_code"),)
 
     id: Mapped[uuid.UUID] = mapped_column(UUIDType, primary_key=True, default=uuid.uuid4)
-    organization_id: Mapped[uuid.UUID] = mapped_column(UUIDType, nullable=False, index=True)
+    organization_id: Mapped[Optional[uuid.UUID]] = mapped_column(UUIDType, nullable=True, index=True)
     code: Mapped[str] = mapped_column(String(100), nullable=False, index=True)
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     category: Mapped[str] = mapped_column(String(100), nullable=False)
@@ -45,7 +48,7 @@ class TaskTemplate(Base):
     description: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     checklist: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
     estimate_minutes: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
-    default_priority: Mapped[str] = mapped_column(String(50), nullable=False, default="medium")
+    default_priority: Mapped[str] = mapped_column(String(50), nullable=False, default="p3")
     version_no: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
 
 

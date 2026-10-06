@@ -1,10 +1,11 @@
 import uuid
 from typing import Optional
 
-from fastapi import APIRouter, Header, Query, Response, status
+from fastapi import APIRouter, Depends, Header, Query, Response, status
 
+import permissions
 import services.workflows as service
-from dependencies import DatabaseSession, OrgId, UserId
+from dependencies import CurrentActor, DatabaseSession, OrgId, UserId, require_permission
 from schemas.common import PageResponse
 from schemas.workflows import (
     AvailableTransitionResponse,
@@ -23,11 +24,15 @@ from schemas.workflows import (
 
 router = APIRouter(prefix="/workflow", tags=["workflow"])
 
+CAN_READ = Depends(require_permission(permissions.WORKFLOW_READ))
+CAN_DESIGN = Depends(require_permission(permissions.WORKFLOW_MANAGE))
+CAN_OPERATE = Depends(require_permission(permissions.WORKFLOW_OPERATE))
+
 
 # --- Workflow definitions & versions ----------------------------------------
 
 
-@router.get("/definitions", response_model=PageResponse[WorkflowDefinitionResponse])
+@router.get("/definitions", response_model=PageResponse[WorkflowDefinitionResponse], dependencies=[CAN_READ])
 async def list_workflow_definitions(
     session: DatabaseSession,
     org_id: OrgId,
@@ -42,7 +47,7 @@ async def list_workflow_definitions(
 
 
 @router.post(
-    "/definitions", response_model=WorkflowDefinitionResponse, status_code=status.HTTP_201_CREATED
+    "/definitions", response_model=WorkflowDefinitionResponse, status_code=status.HTTP_201_CREATED, dependencies=[CAN_DESIGN]
 )
 async def create_workflow_definition(
     payload: WorkflowDefinitionCreate,
@@ -60,6 +65,7 @@ async def create_workflow_definition(
     "/definitions/{definition_code}/versions",
     response_model=WorkflowVersionResponse,
     status_code=status.HTTP_201_CREATED,
+    dependencies=[CAN_DESIGN],
 )
 async def create_workflow_version(
     definition_code: str,
@@ -77,6 +83,7 @@ async def create_workflow_version(
 @router.put(
     "/definitions/{definition_code}/versions/{version_no}",
     response_model=WorkflowVersionResponse,
+    dependencies=[CAN_DESIGN],
 )
 async def replace_workflow_version(
     definition_code: str,
@@ -95,6 +102,7 @@ async def replace_workflow_version(
 @router.post(
     "/definitions/{definition_code}/versions/{version_no}/validate",
     response_model=ValidationResult,
+    dependencies=[CAN_DESIGN],
 )
 async def validate_workflow_version(
     definition_code: str,
@@ -109,6 +117,7 @@ async def validate_workflow_version(
 @router.post(
     "/definitions/{definition_code}/versions/{version_no}/publish",
     response_model=WorkflowVersionResponse,
+    dependencies=[CAN_DESIGN],
 )
 async def publish_workflow_version(
     definition_code: str,
@@ -126,7 +135,7 @@ async def publish_workflow_version(
 # --- Workflow instances ------------------------------------------------------
 
 
-@router.post("/instances", response_model=WorkflowInstanceResponse, status_code=status.HTTP_201_CREATED)
+@router.post("/instances", response_model=WorkflowInstanceResponse, status_code=status.HTTP_201_CREATED, dependencies=[CAN_OPERATE])
 async def start_workflow_instance(
     payload: WorkflowInstanceStart,
     session: DatabaseSession,
@@ -142,7 +151,7 @@ async def start_workflow_instance(
     return instance
 
 
-@router.get("/instances", response_model=PageResponse[WorkflowInstanceResponse])
+@router.get("/instances", response_model=PageResponse[WorkflowInstanceResponse], dependencies=[CAN_READ])
 async def list_workflow_instances(
     session: DatabaseSession,
     org_id: OrgId,
@@ -160,7 +169,7 @@ async def list_workflow_instances(
     )
 
 
-@router.get("/instances/{instance_id}", response_model=WorkflowInstanceResponse)
+@router.get("/instances/{instance_id}", response_model=WorkflowInstanceResponse, dependencies=[CAN_READ])
 async def get_workflow_instance(
     instance_id: uuid.UUID,
     session: DatabaseSession,
@@ -174,35 +183,37 @@ async def get_workflow_instance(
 
 
 @router.get(
-    "/instances/{instance_id}/transitions", response_model=PageResponse[AvailableTransitionResponse]
+    "/instances/{instance_id}/transitions", response_model=PageResponse[AvailableTransitionResponse], dependencies=[CAN_READ]
 )
 async def list_available_transitions(
     instance_id: uuid.UUID,
     session: DatabaseSession,
     org_id: OrgId,
+    actor: CurrentActor,
     limit: int = Query(25, ge=1, le=100),
     cursor: Optional[str] = Query(None),
     sort: Optional[str] = Query(None),
 ) -> PageResponse[AvailableTransitionResponse]:
-    """List transitions available now."""
-    return await service.list_available_transitions(session, org_id, instance_id, limit, cursor)
+    """List transitions available now, and whether the caller may perform each."""
+    return await service.list_available_transitions(session, org_id, actor, instance_id, limit, cursor)
 
 
-@router.post("/instances/{instance_id}/transitions", response_model=TransitionResult)
+@router.post("/instances/{instance_id}/transitions", response_model=TransitionResult, dependencies=[CAN_OPERATE])
 async def perform_transition(
     instance_id: uuid.UUID,
     payload: TransitionRequest,
     session: DatabaseSession,
     org_id: OrgId,
+    actor: CurrentActor,
     if_match: Optional[str] = Header(None, alias="If-Match"),
 ) -> TransitionResult:
-    """Perform a transition."""
-    result = await service.perform_transition(session, org_id, instance_id, payload, if_match)
+    """Perform a transition (plus the transition's own permission, when it names one)."""
+    result = await service.perform_transition(session, org_id, actor, instance_id, payload, if_match)
     await session.commit()
     return result
 
 
-@router.post("/instances/{instance_id}/hold", response_model=WorkflowInstanceResponse)
+@router.post("/instances/{instance_id}/hold", response_model=WorkflowInstanceResponse, dependencies=[CAN_OPERATE])
 async def hold_instance(
     instance_id: uuid.UUID,
     payload: HoldRequest,
@@ -216,7 +227,7 @@ async def hold_instance(
     return instance
 
 
-@router.post("/instances/{instance_id}/resume", response_model=WorkflowInstanceResponse)
+@router.post("/instances/{instance_id}/resume", response_model=WorkflowInstanceResponse, dependencies=[CAN_OPERATE])
 async def resume_instance(
     instance_id: uuid.UUID,
     session: DatabaseSession,
@@ -229,7 +240,7 @@ async def resume_instance(
     return instance
 
 
-@router.post("/instances/{instance_id}/cancel", response_model=WorkflowInstanceResponse)
+@router.post("/instances/{instance_id}/cancel", response_model=WorkflowInstanceResponse, dependencies=[CAN_OPERATE])
 async def cancel_instance(
     instance_id: uuid.UUID,
     payload: HoldRequest,
@@ -244,7 +255,7 @@ async def cancel_instance(
 
 
 @router.get(
-    "/instances/{instance_id}/history", response_model=PageResponse[InstanceHistoryItemResponse]
+    "/instances/{instance_id}/history", response_model=PageResponse[InstanceHistoryItemResponse], dependencies=[CAN_READ]
 )
 async def get_instance_history(
     instance_id: uuid.UUID,

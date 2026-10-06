@@ -11,6 +11,7 @@ from schemas.common import PaginatedResponse
 from schemas.session import SessionResponse
 from schemas.user import (
     InvitationResponse,
+    TeamRef,
     UserDeactivateRequest,
     UserInviteRequest,
     UserPermissionsReplace,
@@ -53,6 +54,9 @@ def _etag(user: UserResponse) -> str:
 async def list_users(
     status: Optional[UserStatus] = Query(None, description="Filter by status"),
     unit_id: Optional[uuid.UUID] = Query(None, description="Members of this unit (including sub-units)"),
+    team_id: Optional[uuid.UUID] = Query(
+        None, description="People in this team: those who work in it and its extra members"
+    ),
     role_code: Optional[str] = Query(None, description="Users given this role preset"),
     q: Optional[str] = Query(None, max_length=255, description="Search by name, email or employee code"),
     limit: int = Query(25, ge=1, le=100),
@@ -61,7 +65,7 @@ async def list_users(
     db: AsyncSession = Depends(get_db_session),
 ) -> PaginatedResponse[UserResponse]:
     return await user_service.list_users(
-        session=db, actor=actor, status=status, unit_id=unit_id, role_code=role_code,
+        session=db, actor=actor, status=status, unit_id=unit_id, team_id=team_id, role_code=role_code,
         q=q, limit=limit, cursor=cursor,
     )
 
@@ -144,6 +148,50 @@ async def deactivate_user(
     )
     response.headers["ETag"] = _etag(user)
     return user
+
+
+@router.put(
+    "/{user_id}/teams/{team_id}",
+    response_model=TeamRef,
+    status_code=status.HTTP_200_OK,
+    summary="Add a user to a team",
+    description=(
+        "Makes the user an extra member of a team; where they work doesn't change. Answers 201 when "
+        "they were added and 200 when they already were a member, so it is safe to repeat. Needs "
+        "update rights over the user and inside the team."
+    ),
+)
+async def join_team(
+    user_id: uuid.UUID,
+    team_id: uuid.UUID,
+    response: Response,
+    actor: Actor = Depends(require_permission(PERM_UPDATE)),
+    db: AsyncSession = Depends(get_db_session),
+) -> TeamRef:
+    team, added = await user_service.join_team(session=db, actor=actor, user_id=user_id, team_id=team_id)
+    if added:
+        response.status_code = status.HTTP_201_CREATED
+        response.headers["Location"] = f"/api/identity/v1/users/{user_id}/teams/{team_id}"
+    return team
+
+
+@router.delete(
+    "/{user_id}/teams/{team_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    summary="Remove a user from a team",
+    description=(
+        "Ends the user's extra membership of a team. Removing someone who isn't a member changes "
+        "nothing. To take someone out of the team they work in, move them or clear their place."
+    ),
+)
+async def leave_team(
+    user_id: uuid.UUID,
+    team_id: uuid.UUID,
+    actor: Actor = Depends(require_permission(PERM_UPDATE)),
+    db: AsyncSession = Depends(get_db_session),
+) -> Response:
+    await user_service.leave_team(session=db, actor=actor, user_id=user_id, team_id=team_id)
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
 @router.post(

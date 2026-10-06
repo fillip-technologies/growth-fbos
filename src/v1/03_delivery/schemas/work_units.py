@@ -2,7 +2,7 @@ import uuid
 from datetime import date, datetime
 from typing import Literal, Optional
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from schemas.common import ClientRef, Money, PastDate, UnitRef, UserRef, VerticalRef
 
@@ -15,6 +15,9 @@ MilestoneStatus = Literal["pending", "in_progress", "submitted", "accepted", "re
 # --- Work unit types & templates -------------------------------------------
 
 
+CODE_PATTERN = r"^[A-Za-z0-9_\-]+$"
+
+
 class WorkUnitTypeResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
@@ -23,6 +26,33 @@ class WorkUnitTypeResponse(BaseModel):
     name: str
     category: str
     requires_client: bool
+    built_in: bool = Field(False, description="Shared by every organization; can't be changed.")
+
+
+class WorkUnitTypeCreate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    code: str = Field(..., min_length=1, max_length=100, pattern=CODE_PATTERN)
+    name: str = Field(..., min_length=1, max_length=255)
+    category: str = Field(..., min_length=1, max_length=100)
+    requires_client: bool = True
+
+
+class WorkUnitTypeUpdate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    name: Optional[str] = Field(None, min_length=1, max_length=255)
+    category: Optional[str] = Field(None, min_length=1, max_length=100)
+    requires_client: Optional[bool] = None
+
+
+class WorkTemplateCreate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    code: str = Field(..., min_length=1, max_length=100, pattern=CODE_PATTERN)
+    name: str = Field(..., min_length=1, max_length=255)
+    work_unit_type_code: str
+    vertical_id: Optional[uuid.UUID] = None
 
 
 class WorkTemplateResponse(BaseModel):
@@ -40,7 +70,7 @@ class WorkTemplateResponse(BaseModel):
 class WorkTemplateVersionCreate(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    workflow_definition_code: str
+    workflow_definition_code: Optional[str] = None
     structure: dict = Field(default_factory=dict)
 
 
@@ -62,12 +92,13 @@ class WorkTemplateVersionResponse(BaseModel):
 class WorkUnitCreate(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    template_code: str
+    template_code: Optional[str] = Field(None, description="Shape the project from a template...")
     template_version_no: Optional[int] = Field(None, description="Defaults to the published version.")
+    work_unit_type_code: Optional[str] = Field(None, description="...or start an empty project of this type.")
     name: str = Field(..., min_length=1, max_length=255)
     objective: Optional[str] = None
     owning_unit_id: uuid.UUID
-    vertical_id: uuid.UUID
+    vertical_id: Optional[uuid.UUID] = None
     client_id: Optional[uuid.UUID] = Field(None, description="Required when the work unit type requires a client.")
     contract_id: Optional[uuid.UUID] = None
     manager_user_id: uuid.UUID
@@ -77,6 +108,12 @@ class WorkUnitCreate(BaseModel):
     billable: Optional[bool] = True
     attributes: Optional[dict] = None
     start_workflow: Optional[bool] = Field(False, description="Start the template's workflow immediately.")
+
+    @model_validator(mode="after")
+    def _template_or_type(self) -> "WorkUnitCreate":
+        if not self.template_code and not self.work_unit_type_code:
+            raise ValueError("Give template_code or work_unit_type_code")
+        return self
 
 
 class WorkUnitUpdate(BaseModel):
@@ -108,13 +145,13 @@ class WorkUnitResponse(BaseModel):
     name: str
     objective: Optional[str] = None
     type: WorkUnitTypeResponse
-    template: WorkTemplateResponse
+    template: Optional[WorkTemplateResponse] = None
     status: WorkUnitStatus
     priority: WorkUnitPriority
     health: WorkUnitHealth
     progress_pct: float
     owning_unit: UnitRef
-    vertical: VerticalRef
+    vertical: Optional[VerticalRef] = None
     client: Optional[ClientRef] = None
     contract: Optional[dict] = None
     manager: UserRef
@@ -187,6 +224,18 @@ class MilestoneResponse(BaseModel):
     deliverables: list[DeliverableResponse] = Field(default_factory=list)
 
 
+class MilestoneCreate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    code: str = Field(..., min_length=1, max_length=100)
+    name: str = Field(..., min_length=1, max_length=255)
+    planned_date: date
+    phase_id: Optional[uuid.UUID] = None
+    weight: float = Field(0, ge=0, le=100)
+    is_billing_milestone: bool = False
+    requires_client_acceptance: bool = False
+
+
 class MilestoneUpdate(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -241,7 +290,21 @@ class RiskResponse(BaseModel):
     score: int
     mitigation: Optional[str] = None
     owner: UserRef
-    status: Literal["open", "mitigating", "closed", "occurred"]
+    status: RiskStatus
+
+
+RiskStatus = Literal["open", "mitigating", "closed", "occurred"]
+
+
+class RiskUpdate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    title: Optional[str] = Field(None, min_length=1, max_length=255)
+    probability: Optional[int] = Field(None, ge=1, le=5)
+    impact: Optional[int] = Field(None, ge=1, le=5)
+    mitigation: Optional[str] = None
+    owner_user_id: Optional[uuid.UUID] = None
+    status: Optional[RiskStatus] = None
 
 
 class ChangeRequestCreate(BaseModel):
@@ -268,6 +331,21 @@ class ChangeRequestResponse(BaseModel):
     status: Literal["draft", "submitted", "approved", "rejected", "implemented", "withdrawn"]
     approval_request_id: Optional[uuid.UUID] = None
     amends_contract: bool
+    decided_by: Optional[UserRef] = None
+    decided_at: Optional[datetime] = None
+    decision_note: Optional[str] = None
+
+
+class ChangeRequestApprove(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    note: Optional[str] = None
+
+
+class ChangeRequestReject(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    reason: str = Field(..., min_length=1)
 
 
 # --- Members ---------------------------------------------------------------
@@ -285,6 +363,14 @@ class MembersReplace(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     members: list[MemberInput]
+
+
+class MemberResponse(BaseModel):
+    user: UserRef
+    member_role: str
+    allocation_pct: float
+    valid_from: date
+    valid_to: Optional[date] = None
 
 
 WorkUnitSummaryResponse.model_rebuild()
