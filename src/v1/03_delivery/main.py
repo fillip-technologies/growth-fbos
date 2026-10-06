@@ -5,9 +5,7 @@ from fastapi import FastAPI
 import httpx
 
 from config import settings
-from database.base import Base
-from database.session import dispose_engine, engine, warm_pool
-import models  # noqa: F401 — registers every ORM class on Base.metadata
+from database.session import dispose_engine, warm_pool
 from router import router
 from services.identity_client import IdentityClient
 from utils.timing import ServerTimingMiddleware
@@ -15,9 +13,6 @@ from utils.timing import ServerTimingMiddleware
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
-    # Tables still come from the models until the first Alembic migration lands.
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
     async with httpx.AsyncClient(
         base_url=settings.identity_service_url, timeout=settings.identity_timeout_seconds
     ) as http:

@@ -4,6 +4,9 @@ set -e
 echo "Running Alembic migrations for delivery service..."
 alembic upgrade head
 
+echo "Seeding built-in project and task types..."
+python seed.py
+
 echo "Starting delivery service..."
 # UVICORN_RELOAD is set by docker-compose.dev.yml to restart on code changes.
 exec uvicorn main:app --host 0.0.0.0 --port 8000 ${UVICORN_RELOAD:+--reload}

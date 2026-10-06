@@ -14,6 +14,7 @@ from schemas.tasks import (
     CommentCreate,
     CommentResponse,
     DependencyCreate,
+    DependencyResponse,
     HandoverAccept,
     HandoverCreate,
     HandoverReject,
@@ -29,6 +30,12 @@ from schemas.tasks import (
     TaskHistoryItemResponse,
     TaskResponse,
     TaskSubmit,
+    TaskTemplateCreate,
+    TaskTemplateResponse,
+    TaskTemplateUpdate,
+    TaskTypeCreate,
+    TaskTypeResponse,
+    TaskTypeUpdate,
     TaskUpdate,
     TimeEntryCreate,
     TimeEntryResponse,
@@ -40,6 +47,7 @@ CAN_READ = Depends(require_permission(permissions.TASK_READ))
 CAN_WRITE = Depends(require_permission(permissions.TASK_WRITE))
 CAN_READ_HANDOVERS = Depends(require_permission(permissions.HANDOVER_READ))
 CAN_WRITE_HANDOVERS = Depends(require_permission(permissions.HANDOVER_WRITE))
+CAN_MANAGE_TEMPLATES = Depends(require_permission(permissions.TEMPLATE_MANAGE))
 
 
 # --- Tasks ---------------------------------------------------------------
@@ -465,3 +473,118 @@ async def create_recurring_rule(
     rule = await service.create_recurring_rule(session, org_id, payload)
     await session.commit()
     return rule
+
+
+# --- Setup: task types and templates -------------------------------------------
+
+
+@router.get("/task-types", response_model=PageResponse[TaskTypeResponse], dependencies=[CAN_READ])
+async def list_task_types(
+    session: DatabaseSession,
+    org_id: OrgId,
+    limit: int = Query(25, ge=1, le=100),
+    cursor: Optional[str] = Query(None),
+) -> PageResponse[TaskTypeResponse]:
+    """The organization's task types and the built-in ones."""
+    return await service.list_task_types(session, org_id, limit, cursor)
+
+
+@router.post(
+    "/task-types", response_model=TaskTypeResponse, status_code=status.HTTP_201_CREATED,
+    dependencies=[CAN_MANAGE_TEMPLATES],
+)
+async def create_task_type(payload: TaskTypeCreate, session: DatabaseSession, org_id: OrgId) -> TaskTypeResponse:
+    """Add a task type of the organization's own."""
+    task_type = await service.create_task_type(session, org_id, payload)
+    await session.commit()
+    return task_type
+
+
+@router.patch("/task-types/{type_id}", response_model=TaskTypeResponse, dependencies=[CAN_MANAGE_TEMPLATES])
+async def update_task_type(
+    type_id: uuid.UUID, payload: TaskTypeUpdate, session: DatabaseSession, org_id: OrgId
+) -> TaskTypeResponse:
+    """Change one of the organization's task types (built-in types can't be changed)."""
+    task_type = await service.update_task_type(session, org_id, type_id, payload)
+    await session.commit()
+    return task_type
+
+
+@router.get("/task-templates", response_model=PageResponse[TaskTemplateResponse], dependencies=[CAN_READ])
+async def list_task_templates(
+    session: DatabaseSession,
+    org_id: OrgId,
+    limit: int = Query(25, ge=1, le=100),
+    cursor: Optional[str] = Query(None),
+) -> PageResponse[TaskTemplateResponse]:
+    """Reusable task definitions (recurring tasks and workflow stages create tasks from them)."""
+    return await service.list_task_templates(session, org_id, limit, cursor)
+
+
+@router.post(
+    "/task-templates", response_model=TaskTemplateResponse, status_code=status.HTTP_201_CREATED,
+    dependencies=[CAN_MANAGE_TEMPLATES],
+)
+async def create_task_template(
+    payload: TaskTemplateCreate, session: DatabaseSession, org_id: OrgId
+) -> TaskTemplateResponse:
+    """Add a task template."""
+    template = await service.create_task_template(session, org_id, payload)
+    await session.commit()
+    return template
+
+
+@router.patch("/task-templates/{template_id}", response_model=TaskTemplateResponse, dependencies=[CAN_MANAGE_TEMPLATES])
+async def update_task_template(
+    template_id: uuid.UUID,
+    payload: TaskTemplateUpdate,
+    session: DatabaseSession,
+    org_id: OrgId,
+    if_match: Optional[str] = Header(None, alias="If-Match"),
+) -> TaskTemplateResponse:
+    """Change a task template; tasks already created from it keep what they were given."""
+    template = await service.update_task_template(session, org_id, template_id, payload, if_match)
+    await session.commit()
+    return template
+
+
+# --- More on one task: dependencies, reviews, time, handovers ----------------------
+
+
+@router.get("/tasks/{task_id}/dependencies", response_model=list[DependencyResponse], dependencies=[CAN_READ])
+async def list_dependencies(task_id: uuid.UUID, session: DatabaseSession, org_id: OrgId) -> list[DependencyResponse]:
+    """The tasks this one waits for."""
+    return await service.list_dependencies(session, org_id, task_id)
+
+
+@router.delete(
+    "/tasks/{task_id}/dependencies/{depends_on_task_id}", status_code=status.HTTP_204_NO_CONTENT,
+    dependencies=[CAN_WRITE],
+)
+async def remove_dependency(
+    task_id: uuid.UUID, depends_on_task_id: uuid.UUID, session: DatabaseSession, org_id: OrgId
+) -> Response:
+    """Stop waiting for a task."""
+    await service.remove_dependency(session, org_id, task_id, depends_on_task_id)
+    await session.commit()
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+@router.get("/tasks/{task_id}/reviews", response_model=list[ReviewResponse], dependencies=[CAN_READ])
+async def list_reviews(task_id: uuid.UUID, session: DatabaseSession, org_id: OrgId) -> list[ReviewResponse]:
+    """Every review round of a task, oldest first."""
+    return await service.list_reviews(session, org_id, task_id)
+
+
+@router.delete("/time-entries/{entry_id}", status_code=status.HTTP_204_NO_CONTENT, dependencies=[CAN_READ])
+async def delete_time_entry(entry_id: uuid.UUID, session: DatabaseSession, org_id: OrgId, actor: CurrentActor) -> Response:
+    """Remove time you logged yourself."""
+    await service.delete_time_entry(session, org_id, actor, entry_id)
+    await session.commit()
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+@router.get("/handovers/{handover_id}", response_model=HandoverResponse, dependencies=[CAN_READ_HANDOVERS])
+async def get_handover(handover_id: uuid.UUID, session: DatabaseSession, org_id: OrgId) -> HandoverResponse:
+    """One handover."""
+    return await service.get_handover(session, org_id, handover_id)

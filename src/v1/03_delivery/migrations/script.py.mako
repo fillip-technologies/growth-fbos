@@ -9,6 +9,8 @@ from typing import Sequence, Union
 
 from alembic import op
 import sqlalchemy as sa
+
+import database.types  # the UUIDType columns
 ${imports if imports else ""}
 
 revision: str = ${repr(up_revision)}
