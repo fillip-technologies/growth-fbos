@@ -58,6 +58,17 @@ def format_lead_response(lead: Lead) -> LeadResponse:
     )
 
 
+async def next_lead_number(session: AsyncSession, org_id: uuid.UUID) -> int:
+    count_res = await session.execute(
+        select(func.count(Lead.id)).where(Lead.organization_id == org_id)
+    )
+    return (count_res.scalar_one() or 0) + 1
+
+
+def lead_code(lead_number: int) -> str:
+    return f"LD-{datetime.now(timezone.utc).year}-{lead_number:04d}"
+
+
 class LeadService:
     @staticmethod
     async def list_leads(
@@ -107,19 +118,12 @@ class LeadService:
         org_id: uuid.UUID,
         payload: LeadCreate,
     ) -> LeadResponse:
-        current_year = datetime.now(timezone.utc).year
-        count_res = await session.execute(
-            select(func.count(Lead.id)).where(Lead.organization_id == org_id)
-        )
-        lead_num = (count_res.scalar_one() or 0) + 1
-        code = f"LD-{current_year}-{lead_num:04d}"
-
         owner_id = payload.owner_user_id or uuid.uuid4()
 
         lead = Lead(
             organization_id=org_id,
             vertical_id=payload.vertical_id,
-            name=code,
+            name=lead_code(await next_lead_number(session, org_id)),
             contact_name=payload.contact_name,
             contact_email=str(payload.contact_email) if payload.contact_email else None,
             contact_phone=payload.contact_phone,

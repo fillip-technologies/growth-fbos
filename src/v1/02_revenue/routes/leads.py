@@ -16,6 +16,7 @@ from schemas.lead import (
 )
 from services import notifications
 from services.lead_service import LeadService
+from services.website_leads_client import website_leads_client
 
 router = APIRouter(prefix="/leads", tags=["leads"])
 
@@ -120,6 +121,8 @@ async def update_lead(
     await session.commit()
     if payload.owner_user_id is not None:
         notifications.lead_assigned(actor, lead)
+    if payload.status is not None:
+        website_leads_client.push_status(org_id, lead)
     response.headers["ETag"] = f'"{lead.version}"'
     return lead
 
@@ -145,6 +148,7 @@ async def disqualify_lead(
         if_match=if_match,
     )
     await session.commit()
+    website_leads_client.push_status(org_id, lead)
     response.headers["ETag"] = f'"{lead.version}"'
     return lead
 
@@ -174,4 +178,5 @@ async def convert_lead(
         if_match=if_match,
     )
     await session.commit()
+    website_leads_client.push_status(org_id, result.lead)
     return result

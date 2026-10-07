@@ -1,4 +1,7 @@
-from pydantic import model_validator
+from typing import Optional
+import uuid
+
+from pydantic import field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -43,6 +46,32 @@ class Settings(BaseSettings):
     # service's /internal/notifications. Empty turns them off.
     communication_service_url: str = ""
     notification_timeout_seconds: float = 3.0
+
+    # Enquiries from the company website become leads of one organization, and their status
+    # changes go back to the website. The key alone turns on sending status changes back.
+    # Importing also needs an interval above 0 and must run in exactly one process (nothing
+    # in the database stops two importers duplicating leads, and every environment shares
+    # the database), so only the live server sets it, and it runs a single uvicorn worker.
+    website_leads_url: str = "https://filliptechnologies.com/api/integrations/leads"
+    website_leads_api_key: str = ""
+    website_leads_organization_id: Optional[uuid.UUID] = None
+    website_leads_owner_user_id: Optional[uuid.UUID] = None
+    website_leads_import_interval_seconds: int = 0
+    website_leads_timeout_seconds: float = 15.0
+
+    @field_validator("website_leads_organization_id", "website_leads_owner_user_id", mode="before")
+    @classmethod
+    def _blank_id_is_unset(cls, value: object) -> object:
+        return None if value == "" else value
+
+    @property
+    def website_leads_import_enabled(self) -> bool:
+        return bool(
+            self.website_leads_api_key
+            and self.website_leads_organization_id
+            and self.website_leads_owner_user_id
+            and self.website_leads_import_interval_seconds > 0
+        )
 
 
 settings = Settings()
