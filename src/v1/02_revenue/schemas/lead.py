@@ -24,7 +24,8 @@ class LeadCreate(BaseModel):
 
 
 class LeadUpdate(BaseModel):
-    status: Optional[Literal["contacted", "qualified"]] = None
+    # Any open status, in any direction; also reopens a disqualified lead.
+    status: Optional[Literal["new", "contacted", "qualified"]] = None
     owner_user_id: Optional[uuid.UUID] = None
     score: Optional[int] = Field(None, ge=0, le=100)
     attributes: Optional[dict] = None

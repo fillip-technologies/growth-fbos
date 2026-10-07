@@ -211,6 +211,26 @@ async def test_a_status_change_goes_back_to_the_website(async_client, db_session
 
 
 @pytest.mark.asyncio
+async def test_reopening_a_disqualified_lead_goes_back_to_the_website(async_client, db_session, website_patches):
+    lead = await _import_one(db_session, "w1")
+    res = await async_client.post(
+        f"{BASE}/leads/{lead.id}/disqualify", json={"reason": "no_need"}, headers={"If-Match": f'"{lead.version}"'}
+    )
+    assert res.status_code == 200, res.text
+
+    res = await async_client.patch(
+        f"{BASE}/leads/{lead.id}", json={"status": "new"}, headers={"If-Match": f'"{res.json()["version"]}"'}
+    )
+    assert res.status_code == 200, res.text
+    await website_leads_client.drain()
+
+    assert website_patches == [
+        ("/api/integrations/leads/w1", {"status": "disqualified"}),
+        ("/api/integrations/leads/w1", {"status": "new"}),
+    ]
+
+
+@pytest.mark.asyncio
 async def test_changes_that_leave_the_status_alone_are_not_sent(async_client, db_session, website_patches):
     lead = await _import_one(db_session, "w1")
 

@@ -3,6 +3,8 @@ from datetime import date, timedelta
 import pytest
 import httpx
 
+from models.lead import Lead
+
 pytestmark = pytest.mark.asyncio
 
 
@@ -253,6 +255,65 @@ async def test_lead_disqualify(async_client: httpx.AsyncClient):
     )
     assert disq_res.status_code == 200
     assert disq_res.json()["status"] == "disqualified"
+
+
+async def _new_lead(async_client: httpx.AsyncClient) -> dict:
+    res = await async_client.post(
+        "/api/revenue/v1/leads",
+        json={
+            "vertical_id": str(uuid.uuid4()),
+            "contact_name": "Ramesh Kumar",
+            "consent": {"given": True, "text": "I agree to be contacted about my enquiry.", "channel": "phone_call"},
+        },
+    )
+    assert res.status_code == 201, res.text
+    return res.json()
+
+
+async def _set_status(async_client: httpx.AsyncClient, lead: dict, new_status: str) -> httpx.Response:
+    return await async_client.patch(
+        f"/api/revenue/v1/leads/{lead['id']}", json={"status": new_status}, headers={"If-Match": f'"{lead["version"]}"'}
+    )
+
+
+async def test_a_disqualified_lead_can_be_reopened(async_client: httpx.AsyncClient, db_session):
+    lead = await _new_lead(async_client)
+    disqualified = await async_client.post(
+        f"/api/revenue/v1/leads/{lead['id']}/disqualify",
+        json={"reason": "no_budget"},
+        headers={"If-Match": f'"{lead["version"]}"'},
+    )
+    assert disqualified.status_code == 200, disqualified.text
+
+    reopened = await _set_status(async_client, disqualified.json(), "contacted")
+
+    assert reopened.status_code == 200, reopened.text
+    assert reopened.json()["status"] == "contacted"
+    stored = await db_session.get(Lead, uuid.UUID(lead["id"]))
+    assert stored.loss_reason is None
+
+
+async def test_a_lead_can_go_back_to_new(async_client: httpx.AsyncClient):
+    lead = await _new_lead(async_client)
+    qualified = await _set_status(async_client, lead, "qualified")
+    assert qualified.status_code == 200, qualified.text
+
+    back = await _set_status(async_client, qualified.json(), "new")
+
+    assert back.status_code == 200, back.text
+    assert back.json()["status"] == "new"
+
+
+async def test_a_converted_lead_keeps_its_status(async_client: httpx.AsyncClient, db_session):
+    lead = await _new_lead(async_client)
+    stored = await db_session.get(Lead, uuid.UUID(lead["id"]))
+    stored.status = "converted"
+    await db_session.commit()
+
+    res = await _set_status(async_client, lead, "new")
+
+    assert res.status_code == 409
+    assert res.json()["detail"]["code"] == "INVALID_STATE_TRANSITION"
 
 
 async def test_create_lead_back_dated(async_client: httpx.AsyncClient):

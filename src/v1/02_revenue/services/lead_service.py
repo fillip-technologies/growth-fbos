@@ -177,8 +177,12 @@ class LeadService:
             raise VersionConflictError(lead.version)
 
         if payload.status is not None:
-            if lead.status in ("converted", "disqualified"):
+            # A converted lead already became a customer and an opportunity; a disqualified
+            # one can be reopened, and is then no longer lost.
+            if lead.status == "converted":
                 raise InvalidStateTransitionError(lead.status, f"update to {payload.status}")
+            if lead.status == "disqualified":
+                lead.loss_reason = None
             lead.status = payload.status
 
         if payload.owner_user_id is not None:
