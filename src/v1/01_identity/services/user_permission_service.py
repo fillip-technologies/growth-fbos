@@ -119,6 +119,7 @@ class UserPermissionService:
         unit_ids |= {p.scope_unit_id for p in presets if p.scope_unit_id}
         scope_paths = await self._scope_paths(session, organization_id, unit_ids)
         catalog = set((await session.execute(select(Permission.code))).scalars().all())
+        source_roles = await self._source_roles(session, organization_id, permissions)
 
         resolved: dict[tuple[str, Optional[uuid.UUID]], ResolvedGrant] = {}
 
@@ -149,6 +150,7 @@ class UserPermissionService:
                     scope_path=scope_paths.get(item.scope_unit_id) if item.scope_unit_id else None,
                     self_only=item.self_only,
                     valid_to=item.valid_to,
+                    source_role_id=self._source_role_id(source_roles, item),
                 ))
 
         resolved_presets: list[ResolvedPreset] = []
@@ -178,6 +180,30 @@ class UserPermissionService:
         if errors:
             raise ValidationFailedError(errors)
         return list(resolved.values()), resolved_presets
+
+    async def _source_roles(
+        self, session: AsyncSession, organization_id: uuid.UUID, permissions: list[PermissionGrantInput]
+    ) -> dict[str, Role]:
+        """This organization's roles named as the source of a permission, by lowercased code."""
+        codes = {p.source_role_code.lower() for p in permissions if p.source_role_code}
+        if not codes:
+            return {}
+        roles = (
+            await session.execute(
+                select(Role).where(Role.organization_id == organization_id, func.lower(Role.code).in_(codes))
+            )
+        ).unique().scalars().all()
+        return {role.code.lower(): role for role in roles}
+
+    @staticmethod
+    def _source_role_id(source_roles: dict[str, Role], item: PermissionGrantInput) -> Optional[uuid.UUID]:
+        # Only a tag: roles change after they are applied, so a stale one is dropped, never refused.
+        if not item.source_role_code:
+            return None
+        role = source_roles.get(item.source_role_code.lower())
+        if role is None or item.code not in {rp.permission_code for rp in role.role_permissions}:
+            return None
+        return role.id
 
     async def _find_role(
         self, session: AsyncSession, organization_id: uuid.UUID, preset: RolePresetInput

@@ -56,6 +56,12 @@ class PermissionGrantInput(BaseModel):
     scope_unit_id: Optional[uuid.UUID] = Field(None, description="Omit for organization-wide scope.")
     self_only: bool = Field(False, description="Applies only to records the user owns or is assigned to.")
     valid_to: Optional[datetime] = Field(None, description="Temporary access end.")
+    source_role_code: Optional[str] = Field(
+        None,
+        max_length=100,
+        description="The role preset this permission comes from (shown as 'from <role>'). Ignored when "
+        "the organization has no such role or the role no longer includes the permission.",
+    )
 
 
 class RolePresetInput(BaseModel):
