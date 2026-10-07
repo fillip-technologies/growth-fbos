@@ -1,23 +1,29 @@
 import uuid
 from datetime import date, datetime
-from typing import Optional
+from typing import Annotated, Literal, Optional
 
 from fastapi import APIRouter, Depends, Header, Query, Response, status
+
 
 import permissions
 import services.tasks as service
 from dependencies import CurrentActor, DatabaseSession, OrgId, UserId, require_permission
 from schemas.common import PageResponse
 from schemas.tasks import (
+    AssignmentResponse,
+    BoardResponse,
     ChecklistItemResponse,
     ChecklistItemUpdate,
     CommentCreate,
     CommentResponse,
     DependencyCreate,
+    DependencyResponse,
     HandoverAccept,
+    HandoverCancel,
     HandoverCreate,
     HandoverReject,
     HandoverResponse,
+    QueueResponse,
     RecurringRuleCreate,
     RecurringRuleResponse,
     ReviewCreate,
@@ -33,6 +39,7 @@ from schemas.tasks import (
     TimeEntryCreate,
     TimeEntryResponse,
 )
+from services.tasks import TaskFilters
 
 router = APIRouter(tags=["tasks"])
 
@@ -45,41 +52,80 @@ CAN_WRITE_HANDOVERS = Depends(require_permission(permissions.HANDOVER_WRITE))
 # --- Tasks ---------------------------------------------------------------
 
 
-@router.get("/tasks", response_model=PageResponse[TaskResponse], dependencies=[CAN_READ])
-async def list_tasks(
-    session: DatabaseSession,
-    org_id: OrgId,
-    caller_user_id: UserId,
+def task_filters(
     assignee: Optional[str] = Query(None, description="'me' or a user id"),
+    unassigned: bool = Query(False, description="Only tasks nobody has taken yet (a team's queue)"),
     owning_unit_id: Optional[uuid.UUID] = Query(None),
     status_: Optional[list[str]] = Query(None, alias="status"),
     priority: Optional[str] = Query(None),
     subject_type: Optional[str] = Query(None),
     subject_id: Optional[uuid.UUID] = Query(None),
+    work_unit_id: Optional[uuid.UUID] = Query(None),
+    task_type: Optional[list[str]] = Query(None, description="Task type codes"),
+    discipline: Optional[str] = Query(None, description="general, software, sales, creative, operations, ..."),
     due_before: Optional[datetime] = Query(None),
     overdue: Optional[bool] = Query(None),
     q: Optional[str] = Query(None),
+) -> TaskFilters:
+    """The filters the task list, board and queue share."""
+    return TaskFilters(
+        assignee=assignee,
+        unassigned=unassigned,
+        owning_unit_id=owning_unit_id,
+        statuses=status_,
+        priority=priority,
+        subject_type=subject_type,
+        subject_id=subject_id,
+        work_unit_id=work_unit_id,
+        task_types=task_type,
+        discipline=discipline,
+        due_before=due_before,
+        overdue=overdue,
+        q=q,
+    )
+
+
+Filters = Annotated[TaskFilters, Depends(task_filters)]
+
+
+@router.get("/tasks", response_model=PageResponse[TaskResponse], dependencies=[CAN_READ])
+async def list_tasks(
+    session: DatabaseSession,
+    org_id: OrgId,
+    caller_user_id: UserId,
+    filters: Filters,
     limit: int = Query(25, ge=1, le=100),
     cursor: Optional[str] = Query(None),
     sort: Optional[str] = Query(None),
 ) -> PageResponse[TaskResponse]:
-    """List tasks."""
-    return await service.list_tasks(
-        session,
-        org_id,
-        caller_user_id,
-        assignee,
-        owning_unit_id,
-        status_,
-        priority,
-        subject_type,
-        subject_id,
-        due_before,
-        overdue,
-        q,
-        limit,
-        cursor,
-    )
+    """List tasks, newest first."""
+    return await service.list_tasks(session, org_id, caller_user_id, filters, limit, cursor)
+
+
+@router.get("/tasks/board", response_model=BoardResponse, dependencies=[CAN_READ])
+async def get_task_board(
+    session: DatabaseSession,
+    org_id: OrgId,
+    caller_user_id: UserId,
+    filters: Filters,
+    group_by: Literal["status", "assignee", "priority", "task_type"] = Query("status"),
+    per_column: int = Query(50, ge=1, le=100),
+    done_within_days: int = Query(14, ge=1, le=365, description="Done tasks finished this recently (status board)"),
+) -> BoardResponse:
+    """The tasks as board columns, each with its count and most urgent tasks first."""
+    return await service.get_board(session, org_id, caller_user_id, filters, group_by, per_column, done_within_days)
+
+
+@router.get("/tasks/queue", response_model=QueueResponse, dependencies=[CAN_READ])
+async def get_task_queue(
+    session: DatabaseSession,
+    org_id: OrgId,
+    caller_user_id: UserId,
+    filters: Filters,
+    limit: int = Query(25, ge=1, le=100),
+) -> QueueResponse:
+    """What to work next, nearest due first: your actionable tasks, or a team's unassigned ones (`unassigned=true`)."""
+    return await service.get_queue(session, org_id, caller_user_id, filters, limit)
 
 
 @router.post("/tasks", response_model=TaskResponse, status_code=status.HTTP_201_CREATED, dependencies=[CAN_WRITE])
@@ -121,17 +167,18 @@ async def get_task(
     return task
 
 
-@router.patch("/tasks/{task_id}", response_model=TaskResponse, dependencies=[CAN_WRITE])
+@router.patch("/tasks/{task_id}", response_model=TaskResponse, dependencies=[CAN_READ])
 async def update_task(
     task_id: uuid.UUID,
     payload: TaskUpdate,
     session: DatabaseSession,
     org_id: OrgId,
+    actor: CurrentActor,
     response: Response,
     if_match: Optional[str] = Header(None, alias="If-Match"),
 ) -> TaskResponse:
-    """Update a task."""
-    task = await service.update_task(session, org_id, task_id, payload, if_match)
+    """Update a task (a task manager; its assignee may fill in its fields and progress)."""
+    task = await service.update_task(session, org_id, actor, task_id, payload, if_match)
     await session.commit()
     response.headers["ETag"] = f'"{task.version}"'
     return task
@@ -149,6 +196,22 @@ async def assign_task(
 ) -> TaskResponse:
     """Assign or reassign a task."""
     task = await service.assign_task(session, org_id, user_id, task_id, payload, if_match)
+    await session.commit()
+    response.headers["ETag"] = f'"{task.version}"'
+    return task
+
+
+@router.post("/tasks/{task_id}/claim", response_model=TaskResponse, dependencies=[CAN_READ])
+async def claim_task(
+    task_id: uuid.UUID,
+    session: DatabaseSession,
+    org_id: OrgId,
+    user_id: UserId,
+    response: Response,
+    if_match: Optional[str] = Header(None, alias="If-Match"),
+) -> TaskResponse:
+    """Take an unassigned task from the team's queue."""
+    task = await service.claim_task(session, org_id, user_id, task_id, if_match)
     await session.commit()
     response.headers["ETag"] = f'"{task.version}"'
     return task
@@ -233,6 +296,32 @@ async def review_task(
     review = await service.review_task(session, org_id, actor, task_id, payload)
     await session.commit()
     return review
+
+
+@router.get("/tasks/{task_id}/reviews", response_model=PageResponse[ReviewResponse], dependencies=[CAN_READ])
+async def list_reviews(
+    task_id: uuid.UUID,
+    session: DatabaseSession,
+    org_id: OrgId,
+    limit: int = Query(25, ge=1, le=100),
+    cursor: Optional[str] = Query(None),
+    sort: Optional[str] = Query(None),
+) -> PageResponse[ReviewResponse]:
+    """Every review round, oldest first."""
+    return await service.list_reviews(session, org_id, task_id, limit, cursor)
+
+
+@router.get("/tasks/{task_id}/assignments", response_model=PageResponse[AssignmentResponse], dependencies=[CAN_READ])
+async def list_assignments(
+    task_id: uuid.UUID,
+    session: DatabaseSession,
+    org_id: OrgId,
+    limit: int = Query(25, ge=1, le=100),
+    cursor: Optional[str] = Query(None),
+    sort: Optional[str] = Query(None),
+) -> PageResponse[AssignmentResponse]:
+    """Everyone the task was given to (assignees, reviewers), until when and why it ended."""
+    return await service.list_assignments(session, org_id, task_id, limit, cursor)
 
 
 @router.post("/tasks/{task_id}/cancel", response_model=TaskResponse, dependencies=[CAN_WRITE])
@@ -330,6 +419,14 @@ async def list_time_entries(
     return await service.list_time_entries(session, org_id, actor, user_id, date_from, date_to, limit, cursor)
 
 
+@router.delete("/time-entries/{entry_id}", status_code=status.HTTP_204_NO_CONTENT, dependencies=[CAN_READ])
+async def remove_time_entry(entry_id: uuid.UUID, session: DatabaseSession, org_id: OrgId, user_id: UserId) -> Response:
+    """Remove time you logged yourself."""
+    await service.remove_time_entry(session, org_id, user_id, entry_id)
+    await session.commit()
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
 # --- Comments & dependencies -------------------------------------------------
 
 
@@ -375,6 +472,32 @@ async def add_dependency(
     return task
 
 
+@router.get("/tasks/{task_id}/dependencies", response_model=PageResponse[DependencyResponse], dependencies=[CAN_READ])
+async def list_dependencies(
+    task_id: uuid.UUID,
+    session: DatabaseSession,
+    org_id: OrgId,
+    direction: Literal["waits_for", "blocks"] = Query("waits_for"),
+    limit: int = Query(25, ge=1, le=100),
+    cursor: Optional[str] = Query(None),
+    sort: Optional[str] = Query(None),
+) -> PageResponse[DependencyResponse]:
+    """The tasks this one waits for, or (`direction=blocks`) the ones waiting for it."""
+    return await service.list_dependencies(session, org_id, task_id, direction, limit, cursor)
+
+
+@router.delete(
+    "/tasks/{task_id}/dependencies/{depends_on_task_id}", status_code=status.HTTP_204_NO_CONTENT, dependencies=[CAN_WRITE]
+)
+async def remove_dependency(
+    task_id: uuid.UUID, depends_on_task_id: uuid.UUID, session: DatabaseSession, org_id: OrgId
+) -> Response:
+    """Stop waiting for a task."""
+    await service.remove_dependency(session, org_id, task_id, depends_on_task_id)
+    await session.commit()
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
 # --- Handovers -----------------------------------------------------------
 
 
@@ -383,13 +506,24 @@ async def list_handovers(
     session: DatabaseSession,
     org_id: OrgId,
     to_unit_id: Optional[uuid.UUID] = Query(None),
-    status_: Optional[str] = Query(None, alias="status"),
+    from_unit_id: Optional[uuid.UUID] = Query(None),
+    status_: Optional[list[str]] = Query(None, alias="status"),
+    subject_type: Optional[str] = Query(None),
+    subject_id: Optional[uuid.UUID] = Query(None),
     limit: int = Query(25, ge=1, le=100),
     cursor: Optional[str] = Query(None),
     sort: Optional[str] = Query(None),
 ) -> PageResponse[HandoverResponse]:
-    """List handovers."""
-    return await service.list_handovers(session, org_id, to_unit_id, status_, limit, cursor)
+    """List handovers: to a team (incoming), from a team (outgoing), or about one piece of work."""
+    return await service.list_handovers(
+        session, org_id, to_unit_id, from_unit_id, status_, subject_type, subject_id, limit, cursor
+    )
+
+
+@router.get("/handovers/{handover_id}", response_model=HandoverResponse, dependencies=[CAN_READ_HANDOVERS])
+async def get_handover(handover_id: uuid.UUID, session: DatabaseSession, org_id: OrgId) -> HandoverResponse:
+    """Get a handover."""
+    return await service.get_handover(session, org_id, handover_id)
 
 
 @router.post("/handovers", response_model=HandoverResponse, status_code=status.HTTP_201_CREATED, dependencies=[CAN_WRITE_HANDOVERS])
@@ -432,6 +566,21 @@ async def reject_handover(
 ) -> HandoverResponse:
     """Reject a handover."""
     handover = await service.reject_handover(session, org_id, user_id, handover_id, payload, if_match)
+    await session.commit()
+    return handover
+
+
+@router.post("/handovers/{handover_id}/cancel", response_model=HandoverResponse, dependencies=[CAN_WRITE_HANDOVERS])
+async def cancel_handover(
+    handover_id: uuid.UUID,
+    payload: HandoverCancel,
+    session: DatabaseSession,
+    org_id: OrgId,
+    user_id: UserId,
+    if_match: Optional[str] = Header(None, alias="If-Match"),
+) -> HandoverResponse:
+    """Withdraw a handover nobody has answered yet."""
+    handover = await service.cancel_handover(session, org_id, user_id, handover_id, payload, if_match)
     await session.commit()
     return handover
 

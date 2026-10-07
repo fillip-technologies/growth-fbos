@@ -43,13 +43,18 @@ class ChecklistItemUpdate(BaseModel):
     done: bool
 
 
-# --- SLA (read-only projection; see report for the simplification) ------
+# --- SLA (read-only projection; see services/task_profiles.py) -----------
 
 
 class TaskSla(BaseModel):
+    """A clock from the task type's SLA targets: response (until started) or resolution (until done)."""
+
+    kind: Literal["response", "resolution"] = "resolution"
     state: Literal["running", "paused", "at_risk", "breached", "met", "breached_closed"]
     due_at: datetime
     consumed_pct: float
+    target_minutes: int
+    paused_minutes: int = 0
 
 
 # --- Tasks ---------------------------------------------------------------
@@ -61,7 +66,9 @@ class TaskCreate(BaseModel):
     title: str = Field(..., min_length=1, max_length=255)
     description: Optional[str] = None
     task_type_code: str
-    subject: SubjectRefInput
+    subject: Optional[SubjectRefInput] = Field(
+        None, description="What the task is about: a project (work.work_unit), a lead (revenue.lead), ... None for a stand-alone to-do."
+    )
     owning_unit_id: uuid.UUID = Field(..., description="Team that owns the task. Required.")
     assignee_user_id: Optional[uuid.UUID] = Field(None, description="Must be an active member of the owning unit.")
     reviewer_user_id: Optional[uuid.UUID] = None
@@ -72,7 +79,7 @@ class TaskCreate(BaseModel):
     checklist: Optional[list[ChecklistItemInput]] = None
     labels: Optional[list[str]] = None
     parent_task_id: Optional[uuid.UUID] = None
-    attributes: Optional[dict] = None
+    attributes: Optional[dict] = Field(None, description="Values for the task type's fields, and the organization's custom fields.")
     # Back-dating support: when omitted, the task is dated today.
     created_on: Optional[PastDate] = None
 
@@ -87,7 +94,7 @@ class TaskUpdate(BaseModel):
     estimate_minutes: Optional[int] = None
     progress_pct: Optional[int] = Field(None, ge=0, le=100)
     labels: Optional[list[str]] = None
-    attributes: Optional[dict] = None
+    attributes: Optional[dict] = Field(None, description="Merged into the stored ones; an empty value removes the key.")
 
 
 class TaskAssign(BaseModel):
@@ -113,6 +120,12 @@ class TaskSubmit(BaseModel):
 
     note: Optional[str] = None
     deliverable_document_ids: Optional[list[uuid.UUID]] = None
+    outcome: Optional[str] = Field(None, description="One of the task type's outcome codes; required when the type has outcomes.")
+    attributes: Optional[dict] = Field(None, description="Field values recorded with the submission (a pull request link, call notes).")
+    follow_up_at: Optional[datetime] = Field(
+        None, description="Schedule the next touch for then, instead of when the outcome says."
+    )
+    skip_follow_up: bool = Field(False, description="Don't schedule the follow-up the outcome would.")
 
 
 class TaskCancel(BaseModel):
@@ -129,6 +142,8 @@ class TaskTypeRef(BaseModel):
     id: uuid.UUID
     code: str
     name: str
+    discipline: str = "general"
+    estimation_unit: Literal["minutes", "points", "count"] = "minutes"
 
 
 class TaskResponse(BaseModel):
@@ -159,11 +174,59 @@ class TaskResponse(BaseModel):
     checklist: list[ChecklistItemResponse] = Field(default_factory=list)
     labels: list[str] = Field(default_factory=list)
     sla: Optional[TaskSla] = None
+    response_sla: Optional[TaskSla] = None
+    outcome: Optional[str] = None
+    follow_up_task_id: Optional[uuid.UUID] = None
+    cadence_step: Optional[int] = None
     attributes: dict = Field(default_factory=dict)
     version: int
     created_by: Optional[UserRef] = None
     created_at: datetime
     updated_at: datetime
+
+
+class AssignmentResponse(BaseModel):
+    """Someone the task was given to, as assignee or reviewer, and until when."""
+
+    id: uuid.UUID
+    user: Optional[UserRef] = None
+    unit: Optional[UnitRef] = None
+    role: Literal["assignee", "reviewer"]
+    assigned_by: Optional[UserRef] = None
+    assigned_at: datetime
+    ended_at: Optional[datetime] = None
+    end_reason: Optional[str] = None
+
+
+class DependencyResponse(BaseModel):
+    """A task linked to this one: one it waits for, or one waiting for it."""
+
+    task_id: uuid.UUID
+    code: str
+    title: str
+    status: TaskStatus
+    dependency_type: Literal["finish_to_start", "start_to_start", "finish_to_finish"]
+
+
+class BoardColumn(BaseModel):
+    key: str
+    label: Optional[str] = None
+    statuses: list[TaskStatus] = Field(default_factory=list)
+    count: int
+    tasks: list[TaskResponse] = Field(default_factory=list)
+    has_more: bool = False
+
+
+class BoardResponse(BaseModel):
+    group_by: Literal["status", "assignee", "priority", "task_type"]
+    columns: list[BoardColumn]
+
+
+class QueueResponse(BaseModel):
+    """The next tasks to work, most urgent first, and how many there are in all."""
+
+    data: list[TaskResponse]
+    total: int
 
 
 class TaskHistoryItemResponse(BaseModel):
@@ -293,6 +356,15 @@ class HandoverAccept(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     note: Optional[str] = None
+    assignee_user_id: Optional[uuid.UUID] = Field(
+        None, description="For a task: who in the receiving team takes it on at once. Omitted: it waits in their queue."
+    )
+
+
+class HandoverCancel(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    reason: str = Field(..., min_length=1)
 
 
 class HandoverReject(BaseModel):

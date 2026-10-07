@@ -104,6 +104,9 @@ services:
     ports:
       - "8003:8000"
     env_file: ./src/v1/03_delivery/.env
+    environment:
+      # Identity authenticates every request; inside the compose network it isn't on localhost.
+      IDENTITY_SERVICE_URL: http://identity:8000
     depends_on:
       db:
         condition: service_healthy
