@@ -14,18 +14,19 @@ if str(SERVICE_DIR) not in sys.path:
 if os.environ.get("IMAGEKIT_LIVE") != "1":
     os.environ["IMAGEKIT_PRIVATE_KEY"] = ""
 
+from dataclasses import dataclass, field
+
 from database.base import Base
 from database.session import get_db_session
-from dependencies import (
-    get_current_user,
-    get_current_user_id,
-    get_current_user_name,
-    get_organization_id,
-)
+from dependencies import get_caller
+from exceptions import DocumentsServiceError, SubjectNotFoundError
 import httpx
 from main import app
 import models  # loads all models into Base.metadata
 from models.document import DocumentCategory
+from services.access import Caller
+from services.identity_client import Actor
+from services.subject_client import SubjectAccess
 import pytest
 import pytest_asyncio
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
@@ -33,6 +34,47 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 TEST_ORG_ID = uuid.UUID("0191f3a2-0011-7011-8077-0000001b2aa9")
 TEST_USER_ID = uuid.UUID("0191f3a2-0012-7012-807e-0000001cc3c2")
 TEST_USER_NAME = "Aarav Sharma"
+OTHER_USER_ID = uuid.UUID("0191f3a2-0012-7012-807e-0000001cc3c3")
+DOCUMENT_PERMISSIONS = frozenset({"document.read", "document.upload", "document.share"})
+
+
+class FakeSubjects:
+    """
+    Stands in for the services that own subjects: every record exists in TEST_ORG_ID and
+    accepts documents, unless a test says otherwise with `deny`.
+    """
+
+    def __init__(self) -> None:
+        self.denials: dict[tuple[str, uuid.UUID, str], DocumentsServiceError] = {}
+        self.calls: list[tuple[str, uuid.UUID, str]] = []
+
+    def deny(self, subject_type: str, subject_id: uuid.UUID, action: str, error: DocumentsServiceError | None = None):
+        self.denials[(subject_type, subject_id, action)] = error or SubjectNotFoundError()
+
+    async def check(self, authorization, user_id, organization_id, subject_type, subject_id, action) -> SubjectAccess:
+        self.calls.append((subject_type, subject_id, action))
+        error = self.denials.get((subject_type, subject_id, action))
+        if error:
+            raise error
+        return SubjectAccess(organization_id=TEST_ORG_ID, label=f"{subject_type} {str(subject_id)[:8]}")
+
+
+@dataclass
+class CallerControl:
+    """What the next request runs as; tests change `actor` to switch users."""
+
+    actor: Actor
+    subjects: FakeSubjects = field(default_factory=FakeSubjects)
+
+    def act_as(self, user_id: uuid.UUID, *, superuser: bool = False, permissions=DOCUMENT_PERMISSIONS) -> None:
+        self.actor = Actor(
+            user_id=user_id,
+            organization_id=TEST_ORG_ID,
+            user_type="client_admin" if superuser else "member",
+            name="Other User" if user_id != TEST_USER_ID else TEST_USER_NAME,
+            is_superuser=superuser,
+            permissions=frozenset(permissions),
+        )
 
 
 @pytest_asyncio.fixture(scope="function")
@@ -86,47 +128,23 @@ async def db_session(test_engine) -> AsyncGenerator[AsyncSession, None]:
         yield session
 
 
+@pytest.fixture
+def caller_control() -> CallerControl:
+    control = CallerControl(actor=Actor(user_id=TEST_USER_ID, organization_id=TEST_ORG_ID, user_type="member", name=""))
+    control.act_as(TEST_USER_ID)
+    return control
+
+
 @pytest_asyncio.fixture(scope="function")
-async def async_client(db_session: AsyncSession) -> AsyncGenerator[httpx.AsyncClient, None]:
+async def async_client(db_session: AsyncSession, caller_control: CallerControl) -> AsyncGenerator[httpx.AsyncClient, None]:
     async def override_get_db():
         yield db_session
 
-    async def override_get_user():
-        return {
-            "user_id": TEST_USER_ID,
-            "org_id": TEST_ORG_ID,
-            "name": TEST_USER_NAME,
-            "email": "aarav.sharma@example.com",
-            "roles": ["admin"],
-            "permissions": [
-                "document.document.create",
-                "document.document.read",
-                "document.document.download",
-                "document.document.update",
-                "document.document.share",
-            ],
-        }
-
-    async def override_get_org_id():
-        return TEST_ORG_ID
-
-    async def override_get_user_id():
-        return TEST_USER_ID
-
-    async def override_get_user_name():
-        return TEST_USER_NAME
-
     app.dependency_overrides[get_db_session] = override_get_db
-    app.dependency_overrides[get_current_user] = override_get_user
-    app.dependency_overrides[get_organization_id] = override_get_org_id
-    app.dependency_overrides[get_current_user_id] = override_get_user_id
-    app.dependency_overrides[get_current_user_name] = override_get_user_name
-
-    headers = {
-        "X-FBOS-Org-Id": str(TEST_ORG_ID),
-        "X-FBOS-User-Id": str(TEST_USER_ID),
-        "X-FBOS-User-Name": TEST_USER_NAME,
-    }
+    app.dependency_overrides[get_caller] = lambda: Caller(
+        actor=caller_control.actor, authorization="Bearer test", subjects=caller_control.subjects
+    )
+    headers = {"Authorization": "Bearer test"}
 
     async with httpx.AsyncClient(
         transport=httpx.ASGITransport(app=app),

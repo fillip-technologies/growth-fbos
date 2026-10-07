@@ -5,6 +5,7 @@ from routes.client_services import router as client_services_router
 from routes.clients import router as clients_router
 from routes.collections import router as collections_router
 from routes.contracts import router as contracts_router
+from routes.internal import router as internal_router
 from routes.invoices import router as invoices_router
 from routes.leads import router as leads_router
 from routes.offerings import router as offerings_router
@@ -26,6 +27,7 @@ core_router.include_router(invoices_router)
 core_router.include_router(payments_router)
 core_router.include_router(collections_router)
 core_router.include_router(webhooks_router)
+core_router.include_router(internal_router)
 
 # Mount both /v1 and /api/revenue/v1 for complete compatibility
 router = APIRouter()

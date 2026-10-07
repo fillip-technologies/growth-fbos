@@ -3,15 +3,16 @@ import uuid
 
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
-from sqlalchemy import select
-from sqlalchemy.exc import SQLAlchemyError
+import httpx
 
+from config import settings
 from database.base import Base
-from database.session import async_session_factory, dispose_engine, engine
+from database.session import dispose_engine, engine
 from exceptions import DocumentsServiceError
 import models  # noqa: F401 - Register all models with Base.metadata
-from models.document import DocumentCategory
 from router import router
+from services.identity_client import IdentityClient
+from services.subject_client import SubjectClient
 
 _PROBLEM_META: dict[str, tuple[str, bool]] = {
     "NOT_FOUND": ("Resource not found", False),
@@ -29,49 +30,30 @@ _PROBLEM_META: dict[str, tuple[str, bool]] = {
     "PERMISSION_DENIED": ("You don't have permission for this action", False),
     "UNAUTHORIZED": ("Authentication required", False),
     "VALIDATION_FAILED": ("Some fields are invalid", False),
+    "CATEGORY_UNKNOWN": ("Unknown document category", False),
+    "CATEGORY_CODE_EXISTS": ("Category code already in use", False),
+    "SUBJECT_LOCKED": ("This record no longer accepts documents", False),
+    "AUTH_SERVICE_UNAVAILABLE": ("Sign-in could not be checked", True),
+    "SUBJECT_SERVICE_UNAVAILABLE": ("Linked record could not be checked", True),
 }
-
-DEFAULT_CATEGORIES = [
-    ("deliverable", "Deliverable", "confidential"),
-    ("contract", "Signed Contract", "confidential"),
-    ("invoice", "Invoice PDF", "internal"),
-    ("report", "Report", "internal"),
-    ("policy", "Policy Document", "internal"),
-    ("attachment", "General Attachment", "internal"),
-]
-DEFAULT_ORG_ID = uuid.UUID("0191f3a2-0011-7011-8077-0000001b2aa9")
-
-
-async def seed_default_categories():
-    """Seed standard classification categories on initial boot."""
-    async with async_session_factory() as session:
-        for code, name, default_class in DEFAULT_CATEGORIES:
-            stmt = select(DocumentCategory).where(
-                DocumentCategory.organization_id == DEFAULT_ORG_ID,
-                DocumentCategory.code == code,
-            )
-            res = await session.execute(stmt)
-            if not res.scalar_one_or_none():
-                cat = DocumentCategory(
-                    id=uuid.uuid4(),
-                    organization_id=DEFAULT_ORG_ID,
-                    code=code,
-                    name=name,
-                    default_classification=default_class,
-                )
-                session.add(cat)
-        await session.commit()
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
-    try:
-        await seed_default_categories()
-    except SQLAlchemyError:
-        pass
-    yield
+    async with (
+        httpx.AsyncClient(base_url=settings.identity_service_url, timeout=settings.identity_timeout_seconds) as identity_http,
+        httpx.AsyncClient(timeout=settings.subject_check_timeout_seconds) as subject_http,
+    ):
+        app.state.identity_client = IdentityClient(identity_http, settings.internal_service_token)
+        app.state.subject_client = SubjectClient(
+            subject_http,
+            settings.subject_services,
+            settings.internal_service_token,
+            settings.subject_read_cache_seconds,
+        )
+        yield
     await dispose_engine()
 
 

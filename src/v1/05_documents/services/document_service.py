@@ -4,7 +4,7 @@ import json
 from typing import Optional
 import uuid
 
-from sqlalchemy import desc, func, or_, select
+from sqlalchemy import desc, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -12,7 +12,6 @@ from exceptions import (
     DocumentInfectedError,
     DocumentNotFoundError,
     DocumentScanPendingError,
-    SubjectNotFoundError,
     VersionNotFoundError,
 )
 from models.document import (
@@ -22,16 +21,18 @@ from models.document import (
     DocumentLink,
     DocumentVersion,
 )
-from schemas.common import PageInfo, SubjectRef
+from schemas.common import PageInfo, SubjectRef, SubjectRefInput
 from schemas.document import (
     DocumentLinkCreate,
     DocumentLinkResponse,
     DocumentListResponse,
     DocumentResponse,
     DownloadUrlResponse,
+    LinkCopyResult,
 )
+from services.access import PERM_READ, PERM_UPLOAD, Caller, require_document_read, require_document_write
 from services.storage_service import storage_service
-from services.upload_service import serialize_document
+from services.upload_service import document_query, serialize_document
 
 
 class DocumentService:
@@ -40,20 +41,24 @@ class DocumentService:
     async def list_documents(
         self,
         session: AsyncSession,
-        org_id: uuid.UUID,
-        subject_type: Optional[str] = None,
-        subject_id: Optional[uuid.UUID] = None,
+        caller: Caller,
+        subject: Optional[SubjectRefInput] = None,
         category_code: Optional[str] = None,
         q: Optional[str] = None,
         limit: int = 25,
         cursor: Optional[str] = None,
         sort: Optional[str] = None,
     ) -> DocumentListResponse:
+        """
+        With a subject, the documents linked to that record (if the caller can see it).
+        Without one, the caller's own uploads; a client admin sees the whole organization.
+        """
+        caller.require(PERM_READ)
         limit = max(1, min(limit, 100))
 
         stmt = (
             select(Document)
-            .where(Document.organization_id == org_id)
+            .where(Document.organization_id == caller.organization_id)
             .options(
                 selectinload(Document.versions).selectinload(DocumentVersion.storage_object),
                 selectinload(Document.links),
@@ -62,13 +67,13 @@ class DocumentService:
             .execution_options(populate_existing=True)
         )
 
-        # Filter by linked subject
-        if subject_type or subject_id:
-            stmt = stmt.join(Document.links)
-            if subject_type:
-                stmt = stmt.where(DocumentLink.subject_type == subject_type)
-            if subject_id:
-                stmt = stmt.where(DocumentLink.subject_id == subject_id)
+        if subject:
+            await caller.check_subject(subject.type, subject.id, "read")
+            stmt = stmt.join(Document.links).where(
+                DocumentLink.subject_type == subject.type, DocumentLink.subject_id == subject.id
+            )
+        elif not caller.actor.is_superuser:
+            stmt = stmt.where(Document.owner_user_id == caller.user_id)
 
         # Filter by category
         if category_code:
@@ -126,46 +131,25 @@ class DocumentService:
     async def get_document(
         self,
         session: AsyncSession,
+        caller: Caller,
         document_id: uuid.UUID,
-        org_id: uuid.UUID,
     ) -> DocumentResponse:
-        stmt = (
-            select(Document)
-            .where(Document.id == document_id, Document.organization_id == org_id)
-            .options(
-                selectinload(Document.versions).selectinload(DocumentVersion.storage_object),
-                selectinload(Document.links),
-                selectinload(Document.category),
-            )
-            .execution_options(populate_existing=True)
-        )
-        result = await session.execute(stmt)
-        doc = result.scalar_one_or_none()
-        if not doc:
-            raise DocumentNotFoundError(str(document_id))
+        caller.require(PERM_READ)
+        doc = await self._load(session, caller, document_id)
+        await require_document_read(caller, doc)
         return serialize_document(doc)
 
     async def get_download_url(
         self,
         session: AsyncSession,
+        caller: Caller,
         document_id: uuid.UUID,
         version_no: int,
-        org_id: uuid.UUID,
-        user_id: Optional[uuid.UUID] = None,
         client_ip: Optional[str] = None,
     ) -> DownloadUrlResponse:
-        stmt = (
-            select(Document)
-            .where(Document.id == document_id, Document.organization_id == org_id)
-            .options(
-                selectinload(Document.versions).selectinload(DocumentVersion.storage_object),
-            )
-            .execution_options(populate_existing=True)
-        )
-        result = await session.execute(stmt)
-        doc = result.scalar_one_or_none()
-        if not doc:
-            raise DocumentNotFoundError(str(document_id))
+        caller.require(PERM_READ)
+        doc = await self._load(session, caller, document_id)
+        await require_document_read(caller, doc)
 
         version = next((v for v in doc.versions if v.version_no == version_no), None)
         if not version:
@@ -184,7 +168,7 @@ class DocumentService:
             id=uuid.uuid4(),
             document_id=doc.id,
             version_id=version.id,
-            actor_user_id=user_id,
+            actor_user_id=caller.user_id,
             action="download",
             ip=client_ip,
             occurred_at=now,
@@ -192,7 +176,7 @@ class DocumentService:
         session.add(access_log)
         await session.commit()
 
-        object_key = storage_obj.object_key if storage_obj else f"org/{org_id.hex[:8]}/{version.id}"
+        object_key = storage_obj.object_key if storage_obj else f"org/{doc.organization_id.hex[:8]}/{version.id}"
         download_url, expires_at = storage_service.generate_download_url(object_key=object_key, expires_seconds=60)
 
         return DownloadUrlResponse(
@@ -204,23 +188,21 @@ class DocumentService:
     async def link_document(
         self,
         session: AsyncSession,
+        caller: Caller,
         document_id: uuid.UUID,
         data: DocumentLinkCreate,
-        org_id: uuid.UUID,
-        user_id: Optional[uuid.UUID] = None,
     ) -> DocumentLinkResponse:
-        stmt = (
-            select(Document)
-            .where(Document.id == document_id, Document.organization_id == org_id)
-            .execution_options(populate_existing=True)
-        )
-        result = await session.execute(stmt)
-        doc = result.scalar_one_or_none()
-        if not doc:
-            raise DocumentNotFoundError(str(document_id))
+        caller.require(PERM_UPLOAD)
+        doc = await self._load(session, caller, document_id)
+        await require_document_write(caller, doc)
+        access = await caller.check_subject(data.subject.type, data.subject.id, "attach")
 
-        if not data.subject.type or not data.subject.id:
-            raise SubjectNotFoundError()
+        existing = next(
+            (lnk for lnk in doc.links if lnk.subject_type == data.subject.type and lnk.subject_id == data.subject.id),
+            None,
+        )
+        if existing:
+            return _serialize_link(existing)
 
         now = datetime.now(timezone.utc)
         link = DocumentLink(
@@ -228,9 +210,9 @@ class DocumentService:
             document_id=doc.id,
             subject_type=data.subject.type,
             subject_id=data.subject.id,
-            label=f"{data.subject.type} · {doc.title}",
+            label=access.label or data.subject.type,
             link_role=data.link_role or "attachment",
-            linked_by=user_id,
+            linked_by=caller.user_id,
             linked_at=now,
         )
         session.add(link)
@@ -238,22 +220,82 @@ class DocumentService:
         access_log = DocumentAccessLog(
             id=uuid.uuid4(),
             document_id=doc.id,
-            actor_user_id=user_id,
+            actor_user_id=caller.user_id,
             action="link",
             occurred_at=now,
         )
         session.add(access_log)
         await session.commit()
+        return _serialize_link(link)
 
-        return DocumentLinkResponse(
-            subject=SubjectRef(
-                type=link.subject_type,
-                id=link.subject_id,
-                label=link.label,
-            ),
-            link_role=link.link_role,
-            linked_at=link.linked_at.strftime("%Y-%m-%dT%H:%M:%SZ"),
+    async def copy_links(
+        self,
+        session: AsyncSession,
+        organization_id: uuid.UUID,
+        user_id: uuid.UUID,
+        source: SubjectRefInput,
+        target: SubjectRefInput,
+        target_label: Optional[str],
+    ) -> LinkCopyResult:
+        """
+        Link every document of `source` to `target` too, e.g. a quotation's attachments to
+        its new revision. Called by the owning service, which vouches for both records.
+        """
+        stmt = (
+            select(DocumentLink)
+            .join(DocumentLink.document)
+            .where(
+                Document.organization_id == organization_id,
+                DocumentLink.subject_type == source.type,
+                DocumentLink.subject_id == source.id,
+            )
         )
+        source_links = (await session.execute(stmt)).scalars().all()
+        already_linked = set(
+            (
+                await session.execute(
+                    select(DocumentLink.document_id).where(
+                        DocumentLink.subject_type == target.type, DocumentLink.subject_id == target.id
+                    )
+                )
+            ).scalars().all()
+        )
+
+        now = datetime.now(timezone.utc)
+        copied = 0
+        for link in source_links:
+            if link.document_id in already_linked:
+                continue
+            session.add(
+                DocumentLink(
+                    id=uuid.uuid4(),
+                    document_id=link.document_id,
+                    subject_type=target.type,
+                    subject_id=target.id,
+                    label=target_label or link.label,
+                    link_role=link.link_role,
+                    linked_by=user_id,
+                    linked_at=now,
+                )
+            )
+            already_linked.add(link.document_id)
+            copied += 1
+        await session.commit()
+        return LinkCopyResult(copied=copied)
+
+    async def _load(self, session: AsyncSession, caller: Caller, document_id: uuid.UUID) -> Document:
+        doc = (await session.execute(document_query(document_id, caller.organization_id))).scalar_one_or_none()
+        if not doc:
+            raise DocumentNotFoundError(str(document_id))
+        return doc
+
+
+def _serialize_link(link: DocumentLink) -> DocumentLinkResponse:
+    return DocumentLinkResponse(
+        subject=SubjectRef(type=link.subject_type, id=link.subject_id, label=link.label),
+        link_role=link.link_role,
+        linked_at=link.linked_at.strftime("%Y-%m-%dT%H:%M:%SZ"),
+    )
 
 
 document_service = DocumentService()

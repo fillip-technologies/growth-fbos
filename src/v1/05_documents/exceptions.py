@@ -250,3 +250,72 @@ class PreconditionFailedError(DocumentsServiceError):
             code="PRECONDITION_FAILED",
             message="The resource has been modified since it was fetched.",
         )
+
+
+class CategoryUnknownError(DocumentsServiceError):
+    """422: The upload names a category the organization hasn't set up."""
+
+    def __init__(self, category_code: str) -> None:
+        super().__init__(
+            status_code=getattr(status, "HTTP_422_UNPROCESSABLE_CONTENT", 422),
+            code="CATEGORY_UNKNOWN",
+            message=f"Document category '{category_code}' is not set up for this organization.",
+            meta={"category_code": category_code},
+        )
+
+
+class CategoryCodeExistsError(DocumentsServiceError):
+    """409: Another category of the organization already uses this code."""
+
+    def __init__(self, category_code: str) -> None:
+        super().__init__(
+            status_code=status.HTTP_409_CONFLICT,
+            code="CATEGORY_CODE_EXISTS",
+            message=f"A document category with code '{category_code}' already exists.",
+            meta={"category_code": category_code},
+        )
+
+
+class SubjectLockedError(DocumentsServiceError):
+    """409: The record no longer accepts new documents (e.g. an accepted quotation)."""
+
+    def __init__(self, message: str = "This record no longer accepts new documents.") -> None:
+        super().__init__(
+            status_code=status.HTTP_409_CONFLICT,
+            code="SUBJECT_LOCKED",
+            message=message,
+        )
+
+
+class AuthServiceUnavailableError(DocumentsServiceError):
+    """503: Identity could not be reached to authenticate the request."""
+
+    def __init__(self) -> None:
+        super().__init__(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            code="AUTH_SERVICE_UNAVAILABLE",
+            message="Sign-in could not be checked right now. Try again shortly.",
+        )
+
+
+class SubjectServiceUnavailableError(DocumentsServiceError):
+    """503: The service that owns the linked record could not be reached."""
+
+    def __init__(self, service: str) -> None:
+        super().__init__(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            code="SUBJECT_SERVICE_UNAVAILABLE",
+            message="Access to the linked record could not be checked right now. Try again shortly.",
+            meta={"service": service},
+        )
+
+
+class ValidationFailedError(DocumentsServiceError):
+    """422: The request is well-formed but its values don't fit together."""
+
+    def __init__(self, message: str) -> None:
+        super().__init__(
+            status_code=getattr(status, "HTTP_422_UNPROCESSABLE_CONTENT", 422),
+            code="VALIDATION_FAILED",
+            message=message,
+        )

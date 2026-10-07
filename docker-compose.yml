@@ -81,6 +81,10 @@ services:
     ports:
       - "8002:8000"
     env_file: ./src/v1/02_revenue/.env
+    environment:
+      # Service-to-service URLs inside the compose network (override the .env's localhost defaults)
+      IDENTITY_SERVICE_URL: http://identity:8000
+      DOCUMENTS_SERVICE_URL: http://documents:8000
     depends_on:
       db:
         condition: service_healthy
@@ -138,6 +142,10 @@ services:
     ports:
       - "8005:8000"
     env_file: ./src/v1/05_documents/.env
+    environment:
+      # Service-to-service URLs inside the compose network (override the .env's localhost defaults)
+      IDENTITY_SERVICE_URL: http://identity:8000
+      SUBJECT_SERVICES: '{"revenue": "http://revenue:8000/api/revenue/v1"}'
     depends_on:
       db:
         condition: service_healthy

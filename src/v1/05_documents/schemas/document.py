@@ -67,3 +67,17 @@ class DownloadUrlResponse(BaseModel):
     url: str
     expires_at: str
     file_name: str
+
+
+class LinkCopyCreate(BaseModel):
+    """Internal: link every document of `source` to `target` too."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    source: SubjectRefInput
+    target: SubjectRefInput
+    target_label: Optional[str] = Field(None, max_length=500)
+
+
+class LinkCopyResult(BaseModel):
+    copied: int
