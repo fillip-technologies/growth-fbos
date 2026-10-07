@@ -1,7 +1,7 @@
 """
 Authentication through the identity service.
 
-Revenue holds no users or sessions, so it never trusts caller-supplied ids. Each request's
+Documents holds no users or sessions, so it never trusts caller-supplied ids. Each request's
 `Authorization` and `X-Organization-Id` headers are forwarded to identity's internal
 `/authz/actor` endpoint, which runs identity's own checks (token, revoked session, client
 lock, active user, organization within the client) and answers with who the caller is,
@@ -14,7 +14,7 @@ import uuid
 
 import httpx
 
-from exceptions import AuthServiceUnavailableError, RevenueServiceError
+from exceptions import AuthServiceUnavailableError, DocumentsServiceError
 
 ACTOR_PATH = "/api/identity/v1/internal/authz/actor"
 
@@ -68,12 +68,11 @@ class IdentityClient:
         )
 
 
-def relayed_error(response: httpx.Response) -> Optional[RevenueServiceError]:
+def relayed_error(response: httpx.Response) -> Optional[DocumentsServiceError]:
     """
-    Another service's rejection (expired token, revoked session, unknown organization...)
-    passed on with its status and code, so the console reacts exactly as it does to that
-    service itself (a 401 refreshes the session, a 404 organization is "not found"). None
-    when the response carries no error code.
+    Another service's rejection (expired token, revoked session, unknown record...) passed
+    on with its status and code, so the console reacts exactly as it does to that service
+    itself. None when the response carries no error code.
     """
     try:
         body: Any = response.json()
@@ -82,11 +81,11 @@ def relayed_error(response: httpx.Response) -> Optional[RevenueServiceError]:
     if not isinstance(body, dict):
         return None
     # FBOS services answer with an RFC 7807 problem (`code` at the top level, `detail` a
-    # string) or, for token errors, with `detail` = {code, message, status}.
+    # string) or with `detail` = {code, message, status}.
     problem = body["detail"] if isinstance(body.get("detail"), dict) else body
     code = problem.get("code")
     if not isinstance(code, str):
         return None
     detail = problem.get("detail")
     message = problem.get("message") or (detail if isinstance(detail, str) else code)
-    return RevenueServiceError(response.status_code, code, message, meta=problem.get("meta"))
+    return DocumentsServiceError(response.status_code, code, message, meta=problem.get("meta"))

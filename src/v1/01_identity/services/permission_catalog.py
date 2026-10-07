@@ -91,7 +91,9 @@ PERMISSION_CATALOG: list[tuple[str, str, str]] = [
     ("control.sla.write", "control", "Request SLA exceptions and acknowledge escalations"),
     ("control.sla.manage", "control", "Set up SLA policies"),
     ("document.read", "documents", "Read documents"),
-    ("document.upload", "documents", "Upload documents"),
+    ("document.upload", "documents", "Upload documents and attach them to records"),
+    ("document.share", "documents", "Share documents with people outside FBOS"),
+    ("document.category.manage", "documents", "Set up the organization's document categories"),
 ]
 
 ADMIN_ROLE_CODE = "admin"

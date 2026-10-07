@@ -4,12 +4,7 @@ import uuid
 from fastapi import APIRouter, Header, Request, Response, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from dependencies import (
-    DatabaseSession,
-    OrgId,
-    UserId,
-    get_client_ip,
-)
+from dependencies import CurrentCaller, DatabaseSession, get_client_ip
 from schemas.document import DownloadUrlResponse
 from services.share_service import share_service
 
@@ -25,15 +20,9 @@ router = APIRouter(tags=["shares"])
 async def revoke_share(
     share_id: uuid.UUID,
     session: DatabaseSession,
-    org_id: OrgId,
-    user_id: UserId,
+    caller: CurrentCaller,
 ) -> Response:
-    await share_service.revoke_share(
-        session=session,
-        share_id=share_id,
-        org_id=org_id,
-        user_id=user_id,
-    )
+    await share_service.revoke_share(session=session, caller=caller, share_id=share_id)
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 

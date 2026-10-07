@@ -1,6 +1,8 @@
 from fastapi import APIRouter
 
+from routes.categories import router as categories_router
 from routes.documents import router as documents_router
+from routes.internal import router as internal_router
 from routes.shares import router as shares_router
 from routes.uploads import router as uploads_router
 
@@ -14,6 +16,8 @@ async def ping() -> dict:
 core_router.include_router(uploads_router)
 core_router.include_router(documents_router)
 core_router.include_router(shares_router)
+core_router.include_router(categories_router)
+core_router.include_router(internal_router)
 
 # Mount both /v1 and /api/documents/v1 for complete compatibility
 router = APIRouter()

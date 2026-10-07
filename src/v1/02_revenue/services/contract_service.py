@@ -7,10 +7,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from exceptions import (
     ContractNotFoundError,
+    DocumentNotLinkedError,
     InvalidStateTransitionError,
     PaymentTermsTotalError,
     PreconditionRequiredError,
     QuotationNotAcceptedError,
+    SignedCopyRequiredError,
     VersionConflictError,
 )
 from models.client import Client
@@ -23,7 +25,11 @@ from schemas.contract import (
     PaymentTermResponse,
 )
 from schemas.opportunity import ClientRef
+from services.documents_client import DocumentsClient
 from services.quotation_service import get_quote_in_org
+
+# Statuses in which the signed copy can still be (re)attached.
+SIGNABLE_STATUSES = ("draft", "pending_signature")
 
 
 def format_contract_response(
@@ -230,10 +236,53 @@ class ContractService:
         if contract.version != expected_version:
             raise VersionConflictError(contract.version)
 
-        if contract.status not in ("draft", "pending_signature"):
+        if contract.status not in SIGNABLE_STATUSES:
             raise InvalidStateTransitionError(contract.status, "activate")
+        if contract.signed_document_id is None:
+            raise SignedCopyRequiredError()
 
         contract.status = "active"
+        contract.version += 1
+        await session.flush()
+
+        return await ContractService.get_contract(session, contract_id, org_id)
+
+    @staticmethod
+    async def set_signed_document(
+        session: AsyncSession,
+        contract_id: uuid.UUID,
+        org_id: uuid.UUID,
+        document_id: uuid.UUID,
+        if_match: Optional[str],
+        documents: DocumentsClient,
+        authorization: str,
+    ) -> ContractResponse:
+        """
+        Record which uploaded document is the signed copy. The file itself lives in the
+        documents service and must already be attached to this contract there.
+        """
+        contract = (
+            await session.execute(select(Contract).where(Contract.id == contract_id, Contract.organization_id == org_id))
+        ).scalars().first()
+        if not contract:
+            raise ContractNotFoundError(str(contract_id))
+
+        if if_match is None:
+            raise PreconditionRequiredError()
+        if contract.version != int(if_match.strip('"').replace("W/", "")):
+            raise VersionConflictError(contract.version)
+        if contract.status not in SIGNABLE_STATUSES:
+            raise InvalidStateTransitionError(contract.status, "attach signed copy")
+
+        document = await documents.find_document(authorization, org_id, document_id)
+        linked_here = document is not None and any(
+            link["subject"]["type"] == "revenue.contract" and link["subject"]["id"] == str(contract_id)
+            for link in document.get("links", [])
+        )
+        if not linked_here:
+            raise DocumentNotLinkedError()
+
+        contract.signed_document_id = document_id
         contract.signed_at = datetime.now(timezone.utc)
         contract.version += 1
         await session.flush()

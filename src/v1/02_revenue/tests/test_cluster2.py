@@ -137,7 +137,7 @@ async def test_opportunity_lifecycle(async_client: httpx.AsyncClient):
     assert "price" in lost_res.json()["lost_reason"]
 
 
-async def test_quotation_and_contract_workflow(async_client: httpx.AsyncClient):
+async def test_quotation_and_contract_workflow(async_client: httpx.AsyncClient, fake_documents):
     client_id, offering_id = await _setup_client_and_offering(async_client)
 
     # 1. Create Opportunity via lead convert
@@ -298,7 +298,22 @@ async def test_quotation_and_contract_workflow(async_client: httpx.AsyncClient):
     assert ct_get.status_code == 200
     assert ct_get.json()["id"] == contract_id
 
-    # 10. Activate Contract
+    # 10. Activation waits for the signed copy
+    blocked = await async_client.post(f"/api/revenue/v1/contracts/{contract_id}/activate", headers={"If-Match": ct_etag})
+    assert blocked.status_code == 409
+    assert blocked.json()["detail"]["code"] == "SIGNED_COPY_REQUIRED"
+
+    signed_id = fake_documents.add_linked("revenue.contract", contract_id)
+    signed = await async_client.put(
+        f"/api/revenue/v1/contracts/{contract_id}/signed-document",
+        json={"document_id": signed_id},
+        headers={"If-Match": ct_etag},
+    )
+    assert signed.status_code == 200, signed.text
+    assert signed.json()["signed_document_id"] == signed_id
+    ct_etag = signed.headers["ETag"]
+
+    # 11. Activate Contract
     act_res = await async_client.post(f"/api/revenue/v1/contracts/{contract_id}/activate", headers={"If-Match": ct_etag})
     assert act_res.status_code == 200
     assert act_res.json()["status"] == "active"

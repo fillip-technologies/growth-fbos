@@ -1,20 +1,16 @@
-from collections.abc import AsyncGenerator
-from typing import Annotated, Optional
+import secrets
+from typing import Annotated, Awaitable, Callable, Optional
 import uuid
 
-from fastapi import Depends, Header, HTTPException, Request, status
-from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
-import jwt
+from fastapi import Depends, Header, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from config import settings
 from database.session import get_db_session
-
-DEFAULT_ORG_ID = uuid.UUID("0191f3a2-0011-7011-8077-0000001b2aa9")
-DEFAULT_USER_ID = uuid.UUID("0191f3a2-0012-7012-807e-0000001cc3c2")
-DEFAULT_USER_NAME = "Aarav Sharma"
-
-bearer_scheme = HTTPBearer(auto_error=False)
+from exceptions import PermissionDeniedError, UnauthorizedError
+from services.access import Caller
+from services.identity_client import Actor, IdentityClient
+from services.subject_client import SubjectClient
 
 
 def get_client_ip(request: Request) -> str:
@@ -30,118 +26,64 @@ def get_user_agent(request: Request) -> str:
     return request.headers.get("user-agent", "Unknown")
 
 
-def decode_jwt_token(token: str) -> dict:
-    """Decode and validate a JWT access token."""
-    return jwt.decode(
-        token,
-        settings.jwt_secret,
-        algorithms=[settings.jwt_algorithm],
-        options={"verify_exp": True},
-    )
+def get_identity_client(request: Request) -> IdentityClient:
+    return request.app.state.identity_client
 
 
-async def get_current_user(
-    request: Request,
-    credentials: Optional[HTTPAuthorizationCredentials] = Depends(bearer_scheme),
-) -> dict:
+def get_subject_client(request: Request) -> SubjectClient:
+    return request.app.state.subject_client
+
+
+def get_authorization(authorization: Optional[str] = Header(None)) -> str:
+    if not authorization or not authorization.lower().startswith("bearer "):
+        raise UnauthorizedError()
+    return authorization
+
+
+async def get_actor(
+    authorization: Annotated[str, Depends(get_authorization)],
+    identity: Annotated[IdentityClient, Depends(get_identity_client)],
+    x_organization_id: Optional[uuid.UUID] = Header(None, alias="X-Organization-Id"),
+) -> Actor:
     """
-    Validate access token or extract gateway identity headers.
+    Who is calling and which organization they act in, as decided by identity. A client
+    admin may target any organization of their client via `X-Organization-Id`; everyone
+    else acts in their own.
     """
-    token: Optional[str] = None
-    if isinstance(credentials, HTTPAuthorizationCredentials):
-        token = credentials.credentials
-    elif "authorization" in request.headers:
-        hdr = request.headers["authorization"]
-        if hdr.lower().startswith("bearer "):
-            token = hdr[7:].strip()
-
-    if token:
-        try:
-            payload = decode_jwt_token(token)
-            return {
-                "user_id": uuid.UUID(payload["sub"]) if isinstance(payload.get("sub"), str) else payload.get("sub"),
-                "email": payload.get("email"),
-                "org_id": uuid.UUID(payload["org_id"]) if payload.get("org_id") else DEFAULT_ORG_ID,
-                "name": payload.get("name", DEFAULT_USER_NAME),
-                "roles": payload.get("roles", []),
-                "permissions": payload.get("permissions", []),
-            }
-        except (jwt.ExpiredSignatureError, jwt.InvalidTokenError, ValueError):
-            pass
-
-    # 2. If Gateway forwarded headers are present
-    user_id_hdr = request.headers.get("x-fbos-user-id")
-    org_id_hdr = request.headers.get("x-fbos-org-id")
-    user_name_hdr = request.headers.get("x-fbos-user-name", DEFAULT_USER_NAME)
-
-    user_id = DEFAULT_USER_ID
-    if user_id_hdr:
-        try:
-            user_id = uuid.UUID(user_id_hdr)
-        except ValueError:
-            pass
-
-    org_id = DEFAULT_ORG_ID
-    if org_id_hdr:
-        try:
-            org_id = uuid.UUID(org_id_hdr)
-        except ValueError:
-            pass
-
-    return {
-        "user_id": user_id,
-        "email": "aarav.sharma@example.com",
-        "org_id": org_id,
-        "name": user_name_hdr,
-        "roles": ["admin"],
-        "permissions": [
-            "document.document.create",
-            "document.document.read",
-            "document.document.download",
-            "document.document.update",
-            "document.document.share",
-        ],
-    }
+    return await identity.resolve_actor(authorization, x_organization_id)
 
 
-async def get_organization_id(
-    request: Request,
-    current_user: Annotated[dict, Depends(get_current_user)],
-    x_fbos_org_id: Optional[str] = Header(None, alias="X-FBOS-Org-Id"),
-) -> uuid.UUID:
-    if x_fbos_org_id:
-        try:
-            return uuid.UUID(x_fbos_org_id)
-        except ValueError:
-            pass
-    return current_user["org_id"]
+async def get_caller(
+    actor: Annotated[Actor, Depends(get_actor)],
+    authorization: Annotated[str, Depends(get_authorization)],
+    subjects: Annotated[SubjectClient, Depends(get_subject_client)],
+) -> Caller:
+    return Caller(actor=actor, authorization=authorization, subjects=subjects)
 
 
-async def get_current_user_id(
-    request: Request,
-    current_user: Annotated[dict, Depends(get_current_user)],
-    x_fbos_user_id: Optional[str] = Header(None, alias="X-FBOS-User-Id"),
-) -> uuid.UUID:
-    if x_fbos_user_id:
-        try:
-            return uuid.UUID(x_fbos_user_id)
-        except ValueError:
-            pass
-    return current_user["user_id"]
+CurrentCaller = Annotated[Caller, Depends(get_caller)]
 
 
-async def get_current_user_name(
-    request: Request,
-    current_user: Annotated[dict, Depends(get_current_user)],
-    x_fbos_user_name: Optional[str] = Header(None, alias="X-FBOS-User-Name"),
-) -> str:
-    if x_fbos_user_name:
-        return x_fbos_user_name
-    return current_user["name"]
+def require_permission(permission: str) -> Callable[..., Awaitable[Caller]]:
+    """Route guard: the caller must hold `permission`."""
+
+    async def guard(caller: CurrentCaller) -> Caller:
+        caller.require(permission)
+        return caller
+
+    guard.__name__ = f"require_{permission.replace('.', '_')}"
+    return guard
+
+
+def verify_internal_caller(x_fbos_internal_token: Optional[str] = Header(None, alias="X-FBOS-Internal-Token")) -> None:
+    """Guard for /internal/* endpoints: only other FBOS services may call them."""
+    expected = settings.internal_service_token
+    if not expected:
+        if settings.app_env == "development":
+            return
+        raise PermissionDeniedError("internal")
+    if not x_fbos_internal_token or not secrets.compare_digest(x_fbos_internal_token, expected):
+        raise PermissionDeniedError("internal")
 
 
 DatabaseSession = Annotated[AsyncSession, Depends(get_db_session)]
-OrgId = Annotated[uuid.UUID, Depends(get_organization_id)]
-UserId = Annotated[uuid.UUID, Depends(get_current_user_id)]
-UserName = Annotated[str, Depends(get_current_user_name)]
-CurrentUser = Annotated[dict, Depends(get_current_user)]

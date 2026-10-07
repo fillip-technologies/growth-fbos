@@ -8,6 +8,7 @@ import httpx
 from config import settings
 from database.session import warm_pool
 from router import router
+from services.documents_client import DocumentsClient
 from services.identity_client import IdentityClient
 from services.notification_client import notification_client
 from services.website_lead_import import start_import_loop
@@ -26,6 +27,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         timeout=settings.website_leads_timeout_seconds,
     ) as website_http:
         app.state.identity_client = IdentityClient(http, settings.internal_service_token)
+        app.state.documents_client = DocumentsClient(documents_http, settings.internal_service_token)
         if settings.communication_service_url:
             notification_client.start(communication_http, settings.internal_service_token)
         if settings.website_leads_api_key:
