@@ -4,12 +4,20 @@
 # Databases live on Hostinger (set in each service .env), so the local MySQL container is
 # off (start it with --profile local-db). Only the gateway is published, on localhost:
 # aaPanel nginx proxies /api to it. Port 8000 on that host is taken, hence 8100.
+#
+# Links in identity's emails (invitation, password reset, sign in) point at the public site;
+# `environment` wins over the server's untracked .env, so they never fall back to localhost.
 name: fbos
 services:
   db:            { restart: always, ports: !reset [], profiles: ["local-db"] }
   redis:         { restart: always }
   gateway:       { restart: always, ports: !override ["127.0.0.1:8100:8000"] }
-  identity:      { restart: always, ports: !reset [], depends_on: !override { redis: { condition: service_started } } }
+  identity:
+    restart: always
+    ports: !reset []
+    depends_on: !override { redis: { condition: service_started } }
+    environment:
+      CLIENT_ADMIN_BASE_URL: https://fbos.fillipsoftware.com
   revenue:       { restart: always, ports: !reset [], depends_on: !reset {} }
   delivery:      { restart: always, ports: !reset [], depends_on: !reset {} }
   control:       { restart: always, ports: !reset [], depends_on: !reset {} }
