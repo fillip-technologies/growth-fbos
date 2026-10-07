@@ -17,19 +17,24 @@ page in one query each, never one query per row.
 """
 
 import uuid
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
+from decimal import Decimal
 from typing import Optional
 
-from sqlalchemy import func, or_, select
+from sqlalchemy import ColumnElement, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from exceptions import (
     BaselineChangeRequiresCrError,
+    BuiltInReadOnlyError,
     ChangeRequestNotFoundError,
     ClientRequiredError,
+    DuplicateCodeError,
     InvalidStateTransitionError,
     MilestoneNotFoundError,
+    PhaseNotFoundError,
     PreconditionRequiredError,
+    RiskNotFoundError,
     TemplateNotFoundError,
     TemplateNotPublishedError,
     TemplateVersionNotFoundError,
@@ -47,13 +52,16 @@ from models.task import Task
 from models.work_unit import WorkUnit, WorkUnitMember
 from models.work_unit_template import WorkTemplate, WorkTemplateVersion, WorkUnitType
 from models.work_unit_tracking import ProgressSnapshot, StatusHistory
-from schemas.common import Money, PageResponse
+from schemas.common import Money, PageResponse, SubjectRefInput
 from schemas.work_units import (
+    ChangeRequestApprove,
     ChangeRequestCreate,
     ChangeRequestResponse,
     DeliverableResponse,
+    MemberResponse,
     MembersReplace,
     MilestoneAccept,
+    MilestoneCreate,
     MilestoneReject,
     MilestoneResponse,
     MilestoneSubmit,
@@ -61,6 +69,8 @@ from schemas.work_units import (
     ProgressResponse,
     RiskCreate,
     RiskResponse,
+    RiskUpdate,
+    WorkTemplateCreate,
     WorkTemplateResponse,
     WorkTemplateVersionCreate,
     WorkTemplateVersionResponse,
@@ -68,12 +78,17 @@ from schemas.work_units import (
     WorkUnitResponse,
     WorkUnitStatusChange,
     WorkUnitSummaryResponse,
+    WorkUnitTypeCreate,
     WorkUnitTypeResponse,
+    WorkUnitTypeUpdate,
     WorkUnitUpdate,
 )
+from schemas.workflows import WorkflowInstanceStart
+from services import workflow_instances
 from services.codes import next_change_request_no, next_work_unit_code
 from services.pagination import paginate
 from services.refs import client_ref, unit_ref, user_ref, vertical_ref
+from services.tasks import WORK_UNIT_SUBJECT, own_tasks
 
 WORK_UNIT_TRANSITIONS: dict[str, set[str]] = {
     "draft": {"planned", "active", "cancelled"},
@@ -118,7 +133,78 @@ async def list_work_unit_types(
 ) -> PageResponse[WorkUnitTypeResponse]:
     query = select(WorkUnitType).where(_visible_types(org_id))
     rows, page = await paginate(session, query, WorkUnitType, limit, cursor, order_by=WorkUnitType.code)
-    return PageResponse(data=[WorkUnitTypeResponse.model_validate(r) for r in rows], page=page)
+    return PageResponse(data=[_work_unit_type_response(r) for r in rows], page=page)
+
+
+def _work_unit_type_response(unit_type: WorkUnitType) -> WorkUnitTypeResponse:
+    return WorkUnitTypeResponse(
+        id=unit_type.id,
+        code=unit_type.code,
+        name=unit_type.name,
+        category=unit_type.category,
+        requires_client=unit_type.requires_client,
+        built_in=unit_type.organization_id is None,
+    )
+
+
+async def create_work_unit_type(
+    session: AsyncSession, org_id: uuid.UUID, data: WorkUnitTypeCreate
+) -> WorkUnitTypeResponse:
+    # A code may exist once among the organization's types and the built-ins, so a lookup
+    # by code always finds exactly one type.
+    taken = (await session.execute(select(WorkUnitType.id).where(_visible_types(org_id), WorkUnitType.code == data.code))).first()
+    if taken:
+        raise DuplicateCodeError(data.code)
+    unit_type = WorkUnitType(organization_id=org_id, **data.model_dump())
+    session.add(unit_type)
+    await session.flush()
+    return _work_unit_type_response(unit_type)
+
+
+async def update_work_unit_type(
+    session: AsyncSession, org_id: uuid.UUID, type_id: uuid.UUID, data: WorkUnitTypeUpdate
+) -> WorkUnitTypeResponse:
+    unit_type = (
+        await session.execute(select(WorkUnitType).where(_visible_types(org_id), WorkUnitType.id == type_id))
+    ).scalars().first()
+    if not unit_type:
+        raise WorkUnitTypeNotFoundError(str(type_id))
+    if unit_type.organization_id is None:
+        raise BuiltInReadOnlyError(unit_type.code)
+    for field, value in data.model_dump(exclude_unset=True).items():
+        if value is not None:
+            setattr(unit_type, field, value)
+    await session.flush()
+    return _work_unit_type_response(unit_type)
+
+
+async def create_template(session: AsyncSession, org_id: uuid.UUID, data: WorkTemplateCreate) -> WorkTemplateResponse:
+    taken = (
+        await session.execute(
+            select(WorkTemplate.id).where(WorkTemplate.organization_id == org_id, WorkTemplate.code == data.code)
+        )
+    ).first()
+    if taken:
+        raise DuplicateCodeError(data.code)
+    unit_type = await _find_work_unit_type(session, org_id, data.work_unit_type_code)
+    template = WorkTemplate(
+        organization_id=org_id, work_unit_type_id=unit_type.id, vertical_id=data.vertical_id,
+        code=data.code, name=data.name, status="active",
+    )
+    session.add(template)
+    await session.flush()
+    return (await _template_responses(session, [template]))[0]
+
+
+async def list_template_versions(
+    session: AsyncSession, org_id: uuid.UUID, template_code: str, limit: int, cursor: Optional[str]
+) -> PageResponse[WorkTemplateVersionResponse]:
+    template = await _get_template_by_code(session, org_id, template_code)
+    query = select(WorkTemplateVersion).where(WorkTemplateVersion.template_id == template.id)
+    rows, page = await paginate(
+        session, query, WorkTemplateVersion, limit, cursor, order_by=WorkTemplateVersion.version_no, descending=True
+    )
+    return PageResponse(data=[_to_template_version_response(v, template.code) for v in rows], page=page)
 
 
 async def list_templates(
@@ -315,6 +401,8 @@ async def _work_unit_responses(session: AsyncSession, work_units: list[WorkUnit]
         ).scalars()
     }
 
+    running_workflows = await workflow_instances.running_instance_ids(session, WORK_UNIT_SUBJECT, work_unit_ids)
+
     responses = []
     for work_unit in work_units:
         template = template_by_version.get(work_unit.template_version_id)
@@ -325,7 +413,7 @@ async def _work_unit_responses(session: AsyncSession, work_units: list[WorkUnit]
                 code=work_unit.code,
                 name=work_unit.name,
                 objective=work_unit.objective,
-                type=WorkUnitTypeResponse.model_validate(unit_types[work_unit.work_unit_type_id]),
+                type=_work_unit_type_response(unit_types[work_unit.work_unit_type_id]),
                 template=template_responses[template.id] if template else None,
                 status=work_unit.status,
                 priority=work_unit.priority,
@@ -342,7 +430,7 @@ async def _work_unit_responses(session: AsyncSession, work_units: list[WorkUnit]
                 actual_end=work_unit.actual_end,
                 billable=work_unit.billable,
                 budget=_budget_amounts(budget),
-                workflow_instance_id=None,
+                workflow_instance_id=running_workflows.get(work_unit.id),
                 attributes=work_unit.attributes or {},
                 version=work_unit.version,
                 created_at=work_unit.created_at,
@@ -377,8 +465,12 @@ async def list_work_units(
     q: Optional[str],
     limit: int,
     cursor: Optional[str],
+    own_records_of: Optional[uuid.UUID] = None,
 ) -> PageResponse[WorkUnitResponse]:
+    """Projects matching the filters; only `own_records_of`'s own ones when it is given."""
     query = select(WorkUnit).where(WorkUnit.organization_id == org_id)
+    if own_records_of is not None:
+        query = query.where(own_work_units(org_id, own_records_of))
     if status is not None:
         query = query.where(WorkUnit.status == status)
     if owning_unit_id is not None:
@@ -417,9 +509,10 @@ async def _type_and_template_version(
 async def create_work_unit(
     session: AsyncSession, org_id: uuid.UUID, user_id: uuid.UUID, data: WorkUnitCreate
 ) -> WorkUnitResponse:
-    if data.start_workflow:
-        raise ValidationFailedError("start_workflow", "Starting a workflow with the project isn't available yet")
     unit_type, template_version = await _type_and_template_version(session, org_id, data)
+    workflow_code = template_version.workflow_definition_code if template_version else None
+    if data.start_workflow and not workflow_code:
+        raise ValidationFailedError("start_workflow", "Only a project made from a template with a workflow can start one")
     if unit_type.requires_client and data.client_id is None:
         raise ClientRequiredError()
 
@@ -451,6 +544,11 @@ async def create_work_unit(
 
     if template_version:
         await _copy_template_structure(session, work_unit, template_version.structure or {})
+    if data.start_workflow:
+        start = WorkflowInstanceStart(
+            definition_code=workflow_code, subject=SubjectRefInput(type=WORK_UNIT_SUBJECT, id=work_unit.id)
+        )
+        await workflow_instances.start_workflow_instance(session, org_id, user_id, start)
 
     return await _work_unit_response(session, work_unit)
 
@@ -501,6 +599,31 @@ async def _copy_template_structure(session: AsyncSession, work_unit: WorkUnit, s
         )
 
     await session.flush()
+
+
+def own_work_units(org_id: uuid.UUID, user_id: uuid.UUID) -> ColumnElement[bool]:
+    """Someone's own projects: they manage it, are on its team, or have a task in it."""
+    on_the_team = select(WorkUnitMember.work_unit_id).where(
+        WorkUnitMember.user_id == user_id,
+        or_(WorkUnitMember.valid_to.is_(None), WorkUnitMember.valid_to >= date.today()),
+    )
+    with_own_tasks = select(Task.work_unit_id).where(
+        Task.organization_id == org_id, Task.work_unit_id.is_not(None), own_tasks(user_id)
+    )
+    return or_(WorkUnit.manager_user_id == user_id, WorkUnit.id.in_(on_the_team), WorkUnit.id.in_(with_own_tasks))
+
+
+async def ensure_own_work_unit(
+    session: AsyncSession, org_id: uuid.UUID, work_unit_id: uuid.UUID, user_id: uuid.UUID
+) -> None:
+    """Anyone else's project is "not found" for someone who may see only their own."""
+    found = await session.execute(
+        select(WorkUnit.id).where(
+            WorkUnit.id == work_unit_id, WorkUnit.organization_id == org_id, own_work_units(org_id, user_id)
+        )
+    )
+    if found.scalar_one_or_none() is None:
+        raise WorkUnitNotFoundError(str(work_unit_id))
 
 
 async def _get_work_unit(session: AsyncSession, org_id: uuid.UUID, work_unit_id: uuid.UUID) -> WorkUnit:
@@ -714,6 +837,28 @@ async def list_milestones(
     return PageResponse(data=await _milestone_responses(session, rows), page=page)
 
 
+async def create_milestone(
+    session: AsyncSession, org_id: uuid.UUID, work_unit_id: uuid.UUID, data: MilestoneCreate
+) -> MilestoneResponse:
+    await _get_work_unit(session, org_id, work_unit_id)
+    taken = (
+        await session.execute(select(Milestone.id).where(Milestone.work_unit_id == work_unit_id, Milestone.code == data.code))
+    ).first()
+    if taken:
+        raise DuplicateCodeError(data.code)
+    if data.phase_id is not None:
+        phase = await session.get(Phase, data.phase_id)
+        if not phase or phase.work_unit_id != work_unit_id:
+            raise PhaseNotFoundError(str(data.phase_id))
+    last_seq = (
+        await session.execute(select(func.max(Milestone.seq)).where(Milestone.work_unit_id == work_unit_id))
+    ).scalar_one()
+    milestone = Milestone(work_unit_id=work_unit_id, seq=(last_seq or 0) + 1, status="pending", **data.model_dump())
+    session.add(milestone)
+    await session.flush()
+    return await _milestone_response(session, milestone)
+
+
 async def _get_milestone(session: AsyncSession, org_id: uuid.UUID, milestone_id: uuid.UUID) -> Milestone:
     milestone = await session.get(Milestone, milestone_id)
     if not milestone:
@@ -828,10 +973,39 @@ def _to_risk_response(risk: Risk) -> RiskResponse:
     )
 
 
+async def list_risks(
+    session: AsyncSession, org_id: uuid.UUID, work_unit_id: uuid.UUID, limit: int, cursor: Optional[str]
+) -> PageResponse[RiskResponse]:
+    await _get_work_unit(session, org_id, work_unit_id)
+    query = select(Risk).where(Risk.work_unit_id == work_unit_id)
+    rows, page = await paginate(session, query, Risk, limit, cursor, order_by=Risk.score, descending=True)
+    return PageResponse(data=[_to_risk_response(r) for r in rows], page=page)
+
+
+async def update_risk(session: AsyncSession, org_id: uuid.UUID, risk_id: uuid.UUID, data: RiskUpdate) -> RiskResponse:
+    risk = await session.get(Risk, risk_id)
+    if not risk:
+        raise RiskNotFoundError(str(risk_id))
+    await _get_work_unit(session, org_id, risk.work_unit_id)
+    for field, value in data.model_dump(exclude_unset=True).items():
+        if value is not None or field in ("mitigation", "owner_user_id"):
+            setattr(risk, field, value)
+    risk.score = risk.probability * risk.impact
+    await session.flush()
+    return _to_risk_response(risk)
+
+
+def _in_project_currency(work_unit: WorkUnit, cost: Money) -> Decimal:
+    """A change's cost goes into the project's budget, so it must be in the project's currency."""
+    if cost.currency != work_unit.currency:
+        raise ValidationFailedError("cost_impact.currency", f"Use the project's currency, {work_unit.currency}")
+    return Decimal(str(cost.amount))
+
+
 async def create_change_request(
     session: AsyncSession, org_id: uuid.UUID, work_unit_id: uuid.UUID, data: ChangeRequestCreate
 ) -> ChangeRequestResponse:
-    await _get_work_unit(session, org_id, work_unit_id)
+    work_unit = await _get_work_unit(session, org_id, work_unit_id)
     cr = ChangeRequest(
         work_unit_id=work_unit_id,
         cr_no=await next_change_request_no(session, org_id, work_unit_id),
@@ -839,7 +1013,7 @@ async def create_change_request(
         reason=data.reason,
         scope_impact=data.scope_impact,
         schedule_impact_days=data.schedule_impact_days,
-        cost_impact=data.cost_impact.amount,
+        cost_impact=_in_project_currency(work_unit, data.cost_impact),
         status="draft",
         amends_contract=data.amends_contract,
     )
@@ -860,16 +1034,122 @@ def _to_change_request_response(cr: ChangeRequest) -> ChangeRequestResponse:
         status=cr.status,
         approval_request_id=cr.approval_request_id,
         amends_contract=cr.amends_contract,
+        decided_by=user_ref(cr.decided_by),
+        decided_at=cr.decided_at,
+        decision_note=cr.decision_note,
+        approved_schedule_impact_days=cr.approved_schedule_impact_days,
+        approved_cost_impact=Money(amount=cr.approved_cost_impact) if cr.approved_cost_impact is not None else None,
     )
+
+
+async def list_change_requests(
+    session: AsyncSession, org_id: uuid.UUID, work_unit_id: uuid.UUID, limit: int, cursor: Optional[str]
+) -> PageResponse[ChangeRequestResponse]:
+    await _get_work_unit(session, org_id, work_unit_id)
+    query = select(ChangeRequest).where(ChangeRequest.work_unit_id == work_unit_id)
+    rows, page = await paginate(session, query, ChangeRequest, limit, cursor, order_by=ChangeRequest.cr_no)
+    return PageResponse(data=[_to_change_request_response(cr) for cr in rows], page=page)
+
+
+async def _get_change_request(session: AsyncSession, org_id: uuid.UUID, change_request_id: uuid.UUID) -> ChangeRequest:
+    cr = await session.get(ChangeRequest, change_request_id)
+    if not cr:
+        raise ChangeRequestNotFoundError(str(change_request_id))
+    await _get_work_unit(session, org_id, cr.work_unit_id)
+    return cr
+
+
+async def _submitted_change_request(
+    session: AsyncSession, org_id: uuid.UUID, change_request_id: uuid.UUID, decision: str, if_match: Optional[str]
+) -> ChangeRequest:
+    cr = await _get_change_request(session, org_id, change_request_id)
+    if if_match is None:
+        raise PreconditionRequiredError()
+    if cr.status != "submitted":
+        raise InvalidStateTransitionError(cr.status, decision)
+    return cr
+
+
+def _record_decision(cr: ChangeRequest, decision: str, user_id: uuid.UUID, note: Optional[str]) -> None:
+    cr.status = decision
+    cr.decided_by = user_id
+    cr.decided_at = datetime.now(timezone.utc)
+    cr.decision_note = note
+
+
+async def approve_change_request(
+    session: AsyncSession,
+    org_id: uuid.UUID,
+    user_id: uuid.UUID,
+    change_request_id: uuid.UUID,
+    data: ChangeRequestApprove,
+    if_match: Optional[str],
+) -> ChangeRequestResponse:
+    """
+    Approve a submitted change request with the impact the approver decided from the change in
+    work (what was asked for when they don't say). The approved impact applies at once: the
+    project's due date moves by its days, and its cost is added to the budget as a new version.
+    """
+    cr = await _submitted_change_request(session, org_id, change_request_id, "approved", if_match)
+    work_unit = await _get_work_unit(session, org_id, cr.work_unit_id)
+    if work_unit.status in ("closed", "cancelled"):
+        raise InvalidStateTransitionError(work_unit.status, "change approved")
+
+    days = data.schedule_impact_days if data.schedule_impact_days is not None else cr.schedule_impact_days
+    cost = _in_project_currency(work_unit, data.cost_impact) if data.cost_impact is not None else Decimal(str(cr.cost_impact))
+    _record_decision(cr, "approved", user_id, data.note)
+    cr.approved_schedule_impact_days = days
+    cr.approved_cost_impact = cost
+
+    if days and work_unit.planned_end is not None:
+        work_unit.planned_end = work_unit.planned_end + timedelta(days=days)
+    if cost:
+        await _add_to_budget(session, work_unit, cost)
+    work_unit.updated_at = datetime.now(timezone.utc)
+    work_unit.version += 1
+    await session.flush()
+    return _to_change_request_response(cr)
+
+
+async def _add_to_budget(session: AsyncSession, work_unit: WorkUnit, amount: Decimal) -> None:
+    """A new budget version with `amount` on top of the latest one; earlier versions stay."""
+    latest = (
+        await session.execute(
+            select(WorkBudget).where(WorkBudget.work_unit_id == work_unit.id).order_by(WorkBudget.version_no.desc())
+        )
+    ).scalars().first()
+    planned = Decimal(str(latest.planned_amount)) if latest else Decimal("0")
+    approved = Decimal(str(latest.approved_amount)) if latest else Decimal("0")
+    session.add(
+        WorkBudget(
+            work_unit_id=work_unit.id,
+            currency=latest.currency if latest else work_unit.currency,
+            planned_amount=planned + amount,
+            approved_amount=approved + amount,
+            version_no=(latest.version_no + 1) if latest else 1,
+        )
+    )
+
+
+async def reject_change_request(
+    session: AsyncSession,
+    org_id: uuid.UUID,
+    user_id: uuid.UUID,
+    change_request_id: uuid.UUID,
+    reason: str,
+    if_match: Optional[str],
+) -> ChangeRequestResponse:
+    """Reject a submitted change request; nothing about the project changes."""
+    cr = await _submitted_change_request(session, org_id, change_request_id, "rejected", if_match)
+    _record_decision(cr, "rejected", user_id, reason)
+    await session.flush()
+    return _to_change_request_response(cr)
 
 
 async def submit_change_request(
     session: AsyncSession, org_id: uuid.UUID, change_request_id: uuid.UUID, if_match: Optional[str]
 ) -> ChangeRequestResponse:
-    cr = await session.get(ChangeRequest, change_request_id)
-    if not cr:
-        raise ChangeRequestNotFoundError(str(change_request_id))
-    await _get_work_unit(session, org_id, cr.work_unit_id)
+    cr = await _get_change_request(session, org_id, change_request_id)
 
     if if_match is None:
         raise PreconditionRequiredError()
@@ -882,6 +1162,20 @@ async def submit_change_request(
 
 
 # --- Members ---------------------------------------------------------------
+
+
+async def list_members(session: AsyncSession, org_id: uuid.UUID, work_unit_id: uuid.UUID) -> list[MemberResponse]:
+    await _get_work_unit(session, org_id, work_unit_id)
+    members = await session.execute(
+        select(WorkUnitMember).where(WorkUnitMember.work_unit_id == work_unit_id).order_by(WorkUnitMember.valid_from)
+    )
+    return [
+        MemberResponse(
+            user=user_ref(m.user_id), member_role=m.member_role, allocation_pct=float(m.allocation_pct),
+            valid_from=m.valid_from, valid_to=m.valid_to,
+        )
+        for m in members.scalars().all()
+    ]
 
 
 async def replace_members(

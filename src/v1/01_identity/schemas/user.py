@@ -10,7 +10,6 @@ from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator, mo
 InvitableUserType = Literal["employee", "contractor", "client_user"]
 UserStatus = Literal["invited", "active", "suspended", "deactivated"]
 
-_PERMISSION_CODE = r"^[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*){2}$"
 _EMPLOYEE_CODE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_\-/.]*$")
 _PHONE = re.compile(r"^\+?[0-9][0-9 \-()]{5,30}$")
 
@@ -51,10 +50,18 @@ class PermissionGrantInput(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    code: str = Field(..., pattern=_PERMISSION_CODE, description="<service>.<entity>.<action>")
+    # The catalog decides which codes exist (it has two-part ones too, e.g. `document.read`);
+    # saving reports any other code as an unknown permission.
+    code: str = Field(..., min_length=1, max_length=200, description="A code from the permission catalog (GET /permissions)")
     scope_unit_id: Optional[uuid.UUID] = Field(None, description="Omit for organization-wide scope.")
     self_only: bool = Field(False, description="Applies only to records the user owns or is assigned to.")
     valid_to: Optional[datetime] = Field(None, description="Temporary access end.")
+    source_role_code: Optional[str] = Field(
+        None,
+        max_length=100,
+        description="The role preset this permission comes from (shown as 'from <role>'). Ignored when "
+        "the organization has no such role or the role no longer includes the permission.",
+    )
 
 
 class RolePresetInput(BaseModel):

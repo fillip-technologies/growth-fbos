@@ -291,11 +291,12 @@ class TransitionNotAvailableError(DeliveryServiceError):
 class TransitionConditionFailedError(DeliveryServiceError):
     """409: The JSON Logic condition evaluated to false."""
 
-    def __init__(self, transition_code: str) -> None:
+    def __init__(self, transition_code: str, reason: Optional[str] = None) -> None:
         super().__init__(
             status.HTTP_409_CONFLICT,
             "TRANSITION_CONDITION_FAILED",
-            f"The condition guarding transition '{transition_code}' evaluated to false.",
+            reason or f"The condition guarding transition '{transition_code}' evaluated to false.",
+            meta={"transition_code": transition_code},
         )
 
 

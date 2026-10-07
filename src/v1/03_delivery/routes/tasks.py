@@ -4,7 +4,6 @@ from typing import Annotated, Literal, Optional
 
 from fastapi import APIRouter, Depends, Header, Query, Response, status
 
-
 import permissions
 import services.tasks as service
 from dependencies import CurrentActor, DatabaseSession, OrgId, UserId, require_permission
@@ -35,6 +34,9 @@ from schemas.tasks import (
     TaskHistoryItemResponse,
     TaskResponse,
     TaskSubmit,
+    TaskTemplateCreate,
+    TaskTemplateResponse,
+    TaskTemplateUpdate,
     TaskUpdate,
     TimeEntryCreate,
     TimeEntryResponse,
@@ -47,12 +49,24 @@ CAN_READ = Depends(require_permission(permissions.TASK_READ))
 CAN_WRITE = Depends(require_permission(permissions.TASK_WRITE))
 CAN_READ_HANDOVERS = Depends(require_permission(permissions.HANDOVER_READ))
 CAN_WRITE_HANDOVERS = Depends(require_permission(permissions.HANDOVER_WRITE))
+CAN_MANAGE_TEMPLATES = Depends(require_permission(permissions.TEMPLATE_MANAGE))
+
+
+async def _task_in_view(task_id: uuid.UUID, actor: CurrentActor, session: DatabaseSession) -> None:
+    """Someone who may see only their own tasks gets "not found" for anyone else's."""
+    if actor.only_own(permissions.TASK_READ):
+        await service.ensure_own_task(session, actor.organization_id, task_id, actor.user_id)
+
+
+# On every /tasks/{task_id} route, after the permission check.
+IN_VIEW = Depends(_task_in_view)
 
 
 # --- Tasks ---------------------------------------------------------------
 
 
 def task_filters(
+    actor: CurrentActor,
     assignee: Optional[str] = Query(None, description="'me' or a user id"),
     unassigned: bool = Query(False, description="Only tasks nobody has taken yet (a team's queue)"),
     owning_unit_id: Optional[uuid.UUID] = Query(None),
@@ -67,7 +81,7 @@ def task_filters(
     overdue: Optional[bool] = Query(None),
     q: Optional[str] = Query(None),
 ) -> TaskFilters:
-    """The filters the task list, board and queue share."""
+    """The filters the task list, board and queue share; only the caller's own tasks when they may see no others."""
     return TaskFilters(
         assignee=assignee,
         unassigned=unassigned,
@@ -82,6 +96,7 @@ def task_filters(
         due_before=due_before,
         overdue=overdue,
         q=q,
+        own_records_of=actor.user_id if actor.only_own(permissions.TASK_READ) else None,
     )
 
 
@@ -154,7 +169,7 @@ async def get_tasks_summary(
     return await service.get_tasks_summary(session, org_id, caller_user_id)
 
 
-@router.get("/tasks/{task_id}", response_model=TaskResponse, dependencies=[CAN_READ])
+@router.get("/tasks/{task_id}", response_model=TaskResponse, dependencies=[CAN_READ, IN_VIEW])
 async def get_task(
     task_id: uuid.UUID,
     session: DatabaseSession,
@@ -167,7 +182,8 @@ async def get_task(
     return task
 
 
-@router.patch("/tasks/{task_id}", response_model=TaskResponse, dependencies=[CAN_READ])
+# CAN_READ: the assignee may fill in their own task; services.tasks.update_task checks the rest.
+@router.patch("/tasks/{task_id}", response_model=TaskResponse, dependencies=[CAN_READ, IN_VIEW])
 async def update_task(
     task_id: uuid.UUID,
     payload: TaskUpdate,
@@ -184,7 +200,7 @@ async def update_task(
     return task
 
 
-@router.post("/tasks/{task_id}/assign", response_model=TaskResponse, dependencies=[CAN_WRITE])
+@router.post("/tasks/{task_id}/assign", response_model=TaskResponse, dependencies=[CAN_WRITE, IN_VIEW])
 async def assign_task(
     task_id: uuid.UUID,
     payload: TaskAssign,
@@ -201,7 +217,7 @@ async def assign_task(
     return task
 
 
-@router.post("/tasks/{task_id}/claim", response_model=TaskResponse, dependencies=[CAN_READ])
+@router.post("/tasks/{task_id}/claim", response_model=TaskResponse, dependencies=[CAN_READ, IN_VIEW])
 async def claim_task(
     task_id: uuid.UUID,
     session: DatabaseSession,
@@ -217,7 +233,7 @@ async def claim_task(
     return task
 
 
-@router.post("/tasks/{task_id}/start", response_model=TaskResponse, dependencies=[CAN_READ])
+@router.post("/tasks/{task_id}/start", response_model=TaskResponse, dependencies=[CAN_READ, IN_VIEW])
 async def start_task(
     task_id: uuid.UUID,
     session: DatabaseSession,
@@ -233,7 +249,7 @@ async def start_task(
     return task
 
 
-@router.post("/tasks/{task_id}/block", response_model=TaskResponse, dependencies=[CAN_READ])
+@router.post("/tasks/{task_id}/block", response_model=TaskResponse, dependencies=[CAN_READ, IN_VIEW])
 async def block_task(
     task_id: uuid.UUID,
     payload: TaskBlock,
@@ -250,7 +266,7 @@ async def block_task(
     return task
 
 
-@router.post("/tasks/{task_id}/unblock", response_model=TaskResponse, dependencies=[CAN_READ])
+@router.post("/tasks/{task_id}/unblock", response_model=TaskResponse, dependencies=[CAN_READ, IN_VIEW])
 async def unblock_task(
     task_id: uuid.UUID,
     session: DatabaseSession,
@@ -266,7 +282,7 @@ async def unblock_task(
     return task
 
 
-@router.post("/tasks/{task_id}/submit", response_model=TaskResponse, dependencies=[CAN_READ])
+@router.post("/tasks/{task_id}/submit", response_model=TaskResponse, dependencies=[CAN_READ, IN_VIEW])
 async def submit_task(
     task_id: uuid.UUID,
     payload: TaskSubmit,
@@ -283,7 +299,7 @@ async def submit_task(
     return task
 
 
-@router.post("/tasks/{task_id}/reviews", response_model=ReviewResponse, status_code=status.HTTP_201_CREATED, dependencies=[CAN_READ])
+@router.post("/tasks/{task_id}/reviews", response_model=ReviewResponse, status_code=status.HTTP_201_CREATED, dependencies=[CAN_READ, IN_VIEW])
 async def review_task(
     task_id: uuid.UUID,
     payload: ReviewCreate,
@@ -298,7 +314,7 @@ async def review_task(
     return review
 
 
-@router.get("/tasks/{task_id}/reviews", response_model=PageResponse[ReviewResponse], dependencies=[CAN_READ])
+@router.get("/tasks/{task_id}/reviews", response_model=PageResponse[ReviewResponse], dependencies=[CAN_READ, IN_VIEW])
 async def list_reviews(
     task_id: uuid.UUID,
     session: DatabaseSession,
@@ -311,7 +327,7 @@ async def list_reviews(
     return await service.list_reviews(session, org_id, task_id, limit, cursor)
 
 
-@router.get("/tasks/{task_id}/assignments", response_model=PageResponse[AssignmentResponse], dependencies=[CAN_READ])
+@router.get("/tasks/{task_id}/assignments", response_model=PageResponse[AssignmentResponse], dependencies=[CAN_READ, IN_VIEW])
 async def list_assignments(
     task_id: uuid.UUID,
     session: DatabaseSession,
@@ -324,7 +340,7 @@ async def list_assignments(
     return await service.list_assignments(session, org_id, task_id, limit, cursor)
 
 
-@router.post("/tasks/{task_id}/cancel", response_model=TaskResponse, dependencies=[CAN_WRITE])
+@router.post("/tasks/{task_id}/cancel", response_model=TaskResponse, dependencies=[CAN_WRITE, IN_VIEW])
 async def cancel_task(
     task_id: uuid.UUID,
     payload: TaskCancel,
@@ -341,7 +357,7 @@ async def cancel_task(
     return task
 
 
-@router.patch("/tasks/{task_id}/checklist/{item_id}", response_model=ChecklistItemResponse, dependencies=[CAN_READ])
+@router.patch("/tasks/{task_id}/checklist/{item_id}", response_model=ChecklistItemResponse, dependencies=[CAN_READ, IN_VIEW])
 async def update_checklist_item(
     task_id: uuid.UUID,
     item_id: uuid.UUID,
@@ -356,7 +372,7 @@ async def update_checklist_item(
     return item
 
 
-@router.get("/tasks/{task_id}/history", response_model=PageResponse[TaskHistoryItemResponse], dependencies=[CAN_READ])
+@router.get("/tasks/{task_id}/history", response_model=PageResponse[TaskHistoryItemResponse], dependencies=[CAN_READ, IN_VIEW])
 async def get_task_history(
     task_id: uuid.UUID,
     session: DatabaseSession,
@@ -372,7 +388,7 @@ async def get_task_history(
 # --- Time entries ------------------------------------------------------
 
 
-@router.get("/tasks/{task_id}/time-entries", response_model=PageResponse[TimeEntryResponse], dependencies=[CAN_READ])
+@router.get("/tasks/{task_id}/time-entries", response_model=PageResponse[TimeEntryResponse], dependencies=[CAN_READ, IN_VIEW])
 async def list_task_time_entries(
     task_id: uuid.UUID,
     session: DatabaseSession,
@@ -387,7 +403,7 @@ async def list_task_time_entries(
 
 
 @router.post(
-    "/tasks/{task_id}/time-entries", response_model=TimeEntryResponse, status_code=status.HTTP_201_CREATED, dependencies=[CAN_READ]
+    "/tasks/{task_id}/time-entries", response_model=TimeEntryResponse, status_code=status.HTTP_201_CREATED, dependencies=[CAN_READ, IN_VIEW]
 )
 async def log_time(
     task_id: uuid.UUID,
@@ -430,7 +446,7 @@ async def remove_time_entry(entry_id: uuid.UUID, session: DatabaseSession, org_i
 # --- Comments & dependencies -------------------------------------------------
 
 
-@router.get("/tasks/{task_id}/comments", response_model=PageResponse[CommentResponse], dependencies=[CAN_READ])
+@router.get("/tasks/{task_id}/comments", response_model=PageResponse[CommentResponse], dependencies=[CAN_READ, IN_VIEW])
 async def list_comments(
     task_id: uuid.UUID,
     session: DatabaseSession,
@@ -443,7 +459,7 @@ async def list_comments(
     return await service.list_comments(session, org_id, task_id, limit, cursor)
 
 
-@router.post("/tasks/{task_id}/comments", response_model=CommentResponse, status_code=status.HTTP_201_CREATED, dependencies=[CAN_READ])
+@router.post("/tasks/{task_id}/comments", response_model=CommentResponse, status_code=status.HTTP_201_CREATED, dependencies=[CAN_READ, IN_VIEW])
 async def add_comment(
     task_id: uuid.UUID,
     payload: CommentCreate,
@@ -458,7 +474,7 @@ async def add_comment(
     return comment
 
 
-@router.post("/tasks/{task_id}/dependencies", response_model=TaskResponse, status_code=status.HTTP_201_CREATED, dependencies=[CAN_WRITE])
+@router.post("/tasks/{task_id}/dependencies", response_model=TaskResponse, status_code=status.HTTP_201_CREATED, dependencies=[CAN_WRITE, IN_VIEW])
 async def add_dependency(
     task_id: uuid.UUID,
     payload: DependencyCreate,
@@ -472,7 +488,7 @@ async def add_dependency(
     return task
 
 
-@router.get("/tasks/{task_id}/dependencies", response_model=PageResponse[DependencyResponse], dependencies=[CAN_READ])
+@router.get("/tasks/{task_id}/dependencies", response_model=PageResponse[DependencyResponse], dependencies=[CAN_READ, IN_VIEW])
 async def list_dependencies(
     task_id: uuid.UUID,
     session: DatabaseSession,
@@ -487,7 +503,7 @@ async def list_dependencies(
 
 
 @router.delete(
-    "/tasks/{task_id}/dependencies/{depends_on_task_id}", status_code=status.HTTP_204_NO_CONTENT, dependencies=[CAN_WRITE]
+    "/tasks/{task_id}/dependencies/{depends_on_task_id}", status_code=status.HTTP_204_NO_CONTENT, dependencies=[CAN_WRITE, IN_VIEW]
 )
 async def remove_dependency(
     task_id: uuid.UUID, depends_on_task_id: uuid.UUID, session: DatabaseSession, org_id: OrgId
@@ -614,3 +630,44 @@ async def create_recurring_rule(
     rule = await service.create_recurring_rule(session, org_id, payload)
     await session.commit()
     return rule
+
+
+# --- Setup: task templates (task types: routes/task_types.py) ---------------------
+
+
+@router.get("/task-templates", response_model=PageResponse[TaskTemplateResponse], dependencies=[CAN_READ])
+async def list_task_templates(
+    session: DatabaseSession,
+    org_id: OrgId,
+    limit: int = Query(25, ge=1, le=100),
+    cursor: Optional[str] = Query(None),
+) -> PageResponse[TaskTemplateResponse]:
+    """Reusable task definitions (recurring tasks and workflow stages create tasks from them)."""
+    return await service.list_task_templates(session, org_id, limit, cursor)
+
+
+@router.post(
+    "/task-templates", response_model=TaskTemplateResponse, status_code=status.HTTP_201_CREATED,
+    dependencies=[CAN_MANAGE_TEMPLATES],
+)
+async def create_task_template(
+    payload: TaskTemplateCreate, session: DatabaseSession, org_id: OrgId
+) -> TaskTemplateResponse:
+    """Add a task template."""
+    template = await service.create_task_template(session, org_id, payload)
+    await session.commit()
+    return template
+
+
+@router.patch("/task-templates/{template_id}", response_model=TaskTemplateResponse, dependencies=[CAN_MANAGE_TEMPLATES])
+async def update_task_template(
+    template_id: uuid.UUID,
+    payload: TaskTemplateUpdate,
+    session: DatabaseSession,
+    org_id: OrgId,
+    if_match: Optional[str] = Header(None, alias="If-Match"),
+) -> TaskTemplateResponse:
+    """Change a task template; tasks already created from it keep what they were given."""
+    template = await service.update_task_template(session, org_id, template_id, payload, if_match)
+    await session.commit()
+    return template

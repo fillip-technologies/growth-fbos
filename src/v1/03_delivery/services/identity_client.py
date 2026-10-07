@@ -29,9 +29,15 @@ class Actor:
     name: str
     is_superuser: bool = False
     permissions: frozenset[str] = field(default_factory=frozenset)
+    # Codes held only for the user's own records (identity's "own records only" on every grant).
+    own_records_only: frozenset[str] = field(default_factory=frozenset)
 
     def has(self, permission: str) -> bool:
         return self.is_superuser or permission in self.permissions
+
+    def only_own(self, permission: str) -> bool:
+        """Whether `permission` covers only the user's own records rather than everyone's."""
+        return not self.is_superuser and permission in self.own_records_only
 
 
 class IdentityClient:
@@ -65,6 +71,8 @@ class IdentityClient:
             name=body["name"],
             is_superuser=body["is_superuser"],
             permissions=frozenset(body["permissions"]),
+            # An identity that predates the field limits nothing.
+            own_records_only=frozenset(body.get("own_records_only", [])),
         )
 
 

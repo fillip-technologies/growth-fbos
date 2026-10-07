@@ -204,6 +204,137 @@ async def test_invite_with_permissions_and_role_preset(async_client, db_session)
     assert fields == {"permissions[0].code", "role_assignments[0].role_id"}
 
 
+async def make_role(client: httpx.AsyncClient, db_session, code: str, permissions: list[str],
+                    org_id=TEST_ORG_ID) -> Role:
+    role = Role(id=uuid.uuid4(), organization_id=org_id, code=code, name=code.title(), version=1)
+    db_session.add(role)
+    await db_session.commit()
+    if org_id == TEST_ORG_ID:
+        res = await client.put(
+            f"{API}/roles/{role.id}/permissions", json={"permissions": permissions}, headers={"If-Match": '"1"'}
+        )
+        assert res.status_code == 200, res.text
+    return role
+
+
+async def role_presets(client: httpx.AsyncClient, user_id: str) -> list[str]:
+    res = await client.get(f"{API}/role-assignments", params={"user_id": user_id})
+    return [a["role"]["code"] for a in res.json()["data"]]
+
+
+@pytest.mark.asyncio
+async def test_permissions_from_a_role_keep_it_at_their_own_level(async_client, db_session):
+    units = await make_units(async_client)
+    await make_role(async_client, db_session, "sde-1", ["identity.user.read", "identity.org_unit.read"])
+
+    res = await async_client.post(
+        f"{API}/users",
+        json={
+            "name": "Dev", "email": "dev@example.com",
+            "permissions": [
+                {"code": "identity.user.read", "scope_unit_id": units["DEPT-A"], "source_role_code": "sde-1"},
+                {"code": "identity.org_unit.read", "self_only": True, "source_role_code": "SDE-1"},
+            ],
+        },
+    )
+    assert res.status_code == 201, res.text
+
+    perms = (await async_client.get(f"{API}/users/{res.json()['id']}/permissions")).json()["permissions"]
+    by_code = {p["code"]: p for p in perms}
+    assert by_code["identity.user.read"]["source_role"] == "sde-1"
+    assert by_code["identity.user.read"]["scope_unit"]["id"] == units["DEPT-A"]
+    assert by_code["identity.org_unit.read"]["source_role"] == "sde-1"
+    assert by_code["identity.org_unit.read"]["self_only"] is True
+    # No preset was applied, so no preset record either.
+    assert await role_presets(async_client, res.json()["id"]) == []
+
+
+@pytest.mark.asyncio
+async def test_a_role_tag_that_does_not_fit_is_dropped_not_refused(async_client, db_session):
+    other_org = Organization(
+        id=uuid.uuid4(), client_id=TEST_CLIENT_ID, name="Other", code="OTHER", email="o@o.example.com",
+        base_currency="INR", fiscal_year_start="01-04", timezone="UTC", status="active",
+    )
+    db_session.add(other_org)
+    await db_session.commit()
+    await make_role(async_client, db_session, "foreign", ["identity.user.read"], org_id=other_org.id)
+    await make_role(async_client, db_session, "narrow", ["identity.org_unit.read"])
+
+    res = await async_client.post(
+        f"{API}/users",
+        json={
+            "name": "Tagged", "email": "tagged@example.com",
+            "permissions": [
+                {"code": "identity.user.read", "source_role_code": "ghost"},
+                {"code": "identity.user.create", "source_role_code": "narrow"},
+                {"code": "identity.calendar.read", "source_role_code": "foreign"},
+            ],
+        },
+    )
+    assert res.status_code == 201, res.text
+
+    perms = (await async_client.get(f"{API}/users/{res.json()['id']}/permissions")).json()["permissions"]
+    assert {(p["code"], p["source_role"]) for p in perms} == {
+        ("identity.user.read", None),
+        ("identity.user.create", None),
+        ("identity.calendar.read", None),
+    }
+
+
+@pytest.mark.asyncio
+async def test_a_uniform_role_and_its_tagged_permissions_make_one_grant_each(async_client, db_session):
+    await make_role(async_client, db_session, "viewer3", ["identity.user.read", "identity.org_unit.read"])
+
+    res = await async_client.post(
+        f"{API}/users",
+        json={
+            "name": "U", "email": "u@example.com",
+            "role_assignments": [{"role_code": "viewer3"}],
+            "permissions": [
+                {"code": "identity.user.read", "source_role_code": "viewer3"},
+                {"code": "identity.org_unit.read", "source_role_code": "viewer3"},
+            ],
+        },
+    )
+    assert res.status_code == 201, res.text
+    user_id = res.json()["id"]
+
+    perms = (await async_client.get(f"{API}/users/{user_id}/permissions")).json()["permissions"]
+    assert sorted((p["code"], p["source_role"]) for p in perms) == [
+        ("identity.org_unit.read", "viewer3"),
+        ("identity.user.read", "viewer3"),
+    ]
+    assert await role_presets(async_client, user_id) == ["viewer3"]
+
+
+@pytest.mark.asyncio
+async def test_moving_a_role_permission_to_another_scope_keeps_its_role(async_client, db_session):
+    units = await make_units(async_client)
+    await make_role(async_client, db_session, "viewer4", ["identity.user.read", "identity.org_unit.read"])
+    user = (await async_client.post(
+        f"{API}/users", json={"name": "W", "email": "w@example.com", "role_assignments": [{"role_code": "viewer4"}]}
+    )).json()
+
+    res = await async_client.put(
+        f"{API}/users/{user['id']}/permissions",
+        json={
+            "permissions": [
+                {"code": "identity.user.read", "scope_unit_id": units["BR"], "source_role_code": "viewer4"},
+                {"code": "identity.org_unit.read", "source_role_code": "viewer4"},
+            ],
+            "reason": "only their branch",
+        },
+    )
+    assert res.status_code == 200, res.text
+
+    by_code = {p["code"]: p for p in res.json()["permissions"]}
+    assert by_code["identity.user.read"]["source_role"] == "viewer4"
+    assert by_code["identity.user.read"]["scope_unit"]["id"] == units["BR"]
+    assert by_code["identity.org_unit.read"]["source_role"] == "viewer4"
+    # The role no longer applies whole-company, so its preset record goes (as before).
+    assert await role_presets(async_client, user["id"]) == []
+
+
 @pytest.mark.asyncio
 async def test_role_preset_from_another_org_is_rejected(async_client, db_session):
     other_org = Organization(
@@ -402,6 +533,40 @@ async def test_user_without_permission_is_denied_and_revocation_is_immediate(asy
     await async_client.put(f"{API}/users/{plain.id}/permissions", json={"permissions": [], "reason": "Removed"})
     act_as(plain.id)
     assert (await async_client.get(f"{API}/users")).status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_every_catalog_code_can_be_granted_and_others_are_unknown(async_client, db_session):
+    # The console sends back everything a user holds, so the catalog's two-part codes must save too.
+    person = await make_user(db_session, "documents@example.com")
+    saved = await async_client.put(
+        f"{API}/users/{person.id}/permissions",
+        json={"permissions": [{"code": "document.read"}, {"code": "document.upload"}], "reason": "Documents"},
+    )
+    assert saved.status_code == 200, saved.text
+    assert sorted(p["code"] for p in saved.json()["permissions"]) == ["document.read", "document.upload"]
+
+    unknown = await async_client.put(
+        f"{API}/users/{person.id}/permissions", json={"permissions": [{"code": "document.shred"}], "reason": "x"}
+    )
+    assert unknown.status_code == 422
+    assert "Unknown permission 'document.shred'" in unknown.text
+
+
+@pytest.mark.asyncio
+async def test_internal_actor_names_the_codes_held_only_for_own_records(async_client, db_session):
+    # Other services (delivery) limit what they show under these codes to the caller's own records.
+    units = await make_units(async_client)
+    person = await make_user(db_session, "own.tasks@example.com", grants=[
+        ("delivery.task.read", None, True),
+        ("delivery.work_unit.read", None, True),
+        ("delivery.work_unit.read", uuid.UUID(units["DEPT-A"]), False),  # a unit grant lifts the limit
+        ("identity.user.read", None, False),
+    ])
+    act_as(person.id)
+    actor = (await async_client.get(f"{API}/internal/authz/actor")).json()
+    assert actor["permissions"] == ["delivery.task.read", "delivery.work_unit.read", "identity.user.read"]
+    assert actor["own_records_only"] == ["delivery.task.read"]
 
 
 @pytest.mark.asyncio

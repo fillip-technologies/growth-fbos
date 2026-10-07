@@ -19,7 +19,7 @@ import uuid
 from datetime import datetime, timezone
 from typing import Optional
 
-from sqlalchemy import func, select
+from sqlalchemy import ColumnElement, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from exceptions import (
@@ -32,6 +32,7 @@ from exceptions import (
     InvalidStateTransitionError,
     NoApprovalPolicyError,
     NotAnApproverError,
+    NotRequesterError,
     SelfApprovalNotAllowedError,
     StepNotActiveError,
 )
@@ -54,8 +55,10 @@ from schemas.approvals import (
     StepAssigneeResponse,
 )
 from schemas.common import PageMeta, PageResponse, SubjectRef
+from services.identity_client import Actor
 from services.pagination import paginate_by_id
 from services.refs import user_ref
+import permissions
 
 _OPEN_STATUSES = {"pending", "in_progress"}
 _TERMINAL_STATUSES = {"approved", "rejected", "revision_required", "cancelled", "expired"}
@@ -234,8 +237,12 @@ async def list_approval_requests(
     subject_id: Optional[uuid.UUID],
     limit: int,
     cursor: Optional[str],
+    own_records_of: Optional[uuid.UUID] = None,
 ) -> PageResponse[ApprovalRequestResponse]:
+    """Requests matching the filters; only `own_records_of`'s own ones when it is given."""
     query = select(ApprovalRequest).where(ApprovalRequest.organization_id == org_id)
+    if own_records_of is not None:
+        query = query.where(own_requests(own_records_of))
 
     if status_filter is not None:
         query = query.where(ApprovalRequest.status == status_filter)
@@ -258,6 +265,29 @@ async def get_approval_request(
 ) -> ApprovalRequestResponse:
     req = await _get_request(session, org_id, request_id)
     return await _to_request_response(session, req)
+
+
+def own_requests(user_id: uuid.UUID) -> ColumnElement[bool]:
+    """Someone's own approval requests: the ones they raised or are (or were) asked to decide."""
+    asked_to_decide = (
+        select(ApprovalStep.request_id)
+        .join(ApprovalStepAssignee, ApprovalStepAssignee.step_id == ApprovalStep.id)
+        .where(ApprovalStepAssignee.approver_user_id == user_id)
+    )
+    return or_(ApprovalRequest.requested_by == user_id, ApprovalRequest.id.in_(asked_to_decide))
+
+
+async def ensure_own_request(
+    session: AsyncSession, org_id: uuid.UUID, request_id: uuid.UUID, user_id: uuid.UUID
+) -> None:
+    """Anyone else's request is "not found" for someone who may see only their own."""
+    found = await session.execute(
+        select(ApprovalRequest.id).where(
+            ApprovalRequest.id == request_id, ApprovalRequest.organization_id == org_id, own_requests(user_id)
+        )
+    )
+    if found.scalar_one_or_none() is None:
+        raise ApprovalRequestNotFoundError(str(request_id))
 
 
 async def _get_request(session: AsyncSession, org_id: uuid.UUID, request_id: uuid.UUID) -> ApprovalRequest:
@@ -393,10 +423,13 @@ async def make_decision(
 async def cancel_approval_request(
     session: AsyncSession,
     org_id: uuid.UUID,
+    actor: Actor,
     request_id: uuid.UUID,
     data: ApprovalCancel,
 ) -> ApprovalRequestResponse:
     req = await _get_request(session, org_id, request_id)
+    if req.requested_by != actor.user_id and not actor.has(permissions.APPROVAL_MANAGE):
+        raise NotRequesterError()
     if req.status not in _OPEN_STATUSES:
         raise InvalidStateTransitionError(req.status, "cancel")
 

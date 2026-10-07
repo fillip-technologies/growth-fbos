@@ -2,10 +2,11 @@ import uuid
 from datetime import datetime
 from typing import Optional
 
-from fastapi import APIRouter, Header, Query, status
+from fastapi import APIRouter, Depends, Header, Query, status
 
+import permissions
 import services.sla as service
-from dependencies import DatabaseSession, OrgId, UserId
+from dependencies import DatabaseSession, OrgId, UserId, require_permission
 from schemas.common import PageResponse
 from schemas.sla import (
     EscalationAck,
@@ -19,11 +20,15 @@ from schemas.sla import (
 
 router = APIRouter(prefix="/sla", tags=["sla"])
 
+CAN_READ = Depends(require_permission(permissions.SLA_READ))
+CAN_WRITE = Depends(require_permission(permissions.SLA_WRITE))
+CAN_MANAGE = Depends(require_permission(permissions.SLA_MANAGE))
+
 
 # --- SLA policies ------------------------------------------------------------
 
 
-@router.get("/policies", response_model=PageResponse[SlaPolicyResponse])
+@router.get("/policies", response_model=PageResponse[SlaPolicyResponse], dependencies=[CAN_READ])
 async def list_sla_policies(
     session: DatabaseSession,
     org_id: OrgId,
@@ -36,7 +41,7 @@ async def list_sla_policies(
     return await service.list_sla_policies(session, org_id, subject_type, limit, cursor)
 
 
-@router.post("/policies", response_model=SlaPolicyResponse, status_code=status.HTTP_201_CREATED)
+@router.post("/policies", response_model=SlaPolicyResponse, status_code=status.HTTP_201_CREATED, dependencies=[CAN_MANAGE])
 async def create_sla_policy(
     payload: SlaPolicyInput,
     session: DatabaseSession,
@@ -52,7 +57,7 @@ async def create_sla_policy(
 # --- SLA instances -----------------------------------------------------------
 
 
-@router.get("/instances", response_model=PageResponse[SlaInstanceResponse])
+@router.get("/instances", response_model=PageResponse[SlaInstanceResponse], dependencies=[CAN_READ])
 async def list_sla_instances(
     session: DatabaseSession,
     org_id: OrgId,
@@ -68,7 +73,7 @@ async def list_sla_instances(
     return await service.list_sla_instances(session, org_id, subject_type, subject_id, state, due_before, limit, cursor)
 
 
-@router.get("/instances/{instance_id}", response_model=SlaInstanceResponse)
+@router.get("/instances/{instance_id}", response_model=SlaInstanceResponse, dependencies=[CAN_READ])
 async def get_sla_instance(
     instance_id: uuid.UUID,
     session: DatabaseSession,
@@ -82,6 +87,7 @@ async def get_sla_instance(
     "/instances/{instance_id}/exceptions",
     response_model=SlaExceptionResponse,
     status_code=status.HTTP_201_CREATED,
+    dependencies=[CAN_WRITE],
 )
 async def create_sla_exception(
     instance_id: uuid.UUID,
@@ -99,7 +105,7 @@ async def create_sla_exception(
 # --- SLA escalations ---------------------------------------------------------
 
 
-@router.get("/escalations", response_model=PageResponse[EscalationResponse])
+@router.get("/escalations", response_model=PageResponse[EscalationResponse], dependencies=[CAN_READ])
 async def list_sla_escalations(
     session: DatabaseSession,
     org_id: OrgId,
@@ -114,7 +120,7 @@ async def list_sla_escalations(
     return await service.list_sla_escalations(session, org_id, caller_user_id, target, status_, limit, cursor)
 
 
-@router.post("/escalations/{escalation_id}/acknowledge", response_model=EscalationResponse)
+@router.post("/escalations/{escalation_id}/acknowledge", response_model=EscalationResponse, dependencies=[CAN_WRITE])
 async def acknowledge_escalation(
     escalation_id: uuid.UUID,
     payload: EscalationAck,

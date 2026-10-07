@@ -405,4 +405,4 @@ async def test_workflow_design_and_run(async_client):
     assert instance["status"] == "cancelled"
 
     history = await ok(await async_client.get(f"{BASE}/workflow/instances/{instance['id']}/history"))
-    assert [h["stage_code"] for h in history["data"]] == ["build"]
+    assert [(h["type"], h["stage_code"]) for h in history["data"]] == [("started", None), ("transition", "build"), ("cancelled", None)]

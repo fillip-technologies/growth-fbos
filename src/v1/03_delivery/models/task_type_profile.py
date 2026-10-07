@@ -14,9 +14,9 @@ class TaskTypeProfile(Base):
     a finished task records (a call's disposition, a ticket's resolution), its SLA targets
     per priority and how its effort is estimated.
 
-    Kept one-to-one beside `task_types` rather than as columns on it: this service still
-    creates its tables from the models (no migrations yet), and new tables appear on a
-    running database where new columns on an existing one would not.
+    Kept one-to-one beside `task_types` rather than as columns on it, so a type's behaviour
+    can grow without touching the table every task joins to. Created by the migration
+    `fb22b8e536ff` (task type profiles).
     """
 
     __tablename__ = "task_type_profiles"

@@ -31,7 +31,7 @@ from dataclasses import dataclass, replace
 from datetime import date, datetime, timedelta, timezone
 from typing import Optional
 
-from sqlalchemy import func, or_, select
+from sqlalchemy import ColumnElement, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from exceptions import (
@@ -40,6 +40,7 @@ from exceptions import (
     DailyMinutesExceededError,
     DependenciesOpenError,
     DependencyCycleError,
+    DuplicateCodeError,
     FeedbackRequiredError,
     FieldNotEditableInStatusError,
     HandoverAlreadyOpenError,
@@ -99,6 +100,9 @@ from schemas.tasks import (
     TaskResponse,
     TaskSla,
     TaskSubmit,
+    TaskTemplateCreate,
+    TaskTemplateResponse,
+    TaskTemplateUpdate,
     TaskTypeRef,
     TaskUpdate,
     TimeEntryCreate,
@@ -125,7 +129,8 @@ from services.task_profiles import (
 )
 
 _OPEN_TASK_STATUSES = {"draft", "open", "assigned", "in_progress", "blocked", "submitted", "in_review", "rework"}
-_NOT_STARTED_TASK_STATUSES = {"open", "assigned"}
+# Submitted work waits for its reviewer, not its assignee.
+_WAITING_FOR_REVIEW = {"submitted", "in_review"}
 # Subject types, as identity's object-type registry names them.
 WORK_UNIT_SUBJECT = "work.work_unit"
 TASK_SUBJECT = "task.task"
@@ -144,6 +149,7 @@ _STATUS_COLUMNS = [
     ("done", "Done", ["done"]),
 ]
 _UNASSIGNED = "unassigned"
+_HANDED_OVER = "Handed over to another team"
 
 
 def _check_if_match(if_match: Optional[str], current_version: int) -> None:
@@ -181,6 +187,8 @@ class TaskFilters:
     due_before: Optional[datetime] = None
     overdue: Optional[bool] = None
     q: Optional[str] = None
+    # Set for someone who may see only their own tasks (see own_tasks); not a query parameter.
+    own_records_of: Optional[uuid.UUID] = None
 
 
 # --- Response builders -----------------------------------------------------
@@ -275,6 +283,20 @@ async def _build_task_response(session: AsyncSession, task: Task) -> TaskRespons
     return (await _task_responses(session, [task]))[0]
 
 
+def own_tasks(user_id: uuid.UUID) -> ColumnElement[bool]:
+    """Someone's own tasks: assigned to them, theirs to review, or created by them."""
+    return or_(Task.assignee_user_id == user_id, Task.reviewer_user_id == user_id, Task.created_by == user_id)
+
+
+async def ensure_own_task(session: AsyncSession, org_id: uuid.UUID, task_id: uuid.UUID, user_id: uuid.UUID) -> None:
+    """Anyone else's task is "not found" for someone who may see only their own."""
+    found = await session.execute(
+        select(Task.id).where(Task.id == task_id, Task.organization_id == org_id, own_tasks(user_id))
+    )
+    if found.scalar_one_or_none() is None:
+        raise TaskNotFoundError(str(task_id))
+
+
 async def _get_task(session: AsyncSession, org_id: uuid.UUID, task_id: uuid.UUID, lock: bool = False) -> Task:
     query = select(Task).where(Task.id == task_id, Task.organization_id == org_id)
     res = await session.execute(query.with_for_update() if lock else query)
@@ -290,6 +312,98 @@ async def _record_status_history(session: AsyncSession, task: Task, from_status:
     )
 
 
+# --- Task templates (task types: services/task_types.py) ---------------------------
+
+
+def _visible_task_types(org_id: uuid.UUID):
+    """The organization's own task types plus the built-in ones every organization shares."""
+    return or_(TaskType.organization_id == org_id, TaskType.organization_id.is_(None))
+
+
+async def _task_template_responses(session: AsyncSession, templates: list[TaskTemplate]) -> list[TaskTemplateResponse]:
+    task_types = {}
+    if templates:
+        task_types = {
+            t.id: t
+            for t in (
+                await session.execute(select(TaskType).where(TaskType.id.in_({t.task_type_id for t in templates})))
+            ).scalars()
+        }
+    return [
+        TaskTemplateResponse(
+            id=template.id,
+            code=template.code,
+            task_type=TaskTypeRef.model_validate(task_types[template.task_type_id]),
+            title_template=template.title_template,
+            description=template.description,
+            checklist=template.checklist or [],
+            estimate_minutes=template.estimate_minutes,
+            default_priority=template.default_priority,
+            version=template.version_no,
+        )
+        for template in templates
+    ]
+
+
+async def list_task_templates(
+    session: AsyncSession, org_id: uuid.UUID, limit: int, cursor: Optional[str]
+) -> PageResponse[TaskTemplateResponse]:
+    query = select(TaskTemplate).where(TaskTemplate.organization_id == org_id)
+    rows, page = await paginate(session, query, TaskTemplate, limit, cursor, order_by=TaskTemplate.code)
+    return PageResponse(data=await _task_template_responses(session, rows), page=page)
+
+
+async def create_task_template(session: AsyncSession, org_id: uuid.UUID, data: TaskTemplateCreate) -> TaskTemplateResponse:
+    taken = (
+        await session.execute(
+            select(TaskTemplate.id).where(TaskTemplate.organization_id == org_id, TaskTemplate.code == data.code)
+        )
+    ).first()
+    if taken:
+        raise DuplicateCodeError(data.code)
+    task_type = await _find_task_type(session, org_id, data.task_type_code)
+    template = TaskTemplate(
+        organization_id=org_id,
+        task_type_id=task_type.id,
+        code=data.code,
+        title_template=data.title_template,
+        description=data.description,
+        checklist=[item.model_dump() for item in data.checklist],
+        estimate_minutes=data.estimate_minutes,
+        default_priority=data.default_priority,
+        version_no=1,
+    )
+    session.add(template)
+    await session.flush()
+    return (await _task_template_responses(session, [template]))[0]
+
+
+async def update_task_template(
+    session: AsyncSession, org_id: uuid.UUID, template_id: uuid.UUID, data: TaskTemplateUpdate, if_match: Optional[str]
+) -> TaskTemplateResponse:
+    template = (
+        await session.execute(
+            select(TaskTemplate).where(TaskTemplate.id == template_id, TaskTemplate.organization_id == org_id)
+        )
+    ).scalars().first()
+    if not template:
+        raise TaskTemplateNotFoundError(str(template_id))
+    _check_if_match(if_match, template.version_no)
+
+    changes = data.model_dump(exclude_unset=True)
+    if changes.get("task_type_code"):
+        template.task_type_id = (await _find_task_type(session, org_id, changes.pop("task_type_code"))).id
+    if "checklist" in changes:
+        template.checklist = [item.model_dump() for item in data.checklist or []]
+        changes.pop("checklist")
+    for field, value in changes.items():
+        if value is not None or field in ("description", "estimate_minutes"):
+            setattr(template, field, value)
+    template.version_no += 1
+    await session.flush()
+    return (await _task_template_responses(session, [template]))[0]
+
+
 # --- Tasks ---------------------------------------------------------------
 
 
@@ -301,6 +415,7 @@ async def list_tasks(
     limit: int,
     cursor: Optional[str],
 ) -> PageResponse[TaskResponse]:
+    """Tasks matching the filters, newest first."""
     query = _filtered_tasks(org_id, caller_user_id, filters)
     rows, page = await paginate(session, query, Task, limit, cursor, order_by=Task.created_at, descending=True)
     return PageResponse(data=await _task_responses(session, rows), page=page)
@@ -308,6 +423,8 @@ async def list_tasks(
 
 def _filtered_tasks(org_id: uuid.UUID, caller_user_id: uuid.UUID, filters: TaskFilters):
     query = select(Task).where(Task.organization_id == org_id)
+    if filters.own_records_of is not None:
+        query = query.where(own_tasks(filters.own_records_of))
 
     if filters.assignee == "me":
         query = query.where(Task.assignee_user_id == caller_user_id)
@@ -455,9 +572,7 @@ async def _find_task_type(session: AsyncSession, org_id: uuid.UUID, code: str) -
     """The organization's own task type with this code, or the built-in one."""
     task_type = (
         await session.execute(
-            select(TaskType).where(
-                or_(TaskType.organization_id == org_id, TaskType.organization_id.is_(None)), TaskType.code == code
-            )
+            select(TaskType).where(_visible_task_types(org_id), TaskType.code == code)
         )
     ).scalars().first()
     if not task_type:
@@ -598,6 +713,66 @@ async def _insert_task(
     await _record_status_history(session, task, None, status_value, created_by)
     await session.flush()
     return task
+
+
+async def create_stage_task(
+    session: AsyncSession,
+    organization_id: uuid.UUID,
+    template: TaskTemplate,
+    *,
+    title: Optional[str],
+    subject_type: str,
+    subject_id: uuid.UUID,
+    work_unit_id: Optional[uuid.UUID],
+    owning_unit_id: Optional[uuid.UUID],
+    assignee_user_id: Optional[uuid.UUID],
+    due_at: Optional[datetime],
+    workflow_instance_id: uuid.UUID,
+    stage_run_id: uuid.UUID,
+    required: bool,
+) -> Task:
+    """A task a workflow creates when a stage is entered, from one of the organization's task
+    templates. Nobody created it, so it has no creator; `required` ones hold the stage open."""
+    status_value = "assigned" if assignee_user_id else "open"
+    task = Task(
+        organization_id=organization_id,
+        code=await next_task_code(session, organization_id),
+        subject_type=subject_type,
+        subject_id=subject_id,
+        work_unit_id=work_unit_id,
+        workflow_instance_id=workflow_instance_id,
+        stage_run_id=stage_run_id,
+        source="workflow",
+        title=title or template.title_template,
+        description=template.description,
+        owning_unit_id=owning_unit_id,
+        assignee_user_id=assignee_user_id,
+        task_type_id=template.task_type_id,
+        template_id=template.id,
+        priority=template.default_priority,
+        status=status_value,
+        due_at=due_at,
+        estimate_minutes=template.estimate_minutes,
+        attributes={"labels": [], "required_for_stage": required},
+        created_by=None,
+        version=1,
+    )
+    session.add(task)
+    await session.flush()
+    for seq, item in enumerate(template.checklist or [], start=1):
+        session.add(ChecklistItem(task_id=task.id, seq=seq, text=item["text"], mandatory=item.get("mandatory", True)))
+    if assignee_user_id is not None:
+        session.add(TaskAssignment(task_id=task.id, unit_id=owning_unit_id, user_id=assignee_user_id))
+    await _record_status_history(session, task, None, status_value, None, "Created by the workflow")
+    return task
+
+
+async def open_required_stage_tasks(session: AsyncSession, stage_run_id: uuid.UUID) -> list[Task]:
+    """The stage run's required tasks that are still open: the workflow can't leave the stage yet."""
+    tasks = await session.execute(
+        select(Task).where(Task.stage_run_id == stage_run_id, Task.status.notin_(_TERMINAL_TASK_STATUSES))
+    )
+    return [t for t in tasks.scalars().all() if (t.attributes or {}).get("required_for_stage")]
 
 
 async def get_task(session: AsyncSession, org_id: uuid.UUID, task_id: uuid.UUID) -> TaskResponse:
@@ -1291,8 +1466,11 @@ async def add_dependency(session: AsyncSession, org_id: uuid.UUID, task_id: uuid
     return await _build_task_response(session, task)
 
 
+_DB_DEPENDENCY_TYPES = {"finish_to_start": "FS", "start_to_start": "SS", "finish_to_finish": "FF"}
+
+
 def _to_db_dependency_type(value: Optional[str]) -> str:
-    return {"finish_to_start": "FS", "start_to_start": "SS", "finish_to_finish": "FF"}.get(value or "finish_to_start", "FS")
+    return _DB_DEPENDENCY_TYPES.get(value or "finish_to_start", "FS")
 
 
 # --- Handovers -------------------------------------------------------------
@@ -1409,9 +1587,12 @@ async def _move_to_receiving_unit(
     session: AsyncSession, org_id: uuid.UUID, handover: Handover, user_id: uuid.UUID, assignee_user_id: Optional[uuid.UUID]
 ) -> None:
     """
-    An accepted handover makes the receiving unit the owner. A task nobody has started yet goes
-    back to the unit's queue so they assign it themselves, unless the accepting side names who
-    takes it on; work in progress keeps its status, and its new assignee when one is named.
+    An accepted handover makes the receiving unit the owner of the work. When the accepting side
+    names who takes a task on, it goes to them (a task not yet assigned becomes assigned).
+    Otherwise the task comes off its assignee, started or not, and the receiving unit assigns
+    one of its own people: work being done goes back to the unit's queue, work waiting for
+    review stays with its reviewer. Whoever worked on it stays in the task's history (their
+    ended assignment and its status changes).
     """
     handed_over = await _handover_subject(session, org_id, handover.subject_type, handover.subject_id)
     if assignee_user_id is not None and not isinstance(handed_over, Task):
@@ -1424,20 +1605,18 @@ async def _move_to_receiving_unit(
     task = handed_over
     if assignee_user_id is not None:
         if task.assignee_user_id != assignee_user_id:
-            await _end_assignments(session, task.id, "assignee", "Handed over to another unit")
+            await _end_assignments(session, task.id, "assignee", _HANDED_OVER)
             session.add(TaskAssignment(task_id=task.id, unit_id=task.owning_unit_id, user_id=assignee_user_id, assigned_by=user_id))
         task.assignee_user_id = assignee_user_id
         if task.status in ("draft", "open"):
-            await _record_status_history(session, task, task.status, "assigned", user_id, "Handed over to another unit")
+            await _record_status_history(session, task, task.status, "assigned", user_id, _HANDED_OVER)
             task.status = "assigned"
         return
-    if task.status not in _NOT_STARTED_TASK_STATUSES:
-        return
-    if task.status == "assigned":
-        await _record_status_history(session, task, "assigned", "open", user_id, "Handed over to another unit")
-    await _end_assignments(session, task.id, "assignee", "Handed over to another unit")
+    await _end_assignments(session, task.id, "assignee", _HANDED_OVER)
     task.assignee_user_id = None
-    task.status = "open"
+    if task.status not in _WAITING_FOR_REVIEW | {"open"}:
+        await _record_status_history(session, task, task.status, "open", user_id, _HANDED_OVER)
+        task.status = "open"
 
 
 HANDOVER_ETAG = "1"  # Handover has no version column; see the workflow-version note for the same pattern.

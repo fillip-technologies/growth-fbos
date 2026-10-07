@@ -39,6 +39,6 @@ async def test_project_list_costs_the_same_for_one_row_or_ten(async_client):
     assert await query_count(async_client, "/work-units") == one_row
 
 
-def test_counter_rows_are_created_with_insert_ignore_on_mysql():
+async def test_counter_rows_are_created_with_insert_ignore_on_mysql():
     statement = insert_ignore(CodeSequence).values(organization_id=uuid.uuid4(), scope="WU-2026")
     assert str(statement.compile(dialect=mysql.dialect())).startswith("INSERT IGNORE INTO code_sequences")
