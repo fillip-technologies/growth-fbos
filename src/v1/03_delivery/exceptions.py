@@ -389,6 +389,17 @@ class HandoverAlreadyOpenError(DeliveryServiceError):
         )
 
 
+class TaskAlreadyClaimedError(DeliveryServiceError):
+    """409: Someone already took the task from the team's queue."""
+
+    def __init__(self) -> None:
+        super().__init__(
+            status.HTTP_409_CONFLICT,
+            "TASK_ALREADY_CLAIMED",
+            "Someone already took this task. Pick another one from the queue.",
+        )
+
+
 class BuiltInReadOnlyError(DeliveryServiceError):
     """409: Built-in types are shared by every organization and can't be changed."""
 
@@ -526,6 +537,29 @@ class SameUnitError(DeliveryServiceError):
             status.HTTP_422_UNPROCESSABLE_ENTITY,
             "SAME_UNIT",
             "from_unit_id and to_unit_id must be different units.",
+        )
+
+
+class TaskAttributesInvalidError(DeliveryServiceError):
+    """422: A task's attributes don't fit its type's fields (wrong kind of value, a required one missing)."""
+
+    def __init__(self, issues: list[dict[str, str]]) -> None:
+        super().__init__(
+            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            "TASK_ATTRIBUTES_INVALID",
+            "Some of the task's fields are missing or invalid.",
+            details=issues,
+        )
+
+
+class TaskTypeArchivedError(DeliveryServiceError):
+    """422: New tasks can't use an archived task type."""
+
+    def __init__(self, code: str) -> None:
+        super().__init__(
+            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            "TASK_TYPE_ARCHIVED",
+            f"Task type '{code}' is archived and takes no new tasks.",
         )
 
 

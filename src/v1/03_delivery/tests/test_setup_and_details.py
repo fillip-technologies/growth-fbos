@@ -20,14 +20,15 @@ def error_code(response) -> str:
     return response.json()["detail"]["code"]
 
 
-@pytest.mark.parametrize("path", ["/work-unit-types", "/task-types"])
-async def test_own_types_sit_next_to_the_built_in_ones(async_client, path):
+# Task types (routes/task_types.py) name the flag is_builtin.
+@pytest.mark.parametrize("path, flag", [("/work-unit-types", "built_in"), ("/task-types", "is_builtin")])
+async def test_own_types_sit_next_to_the_built_in_ones(async_client, path, flag):
     built_in = (await ok(await async_client.get(f"{BASE}{path}")))["data"]
-    assert built_in and all(t["built_in"] for t in built_in)
+    assert built_in and all(t[flag] for t in built_in)
 
     body = {"code": "audit", "name": "Audit", "category": "compliance"}
     own = await ok(await async_client.post(f"{BASE}{path}", json=body), 201)
-    assert own["built_in"] is False
+    assert own[flag] is False
     duplicate = await async_client.post(f"{BASE}{path}", json=body)
     assert (duplicate.status_code, error_code(duplicate)) == (409, "DUPLICATE_CODE")
     # A built-in code can't be taken either, or lookups by code would be ambiguous.
@@ -133,14 +134,14 @@ async def test_task_dependencies_reviews_time_and_handover_details(async_client,
     blocker = await create_task(async_client, title="Get the logo")
     task = await create_task(async_client, task_type_code="review", assignee_user_id=str(TEST_USER_ID))
     await ok(await async_client.post(f"{BASE}/tasks/{task['id']}/dependencies", json={"depends_on_task_id": blocker["id"]}), 201)
-    [dependency] = await ok(await async_client.get(f"{BASE}/tasks/{task['id']}/dependencies"))
+    [dependency] = (await ok(await async_client.get(f"{BASE}/tasks/{task['id']}/dependencies")))["data"]
     assert (dependency["task_id"], dependency["title"], dependency["dependency_type"]) == (blocker["id"], "Get the logo", "finish_to_start")
     for _ in range(2):  # removing it again changes nothing
         res = await async_client.delete(f"{BASE}/tasks/{task['id']}/dependencies/{blocker['id']}")
         assert res.status_code == 204
-    assert await ok(await async_client.get(f"{BASE}/tasks/{task['id']}/dependencies")) == []
+    assert (await ok(await async_client.get(f"{BASE}/tasks/{task['id']}/dependencies")))["data"] == []
 
-    assert await ok(await async_client.get(f"{BASE}/tasks/{task['id']}/reviews")) == []
+    assert (await ok(await async_client.get(f"{BASE}/tasks/{task['id']}/reviews")))["data"] == []
 
     mine = await ok(await async_client.post(f"{BASE}/tasks/{task['id']}/time-entries", json={"work_date": date.today().isoformat(), "minutes": 45}), 201)
     someone_elses = TimeEntry(organization_id=TEST_ORG_ID, task_id=uuid.UUID(task["id"]), user_id=uuid.uuid4(), work_date=date.today(), minutes=30)
@@ -183,14 +184,14 @@ async def test_a_handed_over_task_comes_off_its_assignee_and_keeps_the_history(a
 
     last_change = (await ok(await async_client.get(f"{BASE}/tasks/{working['id']}/history")))["data"][-1]
     assert (last_change["from_status"], last_change["to_status"], last_change["reason"]) == ("in_progress", "open", "Handed over to another team")
-    [earlier] = await ok(await async_client.get(f"{BASE}/tasks/{working['id']}/assignments"))
+    [earlier] = (await ok(await async_client.get(f"{BASE}/tasks/{working['id']}/assignments")))["data"]
     assert (earlier["user"]["id"], earlier["role"], earlier["end_reason"]) == (str(TEST_USER_ID), "assignee", "Handed over to another team")
     assert earlier["ended_at"] is not None
 
     # Reassigning keeps the replaced person's record too.
     for person in (str(TEST_USER_ID), colleague):
         working = await ok(await async_client.post(f"{BASE}/tasks/{working['id']}/assign", json={"assignee_user_id": person}, headers=if_match(working)))
-    assignments = await ok(await async_client.get(f"{BASE}/tasks/{working['id']}/assignments"))
+    assignments = (await ok(await async_client.get(f"{BASE}/tasks/{working['id']}/assignments")))["data"]
     assert [(a["user"]["id"], a["end_reason"]) for a in assignments] == [
         (str(TEST_USER_ID), "Handed over to another team"),
         (str(TEST_USER_ID), "Reassigned"),
@@ -205,7 +206,7 @@ async def test_a_handed_over_task_comes_off_its_assignee_and_keeps_the_history(a
             json={"assignee_user_id": colleague, "reviewer_user_id": person},
             headers=if_match(working),
         ))
-    assignments = await ok(await async_client.get(f"{BASE}/tasks/{working['id']}/assignments"))
+    assignments = (await ok(await async_client.get(f"{BASE}/tasks/{working['id']}/assignments")))["data"]
     assert [(a["user"]["id"], a["role"], a["end_reason"]) for a in assignments[2:]] == [
         (colleague, "assignee", None),
         (reviewer, "reviewer", "Reviewer changed"),

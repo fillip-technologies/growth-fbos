@@ -281,6 +281,9 @@ class RiskCreate(BaseModel):
     owner_user_id: uuid.UUID
 
 
+RiskStatus = Literal["open", "mitigating", "closed", "occurred"]
+
+
 class RiskResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 

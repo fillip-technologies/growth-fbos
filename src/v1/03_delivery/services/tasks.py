@@ -17,11 +17,18 @@ Simplification notes:
     seeded from ``starts_at``; actually advancing it on each occurrence would
     be the job of the scanner the spec mentions, which has no endpoint of
     its own and is out of scope.
+  * A task's type decides its fields, outcomes and SLA clocks
+    (``services/task_profiles.py``). Submitting with an outcome that names a
+    follow-up schedules the next touch as a new task (``source='followup'``),
+    which is how sales cadences and recurring checks advance.
+  * Unit membership lives in identity, so who may claim a task from a team's
+    queue isn't checked against the team (as ASSIGNEE_NOT_IN_UNIT isn't).
 """
 
 import re
 import uuid
-from datetime import date, datetime, timezone
+from dataclasses import dataclass, replace
+from datetime import date, datetime, timedelta, timezone
 from typing import Optional
 
 from sqlalchemy import ColumnElement, func, or_, select
@@ -29,7 +36,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from exceptions import (
     AssigneeNotInUnitError,
-    BuiltInReadOnlyError,
     ChecklistItemNotFoundError,
     DailyMinutesExceededError,
     DependenciesOpenError,
@@ -47,9 +53,12 @@ from exceptions import (
     RRuleInvalidError,
     SameUnitError,
     SubjectNotFoundError,
+    TaskAlreadyClaimedError,
+    TaskAttributesInvalidError,
     TaskChecklistIncompleteError,
     TaskNotFoundError,
     TaskTemplateNotFoundError,
+    TaskTypeArchivedError,
     TaskTypeNotFoundError,
     TimeEntryNotFoundError,
     TimeEntryNotOwnError,
@@ -60,10 +69,13 @@ from models.task import ChecklistItem, Task, TaskDependency
 from models.task_assignment import Handover, TaskAssignment
 from models.task_template import RecurringTaskRule, TaskTemplate, TaskType
 from models.task_tracking import TaskComment, TaskReview, TaskStatusHistory, TimeEntry
+from models.task_type_profile import TaskTypeProfile
 from models.work_unit import WorkUnit
 from schemas.common import PageResponse
 from schemas.tasks import (
     AssignmentResponse,
+    BoardColumn,
+    BoardResponse,
     ChecklistItemResponse,
     ChecklistItemUpdate,
     CommentCreate,
@@ -71,9 +83,11 @@ from schemas.tasks import (
     DependencyCreate,
     DependencyResponse,
     HandoverAccept,
+    HandoverCancel,
     HandoverCreate,
     HandoverReject,
     HandoverResponse,
+    QueueResponse,
     RecurringRuleCreate,
     RecurringRuleResponse,
     ReviewCreate,
@@ -84,14 +98,12 @@ from schemas.tasks import (
     TaskCreate,
     TaskHistoryItemResponse,
     TaskResponse,
+    TaskSla,
     TaskSubmit,
     TaskTemplateCreate,
     TaskTemplateResponse,
     TaskTemplateUpdate,
-    TaskTypeCreate,
     TaskTypeRef,
-    TaskTypeResponse,
-    TaskTypeUpdate,
     TaskUpdate,
     TimeEntryCreate,
     TimeEntryResponse,
@@ -101,6 +113,20 @@ from services.identity_client import Actor
 from services.codes import next_task_code
 from services.pagination import paginate
 from services.refs import unit_ref, user_ref
+from services.task_profiles import (
+    Profile,
+    as_utc,
+    carried_attributes,
+    clean_attributes,
+    load_profile,
+    load_profiles,
+    merge_attributes,
+    missing_on_submit,
+    paused_minutes,
+    resolution_due_at,
+    resolution_sla,
+    response_sla,
+)
 
 _OPEN_TASK_STATUSES = {"draft", "open", "assigned", "in_progress", "blocked", "submitted", "in_review", "rework"}
 # Submitted work waits for its reviewer, not its assignee.
@@ -111,6 +137,19 @@ TASK_SUBJECT = "task.task"
 _TERMINAL_TASK_STATUSES = {"done", "cancelled"}
 _RRULE_KEY_RE = re.compile(r"^[A-Z]+=[^;]+$")
 _RRULE_VALID_FREQ = {"SECONDLY", "MINUTELY", "HOURLY", "DAILY", "WEEKLY", "MONTHLY", "YEARLY"}
+# What can be worked next from a queue: not waiting on someone else (blocked, in review).
+_ACTIONABLE_TASK_STATUSES = ["open", "assigned", "in_progress", "rework"]
+_FOLLOW_UP_PREFIX = "Follow up: "
+# Board columns when grouped by status; cancelled work isn't shown.
+_STATUS_COLUMNS = [
+    ("todo", "To do", ["draft", "open", "assigned", "rework"]),
+    ("in_progress", "In progress", ["in_progress"]),
+    ("in_review", "In review", ["submitted", "in_review"]),
+    ("blocked", "Blocked", ["blocked"]),
+    ("done", "Done", ["done"]),
+]
+_UNASSIGNED = "unassigned"
+_HANDED_OVER = "Handed over to another team"
 
 
 def _check_if_match(if_match: Optional[str], current_version: int) -> None:
@@ -131,6 +170,27 @@ def _may_review(actor: Actor, task: Task) -> bool:
     return task.reviewer_user_id == actor.user_id or actor.has(permissions.TASK_REVIEW)
 
 
+@dataclass(frozen=True)
+class TaskFilters:
+    """The filters the task list, board and queue share."""
+
+    assignee: Optional[str] = None  # 'me' or a user id
+    unassigned: bool = False
+    owning_unit_id: Optional[uuid.UUID] = None
+    statuses: Optional[list[str]] = None
+    priority: Optional[str] = None
+    subject_type: Optional[str] = None
+    subject_id: Optional[uuid.UUID] = None
+    work_unit_id: Optional[uuid.UUID] = None
+    task_types: Optional[list[str]] = None  # codes
+    discipline: Optional[str] = None
+    due_before: Optional[datetime] = None
+    overdue: Optional[bool] = None
+    q: Optional[str] = None
+    # Set for someone who may see only their own tasks (see own_tasks); not a query parameter.
+    own_records_of: Optional[uuid.UUID] = None
+
+
 # --- Response builders -----------------------------------------------------
 
 
@@ -147,24 +207,32 @@ def _checklist_item_response(item: ChecklistItem) -> ChecklistItemResponse:
 
 
 async def _task_responses(session: AsyncSession, tasks: list[Task]) -> list[TaskResponse]:
-    """Responses for a page of tasks, loading their types and checklists once for the whole page."""
+    """Responses for a page of tasks, loading their types, profiles and checklists once for the whole page."""
     if not tasks:
         return []
-    task_types = {
-        t.id: t
-        for t in (await session.execute(select(TaskType).where(TaskType.id.in_({t.task_type_id for t in tasks})))).scalars()
-    }
+    type_ids = {t.task_type_id for t in tasks}
+    task_types = {t.id: t for t in (await session.execute(select(TaskType).where(TaskType.id.in_(type_ids)))).scalars()}
+    profiles = await load_profiles(session, type_ids)
     checklists: dict[uuid.UUID, list[ChecklistItemResponse]] = {t.id: [] for t in tasks}
     items = await session.execute(
         select(ChecklistItem).where(ChecklistItem.task_id.in_(checklists)).order_by(ChecklistItem.seq)
     )
     for item in items.scalars().all():
         checklists[item.task_id].append(_checklist_item_response(item))
-    return [_task_response(task, task_types[task.task_type_id], checklists[task.id]) for task in tasks]
+    now = datetime.now(timezone.utc)
+    return [
+        _task_response(task, task_types[task.task_type_id], profiles[task.task_type_id], checklists[task.id], now)
+        for task in tasks
+    ]
 
 
-def _task_response(task: Task, task_type: TaskType, checklist: list[ChecklistItemResponse]) -> TaskResponse:
+def _task_response(
+    task: Task, task_type: TaskType, profile: Profile, checklist: list[ChecklistItemResponse], now: datetime
+) -> TaskResponse:
     attributes = task.attributes or {}
+    resolution = resolution_sla(task, profile, now)
+    response = response_sla(task, profile, now)
+    follow_up_task_id = attributes.get("follow_up_task_id")
     return TaskResponse(
         id=task.id,
         code=task.code,
@@ -172,7 +240,13 @@ def _task_response(task: Task, task_type: TaskType, checklist: list[ChecklistIte
         description=task.description,
         status=task.status,
         priority=task.priority,
-        task_type=TaskTypeRef(id=task_type.id, code=task_type.code, name=task_type.name),
+        task_type=TaskTypeRef(
+            id=task_type.id,
+            code=task_type.code,
+            name=task_type.name,
+            discipline=profile.discipline,
+            estimation_unit=profile.estimation_unit,
+        ),
         subject={"type": task.subject_type, "id": task.subject_id} if task.subject_type and task.subject_id else None,
         work_unit_id=task.work_unit_id,
         workflow={"instance_id": str(task.workflow_instance_id), "stage_run_id": str(task.stage_run_id)}
@@ -192,7 +266,11 @@ def _task_response(task: Task, task_type: TaskType, checklist: list[ChecklistIte
         review_round=task.review_round,
         checklist=checklist,
         labels=attributes.get("labels", []),
-        sla=None,
+        sla=TaskSla(**resolution) if resolution else None,
+        response_sla=TaskSla(**response) if response else None,
+        outcome=attributes.get("outcome"),
+        follow_up_task_id=uuid.UUID(follow_up_task_id) if follow_up_task_id else None,
+        cadence_step=attributes.get("cadence_step"),
         attributes={k: v for k, v in attributes.items() if k != "labels"},
         version=task.version,
         created_by=user_ref(task.created_by),
@@ -219,43 +297,13 @@ async def ensure_own_task(session: AsyncSession, org_id: uuid.UUID, task_id: uui
         raise TaskNotFoundError(str(task_id))
 
 
-async def _get_task(session: AsyncSession, org_id: uuid.UUID, task_id: uuid.UUID) -> Task:
-    res = await session.execute(select(Task).where(Task.id == task_id, Task.organization_id == org_id))
+async def _get_task(session: AsyncSession, org_id: uuid.UUID, task_id: uuid.UUID, lock: bool = False) -> Task:
+    query = select(Task).where(Task.id == task_id, Task.organization_id == org_id)
+    res = await session.execute(query.with_for_update() if lock else query)
     task = res.scalars().first()
     if not task:
         raise TaskNotFoundError(str(task_id))
     return task
-
-
-async def _end_assignments(session: AsyncSession, task: Task, role: str, reason: str) -> None:
-    """Close the task's current `role` assignment records, keeping them as history."""
-    current = await session.execute(
-        select(TaskAssignment).where(
-            TaskAssignment.task_id == task.id, TaskAssignment.assignment_role == role, TaskAssignment.ended_at.is_(None)
-        )
-    )
-    for assignment in current.scalars().all():
-        assignment.ended_at = datetime.now(timezone.utc)
-        assignment.end_reason = reason
-
-
-async def list_assignments(session: AsyncSession, org_id: uuid.UUID, task_id: uuid.UUID) -> list[AssignmentResponse]:
-    """Everyone the task was given to, in which role and until when: oldest first."""
-    await _get_task(session, org_id, task_id)
-    rows = await session.execute(
-        select(TaskAssignment).where(TaskAssignment.task_id == task_id).order_by(TaskAssignment.assigned_at)
-    )
-    return [
-        AssignmentResponse(
-            user=user_ref(a.user_id),
-            role=a.assignment_role,
-            assigned_by=user_ref(a.assigned_by),
-            assigned_at=a.assigned_at,
-            ended_at=a.ended_at,
-            end_reason=a.end_reason,
-        )
-        for a in rows.scalars().all()
-    ]
 
 
 async def _record_status_history(session: AsyncSession, task: Task, from_status: Optional[str], to_status: str, user_id: Optional[uuid.UUID], reason: Optional[str] = None) -> None:
@@ -264,60 +312,12 @@ async def _record_status_history(session: AsyncSession, task: Task, from_status:
     )
 
 
-# --- Task types and templates ---------------------------------------------------
+# --- Task templates (task types: services/task_types.py) ---------------------------
 
 
 def _visible_task_types(org_id: uuid.UUID):
     """The organization's own task types plus the built-in ones every organization shares."""
     return or_(TaskType.organization_id == org_id, TaskType.organization_id.is_(None))
-
-
-def _task_type_response(task_type: TaskType) -> TaskTypeResponse:
-    return TaskTypeResponse(
-        id=task_type.id,
-        code=task_type.code,
-        name=task_type.name,
-        category=task_type.category,
-        requires_review=task_type.requires_review,
-        default_estimate_minutes=task_type.default_estimate_minutes,
-        built_in=task_type.organization_id is None,
-    )
-
-
-async def list_task_types(
-    session: AsyncSession, org_id: uuid.UUID, limit: int, cursor: Optional[str]
-) -> PageResponse[TaskTypeResponse]:
-    query = select(TaskType).where(_visible_task_types(org_id))
-    rows, page = await paginate(session, query, TaskType, limit, cursor, order_by=TaskType.code)
-    return PageResponse(data=[_task_type_response(t) for t in rows], page=page)
-
-
-async def create_task_type(session: AsyncSession, org_id: uuid.UUID, data: TaskTypeCreate) -> TaskTypeResponse:
-    # A code may exist once among the organization's types and the built-ins.
-    taken = (await session.execute(select(TaskType.id).where(_visible_task_types(org_id), TaskType.code == data.code))).first()
-    if taken:
-        raise DuplicateCodeError(data.code)
-    task_type = TaskType(organization_id=org_id, **data.model_dump())
-    session.add(task_type)
-    await session.flush()
-    return _task_type_response(task_type)
-
-
-async def update_task_type(
-    session: AsyncSession, org_id: uuid.UUID, type_id: uuid.UUID, data: TaskTypeUpdate
-) -> TaskTypeResponse:
-    task_type = (
-        await session.execute(select(TaskType).where(_visible_task_types(org_id), TaskType.id == type_id))
-    ).scalars().first()
-    if not task_type:
-        raise TaskTypeNotFoundError(str(type_id))
-    if task_type.organization_id is None:
-        raise BuiltInReadOnlyError(task_type.code)
-    for field, value in data.model_dump(exclude_unset=True).items():
-        if value is not None or field == "default_estimate_minutes":
-            setattr(task_type, field, value)
-    await session.flush()
-    return _task_type_response(task_type)
 
 
 async def _task_template_responses(session: AsyncSession, templates: list[TaskTemplate]) -> list[TaskTemplateResponse]:
@@ -411,49 +411,154 @@ async def list_tasks(
     session: AsyncSession,
     org_id: uuid.UUID,
     caller_user_id: uuid.UUID,
-    assignee: Optional[str],
-    owning_unit_id: Optional[uuid.UUID],
-    statuses: Optional[list[str]],
-    priority: Optional[str],
-    subject_type: Optional[str],
-    subject_id: Optional[uuid.UUID],
-    due_before: Optional[datetime],
-    overdue: Optional[bool],
-    q: Optional[str],
+    filters: TaskFilters,
     limit: int,
     cursor: Optional[str],
-    own_records_of: Optional[uuid.UUID] = None,
 ) -> PageResponse[TaskResponse]:
-    """Tasks matching the filters; only `own_records_of`'s own ones when it is given."""
-    query = select(Task).where(Task.organization_id == org_id)
-    if own_records_of is not None:
-        query = query.where(own_tasks(own_records_of))
-
-    if assignee == "me":
-        query = query.where(Task.assignee_user_id == caller_user_id)
-    elif assignee:
-        query = query.where(Task.assignee_user_id == _user_id_filter("assignee", assignee))
-
-    if owning_unit_id is not None:
-        query = query.where(Task.owning_unit_id == owning_unit_id)
-    if statuses:
-        query = query.where(Task.status.in_(statuses))
-    if priority is not None:
-        query = query.where(Task.priority == priority)
-    if subject_type is not None:
-        query = query.where(Task.subject_type == subject_type)
-    if subject_id is not None:
-        query = query.where(Task.subject_id == subject_id)
-    if due_before is not None:
-        query = query.where(Task.due_at <= due_before)
-    if overdue:
-        query = query.where(Task.due_at < datetime.now(timezone.utc), Task.status.notin_(_TERMINAL_TASK_STATUSES))
-    if q:
-        term = f"%{q}%"
-        query = query.where((Task.title.ilike(term)) | (Task.code.ilike(term)) | (Task.description.ilike(term)))
-
+    """Tasks matching the filters, newest first."""
+    query = _filtered_tasks(org_id, caller_user_id, filters)
     rows, page = await paginate(session, query, Task, limit, cursor, order_by=Task.created_at, descending=True)
     return PageResponse(data=await _task_responses(session, rows), page=page)
+
+
+def _filtered_tasks(org_id: uuid.UUID, caller_user_id: uuid.UUID, filters: TaskFilters):
+    query = select(Task).where(Task.organization_id == org_id)
+    if filters.own_records_of is not None:
+        query = query.where(own_tasks(filters.own_records_of))
+
+    if filters.assignee == "me":
+        query = query.where(Task.assignee_user_id == caller_user_id)
+    elif filters.assignee:
+        query = query.where(Task.assignee_user_id == _user_id_filter("assignee", filters.assignee))
+    if filters.unassigned:
+        query = query.where(Task.assignee_user_id.is_(None))
+    if filters.owning_unit_id is not None:
+        query = query.where(Task.owning_unit_id == filters.owning_unit_id)
+    if filters.statuses:
+        query = query.where(Task.status.in_(filters.statuses))
+    if filters.priority is not None:
+        query = query.where(Task.priority == filters.priority)
+    if filters.subject_type is not None:
+        query = query.where(Task.subject_type == filters.subject_type)
+    if filters.subject_id is not None:
+        query = query.where(Task.subject_id == filters.subject_id)
+    if filters.work_unit_id is not None:
+        query = query.where(Task.work_unit_id == filters.work_unit_id)
+    if filters.task_types:
+        type_ids = select(TaskType.id).where(
+            or_(TaskType.organization_id == org_id, TaskType.organization_id.is_(None)), TaskType.code.in_(filters.task_types)
+        )
+        query = query.where(Task.task_type_id.in_(type_ids))
+    if filters.discipline:
+        query = query.where(_in_discipline(filters.discipline))
+    if filters.due_before is not None:
+        query = query.where(Task.due_at <= filters.due_before)
+    if filters.overdue:
+        query = query.where(Task.due_at < datetime.now(timezone.utc), Task.status.notin_(_TERMINAL_TASK_STATUSES))
+    if filters.q:
+        term = f"%{filters.q}%"
+        query = query.where((Task.title.ilike(term)) | (Task.code.ilike(term)) | (Task.description.ilike(term)))
+    return query
+
+
+def _in_discipline(discipline: str):
+    in_profile = Task.task_type_id.in_(select(TaskTypeProfile.task_type_id).where(TaskTypeProfile.discipline == discipline))
+    if discipline != "general":
+        return in_profile
+    # A type without a profile is a plain, general one.
+    return or_(in_profile, Task.task_type_id.notin_(select(TaskTypeProfile.task_type_id)))
+
+
+def _work_order():
+    """Most urgent first: priority, then the nearest due date (none last), then the oldest."""
+    return (Task.priority.asc(), Task.due_at.is_(None).asc(), Task.due_at.asc(), Task.created_at.asc(), Task.id.asc())
+
+
+async def get_board(
+    session: AsyncSession,
+    org_id: uuid.UUID,
+    caller_user_id: uuid.UUID,
+    filters: TaskFilters,
+    group_by: str,
+    per_column: int,
+    done_within_days: int,
+) -> BoardResponse:
+    """
+    The tasks as board columns: by status (to do, in progress, in review, blocked, recently
+    done), or the open ones by assignee, priority or task type. Each column carries its full
+    count and its first `per_column` tasks, most urgent first.
+    """
+    base = _filtered_tasks(org_id, caller_user_id, filters)
+    if group_by == "status":
+        recent = datetime.now(timezone.utc) - timedelta(days=done_within_days)
+        columns = [
+            (key, label, statuses, base.where(Task.status.in_(statuses), *([Task.completed_at >= recent] if key == "done" else [])))
+            for key, label, statuses in _STATUS_COLUMNS
+        ]
+    else:
+        columns = await _grouped_columns(session, base.where(Task.status.notin_(_TERMINAL_TASK_STATUSES)), group_by)
+
+    built: list[tuple[str, Optional[str], list[str], int, list[Task]]] = []
+    for key, label, statuses, query in columns:
+        count = (await session.execute(select(func.count()).select_from(query.subquery()))).scalar_one()
+        rows = list((await session.execute(query.order_by(*_work_order()).limit(per_column))).scalars().all())
+        built.append((key, label, statuses, count, rows))
+
+    responses = iter(await _task_responses(session, [task for *_, rows in built for task in rows]))
+    return BoardResponse(
+        group_by=group_by,
+        columns=[
+            BoardColumn(
+                key=key,
+                label=label,
+                statuses=statuses,
+                count=count,
+                tasks=[next(responses) for _ in rows],
+                has_more=count > len(rows),
+            )
+            for key, label, statuses, count, rows in built
+        ],
+    )
+
+
+async def _grouped_columns(session: AsyncSession, open_tasks, group_by: str) -> list:
+    """(key, label, statuses, query) per assignee / priority / task type the open tasks have."""
+    column = {"assignee": Task.assignee_user_id, "priority": Task.priority, "task_type": Task.task_type_id}[group_by]
+    grouped = open_tasks.subquery()
+    counts = (
+        await session.execute(select(grouped.c[column.key], func.count()).group_by(grouped.c[column.key]))
+    ).all()
+    keys = [key for key, _ in sorted(counts, key=lambda row: (-row[1], str(row[0])))]
+    if group_by == "priority":
+        keys = sorted(keys)
+    labels: dict = {}
+    if group_by == "task_type" and keys:
+        labels = dict((await session.execute(select(TaskType.id, TaskType.name).where(TaskType.id.in_(keys)))).all())
+    return [
+        (
+            str(key) if key is not None else _UNASSIGNED,
+            labels.get(key),
+            [],
+            open_tasks.where(column.is_(None) if key is None else column == key),
+        )
+        for key in keys
+    ]
+
+
+async def get_queue(
+    session: AsyncSession, org_id: uuid.UUID, caller_user_id: uuid.UUID, filters: TaskFilters, limit: int
+) -> QueueResponse:
+    """
+    What to work next, one after another: the caller's actionable tasks (or a team's unassigned
+    ones, to claim), nearest due first, so SLA clocks and scheduled touches come up in time.
+    """
+    if not filters.statuses:
+        filters = replace(filters, statuses=_ACTIONABLE_TASK_STATUSES)
+    query = _filtered_tasks(org_id, caller_user_id, filters)
+    total = (await session.execute(select(func.count()).select_from(query.subquery()))).scalar_one()
+    order = (Task.due_at.is_(None).asc(), Task.due_at.asc(), Task.priority.asc(), Task.created_at.asc(), Task.id.asc())
+    rows = list((await session.execute(query.order_by(*order).limit(limit))).scalars().all())
+    return QueueResponse(data=await _task_responses(session, rows), total=total)
 
 
 def _user_id_filter(field: str, value: str) -> uuid.UUID:
@@ -491,58 +596,123 @@ async def _subject_work_unit(
 
 async def create_task(session: AsyncSession, org_id: uuid.UUID, user_id: uuid.UUID, data: TaskCreate) -> TaskResponse:
     task_type = await _find_task_type(session, org_id, data.task_type_code)
-    work_unit = await _subject_work_unit(session, org_id, data.subject.type, data.subject.id)
+    profile = await load_profile(session, task_type.id)
+    if profile.archived:
+        raise TaskTypeArchivedError(task_type.code)
+    attributes = clean_attributes(profile.fields, data.attributes, enforce_required=True)
+    work_unit = await _subject_work_unit(session, org_id, data.subject.type, data.subject.id) if data.subject else None
     if data.parent_task_id is not None:
         await _get_task(session, org_id, data.parent_task_id)
     # Unit membership lives in identity, so ASSIGNEE_NOT_IN_UNIT can't be checked here yet.
 
-    code = await next_task_code(session, org_id)
-    status_value = "assigned" if data.assignee_user_id else "open"
-
-    task = Task(
-        organization_id=org_id,
-        code=code,
-        subject_type=data.subject.type,
-        subject_id=data.subject.id,
+    task = await _insert_task(
+        session,
+        org_id,
+        user_id,
+        task_type=task_type,
+        profile=profile,
+        subject_type=data.subject.type if data.subject else None,
+        subject_id=data.subject.id if data.subject else None,
         work_unit_id=work_unit.id if work_unit else None,
-        source="manual",
         title=data.title,
         description=data.description,
         owning_unit_id=data.owning_unit_id,
         assignee_user_id=data.assignee_user_id,
         reviewer_user_id=data.reviewer_user_id,
-        task_type_id=task_type.id,
         priority=data.priority or "p3",
-        status=status_value,
         start_at=data.start_at,
         due_at=data.due_at,
         estimate_minutes=data.estimate_minutes,
         parent_task_id=data.parent_task_id,
-        attributes={**(data.attributes or {}), "labels": data.labels or []},
-        created_by=user_id,
-        version=1,
+        attributes={**attributes, "labels": data.labels or []},
+        source="manual",
         created_at=(
             datetime.combine(data.created_on, datetime.min.time(), tzinfo=timezone.utc)
             if data.created_on
             else datetime.now(timezone.utc)
         ),
+        checklist=[(item.text, item.mandatory if item.mandatory is not None else True) for item in data.checklist or []],
+    )
+    return await _build_task_response(session, task)
+
+
+async def _insert_task(
+    session: AsyncSession,
+    org_id: uuid.UUID,
+    created_by: uuid.UUID,
+    *,
+    task_type: TaskType,
+    profile: Profile,
+    subject_type: Optional[str],
+    subject_id: Optional[uuid.UUID],
+    work_unit_id: Optional[uuid.UUID],
+    title: str,
+    description: Optional[str],
+    owning_unit_id: Optional[uuid.UUID],
+    assignee_user_id: Optional[uuid.UUID],
+    reviewer_user_id: Optional[uuid.UUID],
+    priority: str,
+    start_at: Optional[datetime],
+    due_at: Optional[datetime],
+    estimate_minutes: Optional[int],
+    parent_task_id: Optional[uuid.UUID],
+    attributes: dict,
+    source: str,
+    created_at: datetime,
+    checklist: list[tuple[str, bool]],
+) -> Task:
+    """
+    A new task with its checklist, first assignment and first history entry. Without a due
+    date of its own, a task whose type has a resolution SLA is due when the SLA runs out.
+    """
+    sla_due = resolution_due_at(created_at, profile, priority)
+    if due_at is None and sla_due is not None:
+        due_at = sla_due
+        attributes = {**attributes, "due_from_sla": True}
+    status_value = "assigned" if assignee_user_id else "open"
+
+    task = Task(
+        organization_id=org_id,
+        code=await next_task_code(session, org_id),
+        subject_type=subject_type,
+        subject_id=subject_id,
+        work_unit_id=work_unit_id,
+        source=source,
+        title=title,
+        description=description,
+        owning_unit_id=owning_unit_id,
+        assignee_user_id=assignee_user_id,
+        reviewer_user_id=reviewer_user_id,
+        task_type_id=task_type.id,
+        priority=priority,
+        status=status_value,
+        start_at=start_at,
+        due_at=due_at,
+        estimate_minutes=estimate_minutes,
+        parent_task_id=parent_task_id,
+        attributes=attributes,
+        created_by=created_by,
+        version=1,
+        created_at=created_at,
         updated_at=datetime.now(timezone.utc),
     )
     session.add(task)
     await session.flush()
 
-    for seq, item in enumerate(data.checklist or [], start=1):
-        session.add(ChecklistItem(task_id=task.id, seq=seq, text=item.text, mandatory=item.mandatory if item.mandatory is not None else True))
-    if data.assignee_user_id is not None:
-        session.add(TaskAssignment(task_id=task.id, unit_id=task.owning_unit_id, user_id=data.assignee_user_id, assigned_by=user_id))
-    if data.reviewer_user_id is not None:
-        session.add(TaskAssignment(
-            task_id=task.id, unit_id=task.owning_unit_id, user_id=data.reviewer_user_id, assignment_role="reviewer", assigned_by=user_id,
-        ))
+    for seq, (text, mandatory) in enumerate(checklist, start=1):
+        session.add(ChecklistItem(task_id=task.id, seq=seq, text=text, mandatory=mandatory))
+    if assignee_user_id is not None:
+        session.add(TaskAssignment(task_id=task.id, unit_id=owning_unit_id, user_id=assignee_user_id, assigned_by=created_by))
+    if reviewer_user_id is not None:
+        session.add(
+            TaskAssignment(
+                task_id=task.id, unit_id=owning_unit_id, user_id=reviewer_user_id, assignment_role="reviewer", assigned_by=created_by
+            )
+        )
 
-    await _record_status_history(session, task, None, status_value, user_id)
+    await _record_status_history(session, task, None, status_value, created_by)
     await session.flush()
-    return await _build_task_response(session, task)
+    return task
 
 
 async def create_stage_task(
@@ -610,8 +780,19 @@ async def get_task(session: AsyncSession, org_id: uuid.UUID, task_id: uuid.UUID)
     return await _build_task_response(session, task)
 
 
-async def update_task(session: AsyncSession, org_id: uuid.UUID, task_id: uuid.UUID, data: TaskUpdate, if_match: Optional[str]) -> TaskResponse:
+# What the assignee may change on their own task without managing tasks in general.
+_ASSIGNEE_EDITABLE = {"progress_pct", "attributes", "labels"}
+
+
+async def update_task(
+    session: AsyncSession, org_id: uuid.UUID, actor: Actor, task_id: uuid.UUID, data: TaskUpdate, if_match: Optional[str]
+) -> TaskResponse:
     task = await _get_task(session, org_id, task_id)
+    changes = data.model_dump(exclude_unset=True)
+    if not actor.has(permissions.TASK_WRITE):
+        # The assignee fills in their own task (its fields, progress); the rest is a manager's.
+        if task.assignee_user_id != actor.user_id or set(changes) - _ASSIGNEE_EDITABLE:
+            raise PermissionDeniedError(permissions.TASK_WRITE)
     _check_if_match(if_match, task.version)
 
     if data.estimate_minutes is not None and task.status in _TERMINAL_TASK_STATUSES:
@@ -621,26 +802,47 @@ async def update_task(session: AsyncSession, org_id: uuid.UUID, task_id: uuid.UU
         task.title = data.title
     if data.description is not None:
         task.description = data.description
-    if data.priority is not None:
-        task.priority = data.priority
-    if data.due_at is not None:
-        task.due_at = data.due_at
     if data.estimate_minutes is not None:
         task.estimate_minutes = data.estimate_minutes
     if data.progress_pct is not None:
         task.progress_pct = data.progress_pct
 
+    profile = await load_profile(session, task.task_type_id)
     attrs = dict(task.attributes or {})
+    if data.attributes is not None:
+        attrs = merge_attributes(attrs, data.attributes, profile.fields)
     if data.labels is not None:
         attrs["labels"] = data.labels
-    if data.attributes is not None:
-        attrs.update(data.attributes)
+    if data.due_at is not None:
+        task.due_at = data.due_at
+        attrs.pop("due_from_sla", None)
+    if data.priority is not None and data.priority != task.priority:
+        task.priority = data.priority
+        if attrs.get("due_from_sla"):
+            # The SLA-given due date follows the new priority's target.
+            now = datetime.now(timezone.utc)
+            task.due_at = resolution_due_at(task.created_at, profile, task.priority, paused_minutes(task, now))
+            if task.due_at is None:
+                attrs.pop("due_from_sla", None)
     task.attributes = attrs
 
     task.updated_at = datetime.now(timezone.utc)
     task.version += 1
     await session.flush()
     return await _build_task_response(session, task)
+
+
+async def _end_assignments(session: AsyncSession, task_id: uuid.UUID, role: str, reason: str) -> None:
+    """Close whoever currently holds `role` on the task, so the history shows until when."""
+    current = await session.execute(
+        select(TaskAssignment).where(
+            TaskAssignment.task_id == task_id, TaskAssignment.assignment_role == role, TaskAssignment.ended_at.is_(None)
+        )
+    )
+    now = datetime.now(timezone.utc)
+    for assignment in current.scalars():
+        assignment.ended_at = now
+        assignment.end_reason = reason
 
 
 async def assign_task(session: AsyncSession, org_id: uuid.UUID, user_id: uuid.UUID, task_id: uuid.UUID, data: TaskAssign, if_match: Optional[str]) -> TaskResponse:
@@ -651,24 +853,59 @@ async def assign_task(session: AsyncSession, org_id: uuid.UUID, user_id: uuid.UU
         raise InvalidStateTransitionError(task.status, "assigned")
 
     from_status = task.status
-    # Only a change of person is recorded; the people replaced keep their records, ended, as history.
     if task.assignee_user_id != data.assignee_user_id:
-        await _end_assignments(session, task, "assignee", "Reassigned")
-        session.add(TaskAssignment(
-            task_id=task.id, unit_id=task.owning_unit_id, user_id=data.assignee_user_id, assignment_role="assignee", assigned_by=user_id,
-        ))
-        task.assignee_user_id = data.assignee_user_id
-    if data.reviewer_user_id is not None and task.reviewer_user_id != data.reviewer_user_id:
-        await _end_assignments(session, task, "reviewer", "Reviewer changed")
-        session.add(TaskAssignment(
-            task_id=task.id, unit_id=task.owning_unit_id, user_id=data.reviewer_user_id, assignment_role="reviewer", assigned_by=user_id,
-        ))
+        await _end_assignments(session, task.id, "assignee", data.note or "Reassigned")
+        session.add(
+            TaskAssignment(
+                task_id=task.id,
+                unit_id=task.owning_unit_id,
+                user_id=data.assignee_user_id,
+                assignment_role="assignee",
+                assigned_by=user_id,
+            )
+        )
+    task.assignee_user_id = data.assignee_user_id
+    if data.reviewer_user_id is not None and data.reviewer_user_id != task.reviewer_user_id:
+        await _end_assignments(session, task.id, "reviewer", data.note or "Reviewer changed")
+        session.add(
+            TaskAssignment(
+                task_id=task.id,
+                unit_id=task.owning_unit_id,
+                user_id=data.reviewer_user_id,
+                assignment_role="reviewer",
+                assigned_by=user_id,
+            )
+        )
         task.reviewer_user_id = data.reviewer_user_id
     if task.status in ("open", "draft"):
         task.status = "assigned"
 
     if task.status != from_status:
         await _record_status_history(session, task, from_status, task.status, user_id, data.note)
+
+    task.updated_at = datetime.now(timezone.utc)
+    task.version += 1
+    await session.flush()
+    return await _build_task_response(session, task)
+
+
+async def claim_task(session: AsyncSession, org_id: uuid.UUID, user_id: uuid.UUID, task_id: uuid.UUID, if_match: Optional[str]) -> TaskResponse:
+    """
+    Take an unassigned task from the team's queue (pull-based work: a sprint backlog, an SDR
+    lead queue, a service desk). The row is locked so two people can't both take it.
+    """
+    task = await _get_task(session, org_id, task_id, lock=True)
+    _check_if_match(if_match, task.version)
+    if task.assignee_user_id is not None:
+        raise TaskAlreadyClaimedError()
+    if task.status not in ("draft", "open"):
+        raise InvalidStateTransitionError(task.status, "assigned")
+
+    from_status = task.status
+    task.assignee_user_id = user_id
+    task.status = "assigned"
+    session.add(TaskAssignment(task_id=task.id, unit_id=task.owning_unit_id, user_id=user_id, assigned_by=user_id))
+    await _record_status_history(session, task, from_status, task.status, user_id, "Taken from the team's queue")
 
     task.updated_at = datetime.now(timezone.utc)
     task.version += 1
@@ -691,13 +928,18 @@ async def start_task(session: AsyncSession, org_id: uuid.UUID, user_id: uuid.UUI
         if blocker and blocker.status not in _TERMINAL_TASK_STATUSES:
             raise DependenciesOpenError()
 
+    now = datetime.now(timezone.utc)
     from_status = task.status
     task.status = "in_progress"
     if task.start_at is None:
-        task.start_at = datetime.now(timezone.utc)
+        task.start_at = now
+    attrs = dict(task.attributes or {})
+    # The first pick-up answers the response SLA.
+    attrs.setdefault("responded_at", now.isoformat())
+    task.attributes = attrs
     await _record_status_history(session, task, from_status, task.status, user_id)
 
-    task.updated_at = datetime.now(timezone.utc)
+    task.updated_at = now
     task.version += 1
     await session.flush()
     return await _build_task_response(session, task)
@@ -712,16 +954,21 @@ async def block_task(session: AsyncSession, org_id: uuid.UUID, actor: Actor, tas
     if task.status in _TERMINAL_TASK_STATUSES or task.status == "blocked":
         raise InvalidStateTransitionError(task.status, "blocked")
 
+    now = datetime.now(timezone.utc)
     from_status = task.status
     task.status = "blocked"
     attrs = dict(task.attributes or {})
     attrs["blocked_reason"] = data.reason
     if data.blocked_by_task_id:
         attrs["blocked_by_task_id"] = str(data.blocked_by_task_id)
+    profile = await load_profile(session, task.task_type_id)
+    if data.pause_sla and profile.resolution_sla_minutes.get(task.priority):
+        # Waiting on the client: the resolution clock stops until the task is unblocked.
+        attrs["sla_paused_since"] = now.isoformat()
     task.attributes = attrs
     await _record_status_history(session, task, from_status, task.status, actor.user_id, data.reason)
 
-    task.updated_at = datetime.now(timezone.utc)
+    task.updated_at = now
     task.version += 1
     await session.flush()
     return await _build_task_response(session, task)
@@ -736,13 +983,32 @@ async def unblock_task(session: AsyncSession, org_id: uuid.UUID, actor: Actor, t
     if task.status != "blocked":
         raise InvalidStateTransitionError(task.status, "in_progress")
 
+    now = datetime.now(timezone.utc)
+    _end_sla_pause(task, now)
+    attrs = dict(task.attributes or {})
+    attrs.pop("blocked_reason", None)
+    attrs.pop("blocked_by_task_id", None)
+    task.attributes = attrs
     task.status = "in_progress"
     await _record_status_history(session, task, "blocked", task.status, actor.user_id)
 
-    task.updated_at = datetime.now(timezone.utc)
+    task.updated_at = now
     task.version += 1
     await session.flush()
     return await _build_task_response(session, task)
+
+
+def _end_sla_pause(task: Task, now: datetime) -> None:
+    """Add a running pause to the paused total; an SLA-given due date moves out by as much."""
+    attrs = dict(task.attributes or {})
+    since = attrs.pop("sla_paused_since", None)
+    if not since:
+        return
+    paused = max(0, int((now - as_utc(datetime.fromisoformat(since))).total_seconds() // 60))
+    attrs["sla_paused_minutes"] = int(attrs.get("sla_paused_minutes") or 0) + paused
+    if attrs.get("due_from_sla") and task.due_at is not None:
+        task.due_at = as_utc(task.due_at) + timedelta(minutes=paused)
+    task.attributes = attrs
 
 
 async def submit_task(session: AsyncSession, org_id: uuid.UUID, user_id: uuid.UUID, task_id: uuid.UUID, data: TaskSubmit, if_match: Optional[str]) -> TaskResponse:
@@ -754,27 +1020,107 @@ async def submit_task(session: AsyncSession, org_id: uuid.UUID, user_id: uuid.UU
     if task.status not in ("in_progress", "rework"):
         raise InvalidStateTransitionError(task.status, "submitted")
 
+    task_type = await session.get(TaskType, task.task_type_id)
+    profile = await load_profile(session, task.task_type_id)
+    attrs = merge_attributes(dict(task.attributes or {}), data.attributes or {}, profile.fields)
+    issues = missing_on_submit(profile.fields, attrs) + _outcome_issues(profile, data.outcome)
+    if issues:
+        raise TaskAttributesInvalidError(issues)
+
     checklist_res = await session.execute(select(ChecklistItem).where(ChecklistItem.task_id == task.id, ChecklistItem.mandatory == True, ChecklistItem.done_at.is_(None)))  # noqa: E712
     pending = checklist_res.scalars().all()
     if pending:
         raise TaskChecklistIncompleteError([str(i.id) for i in pending])
 
-    task_type = await session.get(TaskType, task.task_type_id)
+    now = datetime.now(timezone.utc)
+    if data.outcome:
+        attrs["outcome"] = data.outcome
+    task.attributes = attrs
     from_status = task.status
 
     if task_type and task_type.requires_review:
         task.status = "submitted"
     else:
         task.status = "done"
-        task.completed_at = datetime.now(timezone.utc)
+        task.completed_at = now
         task.progress_pct = 100
 
     await _record_status_history(session, task, from_status, task.status, user_id, data.note)
 
-    task.updated_at = datetime.now(timezone.utc)
+    follow_up_at = _follow_up_at(profile, data, now)
+    if follow_up_at is not None and not attrs.get("follow_up_task_id"):
+        follow_up = await _schedule_follow_up(session, org_id, user_id, task, task_type, profile, follow_up_at)
+        task.attributes = {**attrs, "follow_up_task_id": str(follow_up.id)}
+
+    task.updated_at = now
     task.version += 1
     await session.flush()
     return await _build_task_response(session, task)
+
+
+def _outcome_issues(profile: Profile, outcome: Optional[str]) -> list[dict[str, str]]:
+    if not profile.outcomes:
+        return [{"field": "outcome", "issue": "This kind of task records no outcome"}] if outcome else []
+    if outcome is None:
+        return [{"field": "outcome", "issue": "Choose how it went"}]
+    if profile.outcome(outcome) is None:
+        return [{"field": "outcome", "issue": f"Must be one of: {', '.join(o.code for o in profile.outcomes)}"}]
+    return []
+
+
+def _follow_up_at(profile: Profile, data: TaskSubmit, now: datetime) -> Optional[datetime]:
+    """When the next touch is due: as asked, or as the outcome schedules it; None for no follow-up."""
+    if data.skip_follow_up:
+        return None
+    if data.follow_up_at is not None:
+        return data.follow_up_at
+    outcome = profile.outcome(data.outcome) if data.outcome else None
+    if outcome is None or outcome.follow_up_in_days is None:
+        return None
+    return now + timedelta(days=outcome.follow_up_in_days)
+
+
+async def _schedule_follow_up(
+    session: AsyncSession,
+    org_id: uuid.UUID,
+    user_id: uuid.UUID,
+    task: Task,
+    task_type: TaskType,
+    profile: Profile,
+    due_at: datetime,
+) -> Task:
+    """The next touch of a cadence: same kind of task, same subject, team and person, one step on."""
+    attrs = task.attributes or {}
+    title = task.title if task.title.startswith(_FOLLOW_UP_PREFIX) else f"{_FOLLOW_UP_PREFIX}{task.title}"
+    return await _insert_task(
+        session,
+        org_id,
+        user_id,
+        task_type=task_type,
+        profile=profile,
+        subject_type=task.subject_type,
+        subject_id=task.subject_id,
+        work_unit_id=task.work_unit_id,
+        title=title[:255],
+        description=task.description,
+        owning_unit_id=task.owning_unit_id,
+        assignee_user_id=task.assignee_user_id,
+        reviewer_user_id=task.reviewer_user_id,
+        priority=task.priority,
+        start_at=None,
+        due_at=due_at,
+        estimate_minutes=task.estimate_minutes,
+        parent_task_id=task.parent_task_id,
+        attributes={
+            **carried_attributes(profile.fields, attrs),
+            "labels": attrs.get("labels", []),
+            "follow_up_of": str(task.id),
+            "cadence_step": int(attrs.get("cadence_step") or 1) + 1,
+        },
+        source="followup",
+        created_at=datetime.now(timezone.utc),
+        checklist=[],
+    )
 
 
 async def review_task(session: AsyncSession, org_id: uuid.UUID, actor: Actor, task_id: uuid.UUID, data: ReviewCreate) -> ReviewResponse:
@@ -794,6 +1140,8 @@ async def review_task(session: AsyncSession, org_id: uuid.UUID, actor: Actor, ta
         else datetime.now(timezone.utc)
     )
     from_status = task.status
+    # Rounds count every review: a pass after one send-back is round 2.
+    round_no = task.review_round + 1
     if data.result == "fail":
         task.status = "rework"
         task.review_round += 1
@@ -804,7 +1152,7 @@ async def review_task(session: AsyncSession, org_id: uuid.UUID, actor: Actor, ta
 
     review = TaskReview(
         task_id=task.id,
-        round=task.review_round or 1,
+        round=round_no,
         reviewer_id=user_id,
         result=data.result,
         rating=data.rating,
@@ -818,26 +1166,7 @@ async def review_task(session: AsyncSession, org_id: uuid.UUID, actor: Actor, ta
     task.version += 1
     await session.flush()
     await session.refresh(review)
-
-    return _review_response(review)
-
-
-def _review_response(review: TaskReview) -> ReviewResponse:
-    return ReviewResponse(
-        id=review.id,
-        round=review.round,
-        reviewer=user_ref(review.reviewer_id),
-        result=review.result,
-        rating=review.rating,
-        feedback=review.feedback,
-        reviewed_at=review.reviewed_at,
-    )
-
-
-async def list_reviews(session: AsyncSession, org_id: uuid.UUID, task_id: uuid.UUID) -> list[ReviewResponse]:
-    await _get_task(session, org_id, task_id)
-    reviews = await session.execute(select(TaskReview).where(TaskReview.task_id == task_id).order_by(TaskReview.reviewed_at))
-    return [_review_response(r) for r in reviews.scalars().all()]
+    return _to_review_response(review)
 
 
 async def cancel_task(session: AsyncSession, org_id: uuid.UUID, user_id: uuid.UUID, task_id: uuid.UUID, data: TaskCancel, if_match: Optional[str]) -> TaskResponse:
@@ -885,6 +1214,81 @@ async def get_task_history(session: AsyncSession, org_id: uuid.UUID, task_id: uu
         for h in rows
     ]
     return PageResponse(data=data, page=page)
+
+
+async def list_reviews(session: AsyncSession, org_id: uuid.UUID, task_id: uuid.UUID, limit: int, cursor: Optional[str]) -> PageResponse[ReviewResponse]:
+    """Every review round, oldest first: what each reviewer decided and why."""
+    await _get_task(session, org_id, task_id)
+    query = select(TaskReview).where(TaskReview.task_id == task_id)
+    rows, page = await paginate(session, query, TaskReview, limit, cursor, order_by=TaskReview.reviewed_at)
+    return PageResponse(data=[_to_review_response(r) for r in rows], page=page)
+
+
+def _to_review_response(review: TaskReview) -> ReviewResponse:
+    return ReviewResponse(
+        id=review.id,
+        round=review.round,
+        reviewer=user_ref(review.reviewer_id),
+        result=review.result,
+        rating=review.rating,
+        feedback=review.feedback,
+        reviewed_at=review.reviewed_at,
+    )
+
+
+async def list_assignments(session: AsyncSession, org_id: uuid.UUID, task_id: uuid.UUID, limit: int, cursor: Optional[str]) -> PageResponse[AssignmentResponse]:
+    await _get_task(session, org_id, task_id)
+    query = select(TaskAssignment).where(TaskAssignment.task_id == task_id)
+    rows, page = await paginate(session, query, TaskAssignment, limit, cursor, order_by=TaskAssignment.assigned_at)
+    data = [
+        AssignmentResponse(
+            id=a.id,
+            user=user_ref(a.user_id),
+            unit=unit_ref(a.unit_id),
+            role=a.assignment_role,
+            assigned_by=user_ref(a.assigned_by),
+            assigned_at=a.assigned_at,
+            ended_at=a.ended_at,
+            end_reason=a.end_reason,
+        )
+        for a in rows
+    ]
+    return PageResponse(data=data, page=page)
+
+
+_DEPENDENCY_TYPE_NAMES = {"FS": "finish_to_start", "SS": "start_to_start", "FF": "finish_to_finish"}
+
+
+async def list_dependencies(
+    session: AsyncSession, org_id: uuid.UUID, task_id: uuid.UUID, direction: str, limit: int, cursor: Optional[str]
+) -> PageResponse[DependencyResponse]:
+    """The tasks this one waits for (`waits_for`), or the ones waiting for it (`blocks`)."""
+    await _get_task(session, org_id, task_id)
+    if direction == "blocks":
+        link, this_side = TaskDependency.task_id, TaskDependency.depends_on_task_id
+    else:
+        link, this_side = TaskDependency.depends_on_task_id, TaskDependency.task_id
+    query = select(Task).join(TaskDependency, link == Task.id).where(this_side == task_id, Task.organization_id == org_id)
+    rows, page = await paginate(session, query, Task, limit, cursor, order_by=Task.code)
+    kinds = dict(
+        (await session.execute(select(link, TaskDependency.dependency_type).where(this_side == task_id))).all()
+    )
+    data = [
+        DependencyResponse(
+            task_id=t.id, code=t.code, title=t.title, status=t.status, dependency_type=_DEPENDENCY_TYPE_NAMES.get(kinds.get(t.id), "finish_to_start")
+        )
+        for t in rows
+    ]
+    return PageResponse(data=data, page=page)
+
+
+async def remove_dependency(session: AsyncSession, org_id: uuid.UUID, task_id: uuid.UUID, depends_on_task_id: uuid.UUID) -> None:
+    """Stop waiting for a task. Removing a link that isn't there changes nothing."""
+    await _get_task(session, org_id, task_id)
+    dependency = await session.get(TaskDependency, (task_id, depends_on_task_id))
+    if dependency is not None:
+        await session.delete(dependency)
+        await session.flush()
 
 
 # --- Time entries ------------------------------------------------------
@@ -945,16 +1349,18 @@ async def log_time(session: AsyncSession, org_id: uuid.UUID, user_id: uuid.UUID,
     return _to_time_entry_response(entry)
 
 
-async def delete_time_entry(session: AsyncSession, org_id: uuid.UUID, actor: Actor, entry_id: uuid.UUID) -> None:
+async def remove_time_entry(session: AsyncSession, org_id: uuid.UUID, user_id: uuid.UUID, entry_id: uuid.UUID) -> None:
+    """Take back time you logged; the task's logged total drops with it."""
     entry = (
         await session.execute(select(TimeEntry).where(TimeEntry.id == entry_id, TimeEntry.organization_id == org_id))
     ).scalars().first()
-    if not entry:
+    if entry is None:
         raise TimeEntryNotFoundError(str(entry_id))
-    if entry.user_id != actor.user_id:
+    if entry.user_id != user_id:
         raise TimeEntryNotOwnError()
     task = await session.get(Task, entry.task_id)
-    task.logged_minutes = max(0, task.logged_minutes - entry.minutes)
+    if task is not None:
+        task.logged_minutes = max(0, task.logged_minutes - entry.minutes)
     await session.delete(entry)
     await session.flush()
 
@@ -1061,38 +1467,10 @@ async def add_dependency(session: AsyncSession, org_id: uuid.UUID, task_id: uuid
 
 
 _DB_DEPENDENCY_TYPES = {"finish_to_start": "FS", "start_to_start": "SS", "finish_to_finish": "FF"}
-_API_DEPENDENCY_TYPES = {db: api for api, db in _DB_DEPENDENCY_TYPES.items()}
 
 
 def _to_db_dependency_type(value: Optional[str]) -> str:
     return _DB_DEPENDENCY_TYPES.get(value or "finish_to_start", "FS")
-
-
-async def list_dependencies(session: AsyncSession, org_id: uuid.UUID, task_id: uuid.UUID) -> list[DependencyResponse]:
-    """The tasks this one waits for."""
-    await _get_task(session, org_id, task_id)
-    rows = await session.execute(
-        select(TaskDependency.dependency_type, Task)
-        .join(Task, Task.id == TaskDependency.depends_on_task_id)
-        .where(TaskDependency.task_id == task_id)
-        .order_by(Task.code)
-    )
-    return [
-        DependencyResponse(
-            task_id=blocker.id, code=blocker.code, title=blocker.title, status=blocker.status,
-            dependency_type=_API_DEPENDENCY_TYPES.get(dependency_type, "finish_to_start"),
-        )
-        for dependency_type, blocker in rows.all()
-    ]
-
-
-async def remove_dependency(session: AsyncSession, org_id: uuid.UUID, task_id: uuid.UUID, depends_on_task_id: uuid.UUID) -> None:
-    """Idempotent: removing a dependency that isn't there changes nothing."""
-    await _get_task(session, org_id, task_id)
-    dependency = await session.get(TaskDependency, (task_id, depends_on_task_id))
-    if dependency:
-        await session.delete(dependency)
-        await session.flush()
 
 
 # --- Handovers -------------------------------------------------------------
@@ -1115,12 +1493,28 @@ def _to_handover_response(h: Handover) -> HandoverResponse:
     )
 
 
-async def list_handovers(session: AsyncSession, org_id: uuid.UUID, to_unit_id: Optional[uuid.UUID], status: Optional[str], limit: int, cursor: Optional[str]) -> PageResponse[HandoverResponse]:
+async def list_handovers(
+    session: AsyncSession,
+    org_id: uuid.UUID,
+    to_unit_id: Optional[uuid.UUID],
+    from_unit_id: Optional[uuid.UUID],
+    statuses: Optional[list[str]],
+    subject_type: Optional[str],
+    subject_id: Optional[uuid.UUID],
+    limit: int,
+    cursor: Optional[str],
+) -> PageResponse[HandoverResponse]:
     query = select(Handover).where(Handover.organization_id == org_id)
     if to_unit_id is not None:
         query = query.where(Handover.to_unit_id == to_unit_id)
-    if status is not None:
-        query = query.where(Handover.status == status)
+    if from_unit_id is not None:
+        query = query.where(Handover.from_unit_id == from_unit_id)
+    if statuses:
+        query = query.where(Handover.status.in_(statuses))
+    if subject_type is not None:
+        query = query.where(Handover.subject_type == subject_type)
+    if subject_id is not None:
+        query = query.where(Handover.subject_id == subject_id)
     rows, page = await paginate(session, query, Handover, limit, cursor, order_by=Handover.created_at, descending=True)
     return PageResponse(data=[_to_handover_response(h) for h in rows], page=page)
 
@@ -1161,6 +1555,10 @@ async def request_handover(session: AsyncSession, org_id: uuid.UUID, user_id: uu
     return _to_handover_response(handover)
 
 
+async def get_handover(session: AsyncSession, org_id: uuid.UUID, handover_id: uuid.UUID) -> HandoverResponse:
+    return _to_handover_response(await _get_handover(session, org_id, handover_id))
+
+
 async def _get_handover(session: AsyncSession, org_id: uuid.UUID, handover_id: uuid.UUID) -> Handover:
     res = await session.execute(select(Handover).where(Handover.id == handover_id, Handover.organization_id == org_id))
     handover = res.scalars().first()
@@ -1185,29 +1583,40 @@ async def _handover_subject(
     )
 
 
-async def _move_to_receiving_unit(session: AsyncSession, org_id: uuid.UUID, handover: Handover, user_id: uuid.UUID) -> None:
+async def _move_to_receiving_unit(
+    session: AsyncSession, org_id: uuid.UUID, handover: Handover, user_id: uuid.UUID, assignee_user_id: Optional[uuid.UUID]
+) -> None:
     """
-    An accepted handover makes the receiving unit the owner of the work. A task comes off its
-    assignee, started or not, and the receiving unit assigns one of its own people; whoever
-    worked on it stays in the task's history (their ended assignment and its status changes).
-    Work being done goes back to the unit's queue; work waiting for review stays with its
-    reviewer.
+    An accepted handover makes the receiving unit the owner of the work. When the accepting side
+    names who takes a task on, it goes to them (a task not yet assigned becomes assigned).
+    Otherwise the task comes off its assignee, started or not, and the receiving unit assigns
+    one of its own people: work being done goes back to the unit's queue, work waiting for
+    review stays with its reviewer. Whoever worked on it stays in the task's history (their
+    ended assignment and its status changes).
     """
     handed_over = await _handover_subject(session, org_id, handover.subject_type, handover.subject_id)
+    if assignee_user_id is not None and not isinstance(handed_over, Task):
+        raise ValidationFailedError("assignee_user_id", "Only a handed-over task takes an assignee")
     handed_over.owning_unit_id = handover.to_unit_id
     handed_over.version += 1
     handed_over.updated_at = datetime.now(timezone.utc)
     if not isinstance(handed_over, Task):
         return
-    await _end_assignments(session, handed_over, "assignee", "Handed over to another team")
-    handed_over.assignee_user_id = None
-    if handed_over.status not in _WAITING_FOR_REVIEW | {"open"}:
-        await _record_status_history(session, handed_over, handed_over.status, "open", user_id, "Handed over to another team")
-        handed_over.status = "open"
-
-
-async def get_handover(session: AsyncSession, org_id: uuid.UUID, handover_id: uuid.UUID) -> HandoverResponse:
-    return _to_handover_response(await _get_handover(session, org_id, handover_id))
+    task = handed_over
+    if assignee_user_id is not None:
+        if task.assignee_user_id != assignee_user_id:
+            await _end_assignments(session, task.id, "assignee", _HANDED_OVER)
+            session.add(TaskAssignment(task_id=task.id, unit_id=task.owning_unit_id, user_id=assignee_user_id, assigned_by=user_id))
+        task.assignee_user_id = assignee_user_id
+        if task.status in ("draft", "open"):
+            await _record_status_history(session, task, task.status, "assigned", user_id, _HANDED_OVER)
+            task.status = "assigned"
+        return
+    await _end_assignments(session, task.id, "assignee", _HANDED_OVER)
+    task.assignee_user_id = None
+    if task.status not in _WAITING_FOR_REVIEW | {"open"}:
+        await _record_status_history(session, task, task.status, "open", user_id, _HANDED_OVER)
+        task.status = "open"
 
 
 HANDOVER_ETAG = "1"  # Handover has no version column; see the workflow-version note for the same pattern.
@@ -1223,7 +1632,7 @@ async def accept_handover(session: AsyncSession, org_id: uuid.UUID, user_id: uui
     handover.status = "accepted"
     handover.responded_by = user_id
     handover.responded_at = datetime.now(timezone.utc)
-    await _move_to_receiving_unit(session, org_id, handover, user_id)
+    await _move_to_receiving_unit(session, org_id, handover, user_id, data.assignee_user_id)
     if data.note:
         handover.notes = f"{handover.notes}\n{data.note}" if handover.notes else data.note
 
@@ -1243,6 +1652,25 @@ async def reject_handover(session: AsyncSession, org_id: uuid.UUID, user_id: uui
     handover.responded_at = datetime.now(timezone.utc)
     handover.rejection_reason = data.reason
 
+    await session.flush()
+    return _to_handover_response(handover)
+
+
+async def cancel_handover(
+    session: AsyncSession, org_id: uuid.UUID, user_id: uuid.UUID, handover_id: uuid.UUID, data: HandoverCancel, if_match: Optional[str]
+) -> HandoverResponse:
+    """The sending side withdraws a handover nobody has answered yet; the work stays where it is."""
+    handover = await _get_handover(session, org_id, handover_id)
+    if if_match is None:
+        raise PreconditionRequiredError()
+    if handover.status != "requested":
+        raise InvalidStateTransitionError(handover.status, "cancelled")
+
+    handover.status = "cancelled"
+    handover.responded_by = user_id
+    handover.responded_at = datetime.now(timezone.utc)
+    withdrawn = f"Withdrawn: {data.reason}"
+    handover.notes = f"{handover.notes}\n{withdrawn}" if handover.notes else withdrawn
     await session.flush()
     return _to_handover_response(handover)
 

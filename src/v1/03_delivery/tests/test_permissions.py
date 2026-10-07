@@ -265,3 +265,28 @@ async def test_a_transition_can_require_its_own_permission(client_as, db_session
         await db_session.execute(select(TransitionLog.performed_by).where(TransitionLog.instance_id == instance.id))
     ).scalar_one()
     assert performed_by == approver_id
+
+
+async def test_the_assignee_fills_in_their_task_but_only_a_manager_retitles_it(client_as, db_session):
+    assignee = uuid.uuid4()
+    task = await add_task(db_session, "in_progress", assignee=assignee)
+    path = f"{BASE}/tasks/{task.id}"
+    worker = client_as(assignee, permissions.TASK_READ)
+    res = await worker.patch(path, json={"attributes": {"note": "half way"}, "progress_pct": 50}, headers={"If-Match": '"1"'})
+    assert res.status_code == 200, res.text
+    assert (res.json()["attributes"]["note"], res.json()["progress_pct"]) == ("half way", 50)
+
+    retitle = await worker.patch(path, json={"title": "Mine now"}, headers={"If-Match": '"2"'})
+    assert_denied(retitle, "PERMISSION_DENIED", permissions.TASK_WRITE)
+    bystander = client_as(uuid.uuid4(), permissions.TASK_READ)
+    assert_denied(
+        await bystander.patch(path, json={"progress_pct": 10}, headers={"If-Match": '"2"'}), "PERMISSION_DENIED", permissions.TASK_WRITE
+    )
+
+
+async def test_designing_task_types_needs_the_template_permission(client_as):
+    reader = client_as(uuid.uuid4(), permissions.TASK_READ)
+    assert (await reader.get(f"{BASE}/task-types")).status_code == 200
+    assert_denied(
+        await reader.post(f"{BASE}/task-types", json={"code": "x", "name": "X"}), "PERMISSION_DENIED", permissions.TEMPLATE_MANAGE
+    )

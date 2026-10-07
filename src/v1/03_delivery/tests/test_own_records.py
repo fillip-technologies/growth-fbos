@@ -89,6 +89,11 @@ async def test_own_records_only_shows_just_your_tasks_and_projects(act_as):
     assert ids(await ok(await own_only.get(f"{BASE}/tasks"))) == {mine["id"], to_review["id"]}
     on_that_project = await ok(await own_only.get(f"{BASE}/tasks", params={"subject_id": with_my_task["id"]}))
     assert ids(on_that_project) == {mine["id"]}
+    # The board and the queue share the list's filters, so they are scoped the same way.
+    board = await ok(await own_only.get(f"{BASE}/tasks/board"))
+    assert {t["id"] for column in board["columns"] for t in column["tasks"]} == {mine["id"], to_review["id"]}
+    queue = await ok(await own_only.get(f"{BASE}/tasks/queue"))
+    assert ids(queue) <= {mine["id"], to_review["id"]} and someone_elses["id"] not in ids(queue)
     assert (await own_only.get(f"{BASE}/tasks/{mine['id']}")).status_code == 200
     for path in (f"/tasks/{someone_elses['id']}", f"/tasks/{someone_elses['id']}/comments"):
         hidden = await own_only.get(f"{BASE}{path}")
