@@ -21,6 +21,8 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     async with httpx.AsyncClient(
         base_url=settings.identity_service_url, timeout=settings.identity_timeout_seconds
     ) as http, httpx.AsyncClient(
+        base_url=settings.documents_service_url, timeout=settings.documents_timeout_seconds
+    ) as documents_http, httpx.AsyncClient(
         base_url=settings.communication_service_url, timeout=settings.notification_timeout_seconds
     ) as communication_http, httpx.AsyncClient(
         headers={"Authorization": f"Bearer {settings.website_leads_api_key}"},
