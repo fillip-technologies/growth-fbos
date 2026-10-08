@@ -79,6 +79,7 @@ from schemas.tasks import (
     ChecklistItemResponse,
     ChecklistItemUpdate,
     CommentCreate,
+    CustomFieldScope,
     CommentResponse,
     DependencyCreate,
     DependencyResponse,
@@ -109,6 +110,7 @@ from schemas.tasks import (
     TimeEntryResponse,
 )
 import permissions
+from services.assignees import PeopleDirectory, ensure_assignable, keep_if_assignable
 from services.identity_client import Actor
 from services.codes import next_task_code
 from services.pagination import paginate
@@ -219,15 +221,38 @@ async def _task_responses(session: AsyncSession, tasks: list[Task]) -> list[Task
     )
     for item in items.scalars().all():
         checklists[item.task_id].append(_checklist_item_response(item))
+    project_verticals = await _project_verticals(session, {t.work_unit_id for t in tasks if t.work_unit_id})
     now = datetime.now(timezone.utc)
     return [
-        _task_response(task, task_types[task.task_type_id], profiles[task.task_type_id], checklists[task.id], now)
+        _task_response(
+            task, task_types[task.task_type_id], profiles[task.task_type_id], checklists[task.id], now,
+            _custom_field_scope(task, project_verticals),
+        )
         for task in tasks
     ]
 
 
+async def _project_verticals(session: AsyncSession, work_unit_ids: set[uuid.UUID]) -> dict[uuid.UUID, Optional[uuid.UUID]]:
+    if not work_unit_ids:
+        return {}
+    rows = await session.execute(select(WorkUnit.id, WorkUnit.vertical_id).where(WorkUnit.id.in_(work_unit_ids)))
+    return {work_unit_id: vertical_id for work_unit_id, vertical_id in rows}
+
+
+def _custom_field_scope(task: Task, project_verticals: dict[uuid.UUID, Optional[uuid.UUID]]) -> CustomFieldScope:
+    """A task in a project takes the project's vertical (none when it has none); any other task, its team."""
+    if task.work_unit_id:
+        return CustomFieldScope(vertical_id=project_verticals.get(task.work_unit_id))
+    return CustomFieldScope(unit_id=task.owning_unit_id)
+
+
 def _task_response(
-    task: Task, task_type: TaskType, profile: Profile, checklist: list[ChecklistItemResponse], now: datetime
+    task: Task,
+    task_type: TaskType,
+    profile: Profile,
+    checklist: list[ChecklistItemResponse],
+    now: datetime,
+    custom_field_scope: CustomFieldScope,
 ) -> TaskResponse:
     attributes = task.attributes or {}
     resolution = resolution_sla(task, profile, now)
@@ -272,6 +297,7 @@ def _task_response(
         follow_up_task_id=uuid.UUID(follow_up_task_id) if follow_up_task_id else None,
         cadence_step=attributes.get("cadence_step"),
         attributes={k: v for k, v in attributes.items() if k != "labels"},
+        custom_field_scope=custom_field_scope,
         version=task.version,
         created_by=user_ref(task.created_by),
         created_at=task.created_at,
@@ -594,7 +620,9 @@ async def _subject_work_unit(
     return work_unit
 
 
-async def create_task(session: AsyncSession, org_id: uuid.UUID, user_id: uuid.UUID, data: TaskCreate) -> TaskResponse:
+async def create_task(
+    session: AsyncSession, org_id: uuid.UUID, user_id: uuid.UUID, data: TaskCreate, people: PeopleDirectory
+) -> TaskResponse:
     task_type = await _find_task_type(session, org_id, data.task_type_code)
     profile = await load_profile(session, task_type.id)
     if profile.archived:
@@ -603,7 +631,8 @@ async def create_task(session: AsyncSession, org_id: uuid.UUID, user_id: uuid.UU
     work_unit = await _subject_work_unit(session, org_id, data.subject.type, data.subject.id) if data.subject else None
     if data.parent_task_id is not None:
         await _get_task(session, org_id, data.parent_task_id)
-    # Unit membership lives in identity, so ASSIGNEE_NOT_IN_UNIT can't be checked here yet.
+    if data.assignee_user_id is not None:
+        await ensure_assignable(session, people, org_id, data.owning_unit_id, data.assignee_user_id)
 
     task = await _insert_task(
         session,
@@ -845,7 +874,15 @@ async def _end_assignments(session: AsyncSession, task_id: uuid.UUID, role: str,
         assignment.end_reason = reason
 
 
-async def assign_task(session: AsyncSession, org_id: uuid.UUID, user_id: uuid.UUID, task_id: uuid.UUID, data: TaskAssign, if_match: Optional[str]) -> TaskResponse:
+async def assign_task(
+    session: AsyncSession,
+    org_id: uuid.UUID,
+    user_id: uuid.UUID,
+    task_id: uuid.UUID,
+    data: TaskAssign,
+    if_match: Optional[str],
+    people: PeopleDirectory,
+) -> TaskResponse:
     task = await _get_task(session, org_id, task_id)
     _check_if_match(if_match, task.version)
 
@@ -854,6 +891,7 @@ async def assign_task(session: AsyncSession, org_id: uuid.UUID, user_id: uuid.UU
 
     from_status = task.status
     if task.assignee_user_id != data.assignee_user_id:
+        await ensure_assignable(session, people, org_id, task.owning_unit_id, data.assignee_user_id)
         await _end_assignments(session, task.id, "assignee", data.note or "Reassigned")
         session.add(
             TaskAssignment(
@@ -889,11 +927,23 @@ async def assign_task(session: AsyncSession, org_id: uuid.UUID, user_id: uuid.UU
     return await _build_task_response(session, task)
 
 
-async def claim_task(session: AsyncSession, org_id: uuid.UUID, user_id: uuid.UUID, task_id: uuid.UUID, if_match: Optional[str]) -> TaskResponse:
+async def claim_task(
+    session: AsyncSession,
+    org_id: uuid.UUID,
+    user_id: uuid.UUID,
+    task_id: uuid.UUID,
+    if_match: Optional[str],
+    people: PeopleDirectory,
+) -> TaskResponse:
     """
     Take an unassigned task from the team's queue (pull-based work: a sprint backlog, an SDR
-    lead queue, a service desk). The row is locked so two people can't both take it.
+    lead queue, a service desk). The row is locked so two people can't both take it; whether
+    the caller belongs to the team is asked first, so the lock isn't held while identity answers.
+    Only the team is read before the lock: a task loaded earlier would stay in the session as it
+    was, and the locked read would hand back that stale copy instead of the row as it is now.
     """
+    unit_id = await session.scalar(select(Task.owning_unit_id).where(Task.id == task_id, Task.organization_id == org_id))
+    await ensure_assignable(session, people, org_id, unit_id, user_id)
     task = await _get_task(session, org_id, task_id, lock=True)
     _check_if_match(if_match, task.version)
     if task.assignee_user_id is not None:
@@ -1011,7 +1061,15 @@ def _end_sla_pause(task: Task, now: datetime) -> None:
     task.attributes = attrs
 
 
-async def submit_task(session: AsyncSession, org_id: uuid.UUID, user_id: uuid.UUID, task_id: uuid.UUID, data: TaskSubmit, if_match: Optional[str]) -> TaskResponse:
+async def submit_task(
+    session: AsyncSession,
+    org_id: uuid.UUID,
+    user_id: uuid.UUID,
+    task_id: uuid.UUID,
+    data: TaskSubmit,
+    if_match: Optional[str],
+    people: PeopleDirectory,
+) -> TaskResponse:
     task = await _get_task(session, org_id, task_id)
     _check_if_match(if_match, task.version)
 
@@ -1049,7 +1107,11 @@ async def submit_task(session: AsyncSession, org_id: uuid.UUID, user_id: uuid.UU
 
     follow_up_at = _follow_up_at(profile, data, now)
     if follow_up_at is not None and not attrs.get("follow_up_task_id"):
-        follow_up = await _schedule_follow_up(session, org_id, user_id, task, task_type, profile, follow_up_at)
+        # Submitting never fails over the follow-up: if its person no longer qualifies, the team gets it.
+        follow_up_assignee = await keep_if_assignable(session, people, org_id, task.owning_unit_id, task.assignee_user_id)
+        follow_up = await _schedule_follow_up(
+            session, org_id, user_id, task, task_type, profile, follow_up_at, follow_up_assignee
+        )
         task.attributes = {**attrs, "follow_up_task_id": str(follow_up.id)}
 
     task.updated_at = now
@@ -1088,8 +1150,12 @@ async def _schedule_follow_up(
     task_type: TaskType,
     profile: Profile,
     due_at: datetime,
+    assignee_user_id: Optional[uuid.UUID],
 ) -> Task:
-    """The next touch of a cadence: same kind of task, same subject, team and person, one step on."""
+    """
+    The next touch of a cadence: same kind of task, same subject and team, one step on. It goes
+    to `assignee_user_id` (the same person while they still qualify), else the team's queue.
+    """
     attrs = task.attributes or {}
     title = task.title if task.title.startswith(_FOLLOW_UP_PREFIX) else f"{_FOLLOW_UP_PREFIX}{task.title}"
     return await _insert_task(
@@ -1104,7 +1170,7 @@ async def _schedule_follow_up(
         title=title[:255],
         description=task.description,
         owning_unit_id=task.owning_unit_id,
-        assignee_user_id=task.assignee_user_id,
+        assignee_user_id=assignee_user_id,
         reviewer_user_id=task.reviewer_user_id,
         priority=task.priority,
         start_at=None,
@@ -1622,12 +1688,23 @@ async def _move_to_receiving_unit(
 HANDOVER_ETAG = "1"  # Handover has no version column; see the workflow-version note for the same pattern.
 
 
-async def accept_handover(session: AsyncSession, org_id: uuid.UUID, user_id: uuid.UUID, handover_id: uuid.UUID, data: HandoverAccept, if_match: Optional[str]) -> HandoverResponse:
+async def accept_handover(
+    session: AsyncSession,
+    org_id: uuid.UUID,
+    user_id: uuid.UUID,
+    handover_id: uuid.UUID,
+    data: HandoverAccept,
+    if_match: Optional[str],
+    people: PeopleDirectory,
+) -> HandoverResponse:
     handover = await _get_handover(session, org_id, handover_id)
     if if_match is None:
         raise PreconditionRequiredError()
     if handover.status != "requested":
         raise InvalidStateTransitionError(handover.status, "accepted")
+    if data.assignee_user_id is not None:
+        # Whoever takes the work on belongs to the team receiving it.
+        await ensure_assignable(session, people, org_id, handover.to_unit_id, data.assignee_user_id)
 
     handover.status = "accepted"
     handover.responded_by = user_id

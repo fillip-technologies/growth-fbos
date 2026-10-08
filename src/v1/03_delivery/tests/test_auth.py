@@ -12,7 +12,8 @@ from dependencies import get_identity_client
 from main import app
 from models.task import Task
 from models.task_template import TaskType
-from services.identity_client import ACTOR_PATH, IdentityClient
+from exceptions import TeamMembersUnavailableError
+from services.identity_client import ACTOR_PATH, PEOPLE_PATH, IdentityClient
 from tests.conftest import TEST_ORG_ID, TEST_USER_ID
 
 pytestmark = pytest.mark.asyncio
@@ -163,3 +164,52 @@ async def test_identity_without_the_endpoint_is_unavailable(call_delivery):
     res = await call_delivery(identity).get(f"{BASE}/tasks", headers={"Authorization": TOKEN})
     assert res.status_code == 503
     assert res.json()["detail"]["code"] == "AUTH_SERVICE_UNAVAILABLE"
+
+
+# --- Who belongs to a team (IdentityClient.people) ------------------------------------
+
+
+def _people_client(handler: IdentityHandler) -> IdentityClient:
+    return IdentityClient(httpx.AsyncClient(transport=httpx.MockTransport(handler), base_url="http://identity"), "internal-secret")
+
+
+async def test_people_are_asked_of_identity_with_the_internal_token():
+    unit_id, person_id = uuid.uuid4(), uuid.uuid4()
+    seen: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        return httpx.Response(200, json={"data": [{"id": str(person_id), "name": "Asha"}], "has_more": False})
+
+    found = await _people_client(handler).people(TEST_ORG_ID, unit_id=unit_id, user_id=person_id)
+    assert [(p.id, p.name) for p in found] == [(person_id, "Asha")]
+    assert seen[0].url.path == PEOPLE_PATH
+    assert dict(seen[0].url.params) == {"organization_id": str(TEST_ORG_ID), "unit_id": str(unit_id), "user_id": str(person_id)}
+    assert seen[0].headers["X-FBOS-Internal-Token"] == "internal-secret"
+
+
+async def test_a_unit_identity_does_not_know_has_nobody():
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(404, json={"code": "NOT_FOUND", "status": 404})
+
+    assert await _people_client(handler).people(TEST_ORG_ID, unit_id=uuid.uuid4()) == []
+
+
+@pytest.mark.parametrize(
+    "answer",
+    [
+        httpx.Response(404, json={"detail": "Not Found"}),  # an identity that predates /internal/people
+        httpx.Response(503, json={"code": "SERVICE_UNAVAILABLE"}),
+    ],
+)
+async def test_an_identity_that_cannot_answer_is_never_read_as_nobody(answer):
+    with pytest.raises(TeamMembersUnavailableError):
+        await _people_client(lambda request: answer).people(TEST_ORG_ID, unit_id=uuid.uuid4())
+
+
+async def test_an_unreachable_identity_is_unavailable():
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError("refused", request=request)
+
+    with pytest.raises(TeamMembersUnavailableError):
+        await _people_client(handler).people(TEST_ORG_ID)

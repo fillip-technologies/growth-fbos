@@ -63,6 +63,17 @@ class AuthServiceUnavailableError(DeliveryServiceError):
         )
 
 
+class TeamMembersUnavailableError(DeliveryServiceError):
+    """503: Identity could not say who belongs to a team, so nobody is given its work yet."""
+
+    def __init__(self) -> None:
+        super().__init__(
+            status.HTTP_503_SERVICE_UNAVAILABLE,
+            "TEAM_MEMBERS_UNAVAILABLE",
+            "Who belongs to the team could not be checked right now. Try again shortly.",
+        )
+
+
 # --- Not found (404) -----------------------------------------------------
 
 
@@ -508,13 +519,13 @@ class WorkflowVersionInvalidError(DeliveryServiceError):
 
 
 class AssigneeNotInUnitError(DeliveryServiceError):
-    """422: Tasks are team-owned; the assignee must belong to the unit."""
+    """422: Tasks are team-owned; with team assignment on, the assignee must belong to the team."""
 
     def __init__(self) -> None:
         super().__init__(
             status.HTTP_422_UNPROCESSABLE_ENTITY,
             "ASSIGNEE_NOT_IN_UNIT",
-            "The assignee must be an active member of the owning unit.",
+            "Only an active member of the task's team can be given it.",
         )
 
 

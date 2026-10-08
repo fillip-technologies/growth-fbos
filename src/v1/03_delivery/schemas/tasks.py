@@ -185,6 +185,17 @@ class TaskTemplateUpdate(BaseModel):
     default_priority: Optional[TaskPriority] = None
 
 
+class CustomFieldScope(BaseModel):
+    """
+    Which of the organization's custom fields apply to a task. A task in a project takes its
+    project's vertical (none when the project has none) and no team; any other task takes its
+    team, and through it the team's verticals.
+    """
+
+    unit_id: Optional[uuid.UUID] = None
+    vertical_id: Optional[uuid.UUID] = None
+
+
 class TaskResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
@@ -218,6 +229,7 @@ class TaskResponse(BaseModel):
     follow_up_task_id: Optional[uuid.UUID] = None
     cadence_step: Optional[int] = None
     attributes: dict = Field(default_factory=dict)
+    custom_field_scope: CustomFieldScope = Field(default_factory=CustomFieldScope)
     version: int
     created_by: Optional[UserRef] = None
     created_at: datetime
