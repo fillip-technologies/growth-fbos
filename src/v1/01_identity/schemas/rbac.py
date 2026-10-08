@@ -126,3 +126,16 @@ class GrantsResponse(BaseModel):
     grants: list[GrantItem]
     computed_at: datetime
     ttl_seconds: int = 300
+
+
+class PersonRef(BaseModel):
+    id: uuid.UUID
+    name: str
+
+
+class PeopleResponse(BaseModel):
+    """Active people of an organization, or of one of its units (internal)."""
+
+    data: list[PersonRef]
+    # More people matched than one answer carries; the caller should narrow its question.
+    has_more: bool = False

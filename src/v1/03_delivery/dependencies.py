@@ -43,6 +43,18 @@ def require_permission(permission: str) -> Callable[..., Awaitable[Actor]]:
     return guard
 
 
+def require_any_permission(*permissions: str) -> Callable[..., Awaitable[Actor]]:
+    """Route guard: the actor must hold at least one of `permissions` (the first is named when refused)."""
+
+    async def guard(actor: CurrentActor) -> Actor:
+        if not any(actor.has(permission) for permission in permissions):
+            raise PermissionDeniedError(permissions[0])
+        return actor
+
+    guard.__name__ = "require_any_of_" + "_or_".join(p.replace(".", "_") for p in permissions)
+    return guard
+
+
 async def get_organization_id(actor: CurrentActor) -> uuid.UUID:
     return actor.organization_id
 
@@ -52,6 +64,8 @@ async def get_current_user_id(actor: CurrentActor) -> uuid.UUID:
 
 
 DatabaseSession = Annotated[AsyncSession, Depends(get_db_session)]
+# Who belongs to which team, asked of identity (services/assignees.py).
+People = Annotated[IdentityClient, Depends(get_identity_client)]
 OrgId = Annotated[uuid.UUID, Depends(get_organization_id)]
 UserId = Annotated[uuid.UUID, Depends(get_current_user_id)]
 
@@ -66,4 +80,6 @@ __all__ = [
     "get_organization_id",
     "get_current_user_id",
     "require_permission",
+    "require_any_permission",
+    "People",
 ]

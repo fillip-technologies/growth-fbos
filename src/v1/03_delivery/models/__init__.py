@@ -2,6 +2,7 @@ from models.code_sequence import CodeSequence
 from models.control_register import ChangeRequest, Closure, Issue, Risk
 from models.delivery import Deliverable, Milestone, Phase, WorkDependency, WorkPackage
 from models.financial import CostEntry, WorkBudget
+from models.settings import DeliverySettings
 from models.task import ChecklistItem, Task, TaskDependency, TaskWatcher
 from models.task_assignment import Handover, TaskAssignment
 from models.task_template import RecurringTaskRule, TaskTemplate, TaskType
@@ -17,6 +18,7 @@ from models.work_unit_tracking import Baseline, ProgressSnapshot, StatusHistory
 
 __all__ = [
     "CodeSequence",
+    "DeliverySettings",
     # Work units
     "WorkUnitType",
     "WorkTemplate",

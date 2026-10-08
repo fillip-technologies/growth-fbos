@@ -1,18 +1,17 @@
-import secrets
 from typing import Optional
 import uuid
 
 from fastapi import APIRouter, Depends, Header, Query, Response, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from config import settings
 from database.session import get_db_session
-from dependencies import get_actor, require_permission
-from exceptions import PermissionDeniedError, PreconditionRequiredError
+from dependencies import get_actor, require_permission, verify_internal_caller
+from exceptions import PreconditionRequiredError
 from schemas.common import PaginatedResponse
 from schemas.rbac import (
     ActorResponse,
     GrantsResponse,
+    PeopleResponse,
     PermissionResponse,
     RoleAssignmentCreate,
     RoleAssignmentResponse,
@@ -23,6 +22,10 @@ from schemas.rbac import (
 from services.access_control import Actor
 from services.auth_cache import auth_cache
 from services.rbac_service import rbac_service
+from services.unit_members import active_people
+
+# The most people one /internal/people answer carries.
+PEOPLE_LIMIT = 1000
 
 roles_router = APIRouter()
 permissions_router = APIRouter()
@@ -213,7 +216,7 @@ async def get_effective_grants(
     x_fbos_internal_token: Optional[str] = Header(None, alias="X-FBOS-Internal-Token"),
     db: AsyncSession = Depends(get_db_session),
 ) -> GrantsResponse:
-    _verify_internal_caller(x_fbos_internal_token)
+    verify_internal_caller(x_fbos_internal_token)
     return await rbac_service.get_effective_grants(session=db, user_id=user_id)
 
 
@@ -234,7 +237,7 @@ async def resolve_actor(
     revoked session, client lock, active user, organization within the client) and returns
     the organization the request acts in with the user's permission codes.
     """
-    _verify_internal_caller(x_fbos_internal_token)
+    verify_internal_caller(x_fbos_internal_token)
     own_records_only: list[str] = []
     if actor.is_superuser:
         permissions = await _permission_catalog(db)
@@ -253,6 +256,29 @@ async def resolve_actor(
     )
 
 
+@internal_router.get(
+    "/people",
+    response_model=PeopleResponse,
+    status_code=status.HTTP_200_OK,
+    summary="Active people of an organization, or of one of its units (internal)",
+)
+async def list_people(
+    organization_id: uuid.UUID = Query(..., description="The organization the caller acts in"),
+    unit_id: Optional[uuid.UUID] = Query(
+        None, description="Only people who work in this unit or below it (home unit, or a current extra team membership)"
+    ),
+    user_id: Optional[uuid.UUID] = Query(None, description="Only this person: answers whether they qualify"),
+    x_fbos_internal_token: Optional[str] = Header(None, alias="X-FBOS-Internal-Token"),
+    db: AsyncSession = Depends(get_db_session),
+) -> PeopleResponse:
+    """
+    Other services (delivery) ask who may be given work in a unit, and whether one person may.
+    The caller already checked the signed-in user's permission; this answers ids and names only.
+    """
+    verify_internal_caller(x_fbos_internal_token)
+    return await active_people(db, organization_id, unit_id, user_id, PEOPLE_LIMIT)
+
+
 async def _permission_catalog(db: AsyncSession) -> list[str]:
     """Every permission code (what a client admin holds); it only changes with a deploy."""
     epoch, cached = await auth_cache.permission_codes()
@@ -261,13 +287,3 @@ async def _permission_catalog(db: AsyncSession) -> list[str]:
     codes = await rbac_service.list_permission_codes(session=db)
     await auth_cache.remember_permission_codes(epoch, codes)
     return codes
-
-
-def _verify_internal_caller(token: Optional[str]) -> None:
-    expected = settings.internal_service_token
-    if not expected:
-        if settings.app_env == "development":
-            return
-        raise PermissionDeniedError("internal", "Internal endpoints are disabled: INTERNAL_SERVICE_TOKEN is not set")
-    if not token or not secrets.compare_digest(token, expected):
-        raise PermissionDeniedError("internal", "A valid X-FBOS-Internal-Token is required")
