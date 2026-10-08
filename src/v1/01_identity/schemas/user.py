@@ -205,3 +205,18 @@ class UserPermissionsReplace(BaseModel):
     permissions: list[PermissionGrantInput] = Field(default_factory=list, max_length=500)
     role_assignments: list[RolePresetInput] = Field(default_factory=list, max_length=20)
     reason: str = Field(..., min_length=1, max_length=500, description="Recorded in the audit trail.")
+
+
+class UserVerticalsResponse(BaseModel):
+    """The verticals that apply to a user, inherited from their home unit."""
+
+    user_id: uuid.UUID
+    home_unit_id: Optional[uuid.UUID] = None
+    own: list[dict] = Field(default_factory=list, description="Set on the user's home unit itself")
+    effective: list[dict] = Field(
+        default_factory=list, description="Active verticals that apply to the user"
+    )
+    inherited_from: Optional[dict] = Field(
+        None, description="The parent unit the effective verticals come from, when home unit has none of its own"
+    )
+
