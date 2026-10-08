@@ -17,6 +17,7 @@ page in one query each, never one query per row.
 """
 
 import uuid
+from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 from typing import Optional
@@ -465,12 +466,12 @@ async def list_work_units(
     q: Optional[str],
     limit: int,
     cursor: Optional[str],
-    own_records_of: Optional[uuid.UUID] = None,
+    view: Optional["ProjectView"] = None,
 ) -> PageResponse[WorkUnitResponse]:
-    """Projects matching the filters; only `own_records_of`'s own ones when it is given."""
+    """Projects matching the filters; only those in `view` when someone may not see every project."""
     query = select(WorkUnit).where(WorkUnit.organization_id == org_id)
-    if own_records_of is not None:
-        query = query.where(own_work_units(org_id, own_records_of))
+    if view is not None:
+        query = query.where(visible_work_units(org_id, view))
     if status is not None:
         query = query.where(WorkUnit.status == status)
     if owning_unit_id is not None:
@@ -613,13 +614,28 @@ def own_work_units(org_id: uuid.UUID, user_id: uuid.UUID) -> ColumnElement[bool]
     return or_(WorkUnit.manager_user_id == user_id, WorkUnit.id.in_(on_the_team), WorkUnit.id.in_(with_own_tasks))
 
 
-async def ensure_own_work_unit(
-    session: AsyncSession, org_id: uuid.UUID, work_unit_id: uuid.UUID, user_id: uuid.UUID
+@dataclass(frozen=True)
+class ProjectView:
+    """The projects someone who may not see every project may see (services/views.py builds it)."""
+
+    user_id: uuid.UUID
+    # Projects these units deliver: a read held within them.
+    unit_ids: frozenset[uuid.UUID] = frozenset()
+
+
+def visible_work_units(org_id: uuid.UUID, view: ProjectView) -> ColumnElement[bool]:
+    """Their own projects, and the projects of the units their read covers."""
+    own = own_work_units(org_id, view.user_id)
+    return or_(own, WorkUnit.owning_unit_id.in_(view.unit_ids)) if view.unit_ids else own
+
+
+async def ensure_work_unit_visible(
+    session: AsyncSession, org_id: uuid.UUID, work_unit_id: uuid.UUID, view: ProjectView
 ) -> None:
-    """Anyone else's project is "not found" for someone who may see only their own."""
+    """A project outside someone's view is "not found" for them."""
     found = await session.execute(
         select(WorkUnit.id).where(
-            WorkUnit.id == work_unit_id, WorkUnit.organization_id == org_id, own_work_units(org_id, user_id)
+            WorkUnit.id == work_unit_id, WorkUnit.organization_id == org_id, visible_work_units(org_id, view)
         )
     )
     if found.scalar_one_or_none() is None:

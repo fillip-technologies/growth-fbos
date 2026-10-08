@@ -22,7 +22,7 @@ from schemas.rbac import (
 from services.access_control import Actor
 from services.auth_cache import auth_cache
 from services.rbac_service import rbac_service
-from services.unit_members import active_people
+from services.unit_members import active_people, units_at_or_below, units_belonged_to
 
 # The most people one /internal/people answer carries.
 PEOPLE_LIMIT = 1000
@@ -227,6 +227,9 @@ async def get_effective_grants(
     summary="Resolve the caller of another service (internal)",
 )
 async def resolve_actor(
+    with_units: bool = Query(
+        False, description="Also name the units each code covers and the units the user belongs to (two extra queries)"
+    ),
     x_fbos_internal_token: Optional[str] = Header(None, alias="X-FBOS-Internal-Token"),
     actor: Actor = Depends(get_actor),
     db: AsyncSession = Depends(get_db_session),
@@ -245,7 +248,7 @@ async def resolve_actor(
         permissions = sorted({grant.permission for grant in actor.grants})
         # One grant beyond the user's own records (a unit or the whole company) lifts the limit.
         own_records_only = [code for code in permissions if all(g.self_only for g in actor.grants_for(code))]
-    return ActorResponse(
+    response = ActorResponse(
         user_id=actor.user_id,
         organization_id=actor.organization_id,
         user_type=actor.user_type,
@@ -254,6 +257,29 @@ async def resolve_actor(
         permissions=permissions,
         own_records_only=own_records_only,
     )
+    if with_units:
+        response.unit_scopes = await _unit_scopes(db, actor)
+        response.member_unit_ids = await units_belonged_to(db, actor.organization_id, actor.user_id)
+    return response
+
+
+async def _unit_scopes(db: AsyncSession, actor: Actor) -> dict[str, list[uuid.UUID]]:
+    """The codes held within units and never company-wide, each with every unit it covers."""
+    if actor.is_superuser:
+        return {}
+    paths_by_code: dict[str, set[str]] = {}
+    for code in {grant.permission for grant in actor.grants}:
+        grants = actor.grants_for(code)
+        if any(g.scope_path is None and not g.self_only for g in grants):
+            continue  # company-wide
+        unit_paths = {g.scope_path for g in grants if g.scope_path is not None and not g.self_only}
+        if unit_paths:
+            paths_by_code[code] = unit_paths
+    covered = await units_at_or_below(db, actor.organization_id, set().union(*paths_by_code.values()))
+    return {
+        code: sorted({unit_id for path in paths for unit_id in covered[path]}, key=str)
+        for code, paths in sorted(paths_by_code.items())
+    }
 
 
 @internal_router.get(

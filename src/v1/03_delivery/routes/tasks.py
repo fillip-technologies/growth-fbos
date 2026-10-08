@@ -6,6 +6,7 @@ from fastapi import APIRouter, Depends, Header, Query, Response, status
 
 import permissions
 import services.tasks as service
+from services.views import task_view
 from dependencies import CurrentActor, DatabaseSession, OrgId, People, UserId, require_permission
 from schemas.common import PageResponse
 from schemas.tasks import (
@@ -53,9 +54,10 @@ CAN_MANAGE_TEMPLATES = Depends(require_permission(permissions.TEMPLATE_MANAGE))
 
 
 async def _task_in_view(task_id: uuid.UUID, actor: CurrentActor, session: DatabaseSession) -> None:
-    """Someone who may see only their own tasks gets "not found" for anyone else's."""
-    if actor.only_own(permissions.TASK_READ):
-        await service.ensure_own_task(session, actor.organization_id, task_id, actor.user_id)
+    """A task outside what someone may see (services/views.py) is "not found" for them."""
+    view = await task_view(session, actor)
+    if view is not None:
+        await service.ensure_task_visible(session, actor.organization_id, task_id, view)
 
 
 # On every /tasks/{task_id} route, after the permission check.
@@ -65,10 +67,12 @@ IN_VIEW = Depends(_task_in_view)
 # --- Tasks ---------------------------------------------------------------
 
 
-def task_filters(
+async def task_filters(
     actor: CurrentActor,
+    session: DatabaseSession,
     assignee: Optional[str] = Query(None, description="'me' or a user id"),
     unassigned: bool = Query(False, description="Only tasks nobody has taken yet (a team's queue)"),
+    my_teams: bool = Query(False, description="Only tasks of the teams the caller belongs to (with unassigned: their teams' queue)"),
     owning_unit_id: Optional[uuid.UUID] = Query(None),
     status_: Optional[list[str]] = Query(None, alias="status"),
     priority: Optional[str] = Query(None),
@@ -81,10 +85,11 @@ def task_filters(
     overdue: Optional[bool] = Query(None),
     q: Optional[str] = Query(None),
 ) -> TaskFilters:
-    """The filters the task list, board and queue share; only the caller's own tasks when they may see no others."""
+    """The filters the task list, board and queue share; only what the caller may see (services/views.py)."""
     return TaskFilters(
         assignee=assignee,
         unassigned=unassigned,
+        owning_unit_ids=actor.member_unit_ids if my_teams else None,
         owning_unit_id=owning_unit_id,
         statuses=status_,
         priority=priority,
@@ -96,7 +101,7 @@ def task_filters(
         due_before=due_before,
         overdue=overdue,
         q=q,
-        own_records_of=actor.user_id if actor.only_own(permissions.TASK_READ) else None,
+        view=await task_view(session, actor),
     )
 
 

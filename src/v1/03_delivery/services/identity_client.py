@@ -40,6 +40,10 @@ class Actor:
     permissions: frozenset[str] = field(default_factory=frozenset)
     # Codes held only for the user's own records (identity's "own records only" on every grant).
     own_records_only: frozenset[str] = field(default_factory=frozenset)
+    # Codes held within units and never company-wide, each with every unit its grants cover.
+    unit_scopes: dict[str, frozenset[uuid.UUID]] = field(default_factory=dict)
+    # The units the user belongs to: home unit and current extra teams, each with the units above.
+    member_unit_ids: frozenset[uuid.UUID] = field(default_factory=frozenset)
 
     def has(self, permission: str) -> bool:
         return self.is_superuser or permission in self.permissions
@@ -47,6 +51,10 @@ class Actor:
     def only_own(self, permission: str) -> bool:
         """Whether `permission` covers only the user's own records rather than everyone's."""
         return not self.is_superuser and permission in self.own_records_only
+
+    def units_for(self, permission: str) -> Optional[frozenset[uuid.UUID]]:
+        """The units `permission` is held within, or None when it isn't limited to units."""
+        return None if self.is_superuser else self.unit_scopes.get(permission)
 
 
 class IdentityClient:
@@ -62,7 +70,8 @@ class IdentityClient:
             headers["X-FBOS-Internal-Token"] = self._internal_token
 
         try:
-            response = await self._http.get(ACTOR_PATH, headers=headers)
+            # with_units: which units each code covers and which the user belongs to (services/views.py).
+            response = await self._http.get(ACTOR_PATH, params={"with_units": "true"}, headers=headers)
         except httpx.HTTPError as exc:
             raise AuthServiceUnavailableError() from exc
 
@@ -80,8 +89,13 @@ class IdentityClient:
             name=body["name"],
             is_superuser=body["is_superuser"],
             permissions=frozenset(body["permissions"]),
-            # An identity that predates the field limits nothing.
+            # An identity that predates these fields limits nothing.
             own_records_only=frozenset(body.get("own_records_only", [])),
+            unit_scopes={
+                code: frozenset(uuid.UUID(unit_id) for unit_id in unit_ids)
+                for code, unit_ids in (body.get("unit_scopes") or {}).items()
+            },
+            member_unit_ids=frozenset(uuid.UUID(unit_id) for unit_id in body.get("member_unit_ids") or []),
         )
 
     async def people(

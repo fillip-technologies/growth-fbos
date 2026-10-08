@@ -116,6 +116,13 @@ class ActorResponse(BaseModel):
     # Of those, the codes held only for the user's own records (every grant is "own records
     # only"): services limit what they show under them to records the user owns or works on.
     own_records_only: list[str] = Field(default_factory=list)
+    # Only with `with_units=true`. The codes held within units and never company-wide, each
+    # with every unit its grants cover (the granted units and all below them). A code missing
+    # here is held company-wide, or only for the user's own records.
+    unit_scopes: Optional[dict[str, list[uuid.UUID]]] = None
+    # Only with `with_units=true`: the units the user belongs to (their home unit and current
+    # extra teams, each with every unit above it), so a service can show them their teams' work.
+    member_unit_ids: Optional[list[uuid.UUID]] = None
 
 
 class GrantsResponse(BaseModel):

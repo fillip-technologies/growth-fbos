@@ -66,3 +66,41 @@ async def active_people(
     rows = (await session.execute(query.order_by(User.name, User.id).limit(limit + 1))).all()
     people = [PersonRef(id=row.id, name=row.name) for row in rows[:limit]]
     return PeopleResponse(data=people, has_more=len(rows) > limit)
+
+
+async def units_at_or_below(session: AsyncSession, organization_id: uuid.UUID, paths: set[str]) -> dict[str, list[uuid.UUID]]:
+    """For each unit path, the ids of that unit and every unit below it, in one query."""
+    if not paths:
+        return {}
+    rows = (
+        await session.execute(
+            select(OrgUnit.id, OrgUnit.path).where(
+                OrgUnit.organization_id == organization_id,
+                or_(*(OrgUnit.path.startswith(path) for path in paths)),
+            )
+        )
+    ).all()
+    return {path: [row.id for row in rows if row.path.startswith(path)] for path in paths}
+
+
+async def units_belonged_to(session: AsyncSession, organization_id: uuid.UUID, user_id: uuid.UUID) -> list[uuid.UUID]:
+    """
+    Every unit `user_id` belongs to by `belongs_to`: their home unit and the teams they are a
+    current extra member of, each with every unit above it (read from the unit's path).
+    """
+    # One query: the user is usually already loaded by sign-in, and both kinds of unit are read together.
+    user = await session.get(User, user_id)
+    home_unit_id = user.home_unit_id if user is not None else None
+    now = datetime.now(timezone.utc)
+    extra_teams = select(UnitMembership.unit_id).where(
+        UnitMembership.user_id == user_id,
+        UnitMembership.member_role == TEAM_MEMBER_ROLE,
+        UnitMembership.valid_to.is_(None) | (UnitMembership.valid_to > now),
+    )
+    in_units = OrgUnit.id.in_(extra_teams) if home_unit_id is None else or_(OrgUnit.id == home_unit_id, OrgUnit.id.in_(extra_teams))
+    paths = (
+        await session.execute(select(OrgUnit.path).where(OrgUnit.organization_id == organization_id, in_units))
+    ).scalars()
+    # A path is the chain of unit ids from the top: /branch/department/team/.
+    belonged = {uuid.UUID(part) for path in paths for part in path.strip("/").split("/") if part}
+    return sorted(belonged, key=str)

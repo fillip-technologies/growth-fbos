@@ -185,7 +185,13 @@ async def _create_stage_tasks(session: AsyncSession, instance: WorkflowInstance,
         ).scalars()
     }
     work_unit = await session.get(WorkUnit, instance.subject_id) if instance.subject_type == WORK_UNIT_SUBJECT else None
-    owning_unit_id = stage_run.owner_unit_id or (work_unit.owning_unit_id if work_unit else None)
+    subject_task = await session.get(Task, instance.subject_id) if instance.subject_type == TASK_SUBJECT else None
+    # Every task has a team: the stage's own, else the project's, else that of the task the workflow runs on.
+    owning_unit_id = (
+        stage_run.owner_unit_id
+        or (work_unit.owning_unit_id if work_unit else None)
+        or (subject_task.owning_unit_id if subject_task else None)
+    )
 
     for stage_task in stage_tasks:
         # Publishing checks every template exists; one removed since is skipped.

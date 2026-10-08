@@ -125,3 +125,27 @@ async def test_the_internal_token_is_required_when_configured(async_client, monk
     assert (await async_client.get(PEOPLE, params=params)).status_code == 403
     assert (await async_client.get(PEOPLE, params=params, headers={"X-FBOS-Internal-Token": "wrong"})).status_code == 403
     assert (await async_client.get(PEOPLE, params=params, headers={"X-FBOS-Internal-Token": "s3cret"})).status_code == 200
+
+
+@pytest.mark.asyncio
+async def test_the_actor_names_unit_scopes_and_the_units_one_belongs_to(async_client, db_session, structure):
+    from tests.test_user_access import act_as, make_user
+
+    ops_team = await make_unit(async_client, "OPS-T", "team", structure["ops"])
+    person = await make_user(db_session, "scoped@example.com", home_unit_id=uuid.UUID(structure["inside"]), grants=[
+        ("delivery.task.read", uuid.UUID(structure["sales"]), False),  # within Sales only
+        ("delivery.work_unit.read", None, False),  # company-wide
+        ("delivery.time_entry.read", None, True),  # own records only
+    ])
+    await join_team(db_session, person, ops_team)
+    await db_session.commit()
+    act_as(person.id)
+
+    plain = (await async_client.get(f"{API}/internal/authz/actor")).json()
+    assert (plain["unit_scopes"], plain["member_unit_ids"]) == (None, None)
+
+    actor = (await async_client.get(f"{API}/internal/authz/actor", params={"with_units": "true"})).json()
+    # Sales and the team below it; codes held company-wide or only for one's own records aren't listed.
+    assert actor["unit_scopes"] == {"delivery.task.read": sorted([structure["sales"], structure["inside"]])}
+    # Home team Inside (with Sales and the branch above it), and the extra team in Ops (with Ops).
+    assert actor["member_unit_ids"] == sorted([structure["branch"], structure["sales"], structure["inside"], structure["ops"], ops_team])

@@ -31,7 +31,7 @@ from dataclasses import dataclass, replace
 from datetime import date, datetime, timedelta, timezone
 from typing import Optional
 
-from sqlalchemy import ColumnElement, func, or_, select
+from sqlalchemy import ColumnElement, and_, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from exceptions import (
@@ -178,6 +178,8 @@ class TaskFilters:
 
     assignee: Optional[str] = None  # 'me' or a user id
     unassigned: bool = False
+    # Only tasks these units own (`my_teams`: the units the caller belongs to; empty: none).
+    owning_unit_ids: Optional[frozenset[uuid.UUID]] = None
     owning_unit_id: Optional[uuid.UUID] = None
     statuses: Optional[list[str]] = None
     priority: Optional[str] = None
@@ -189,8 +191,8 @@ class TaskFilters:
     due_before: Optional[datetime] = None
     overdue: Optional[bool] = None
     q: Optional[str] = None
-    # Set for someone who may see only their own tasks (see own_tasks); not a query parameter.
-    own_records_of: Optional[uuid.UUID] = None
+    # Set for someone who may not see every task (services/views.py); not a query parameter.
+    view: Optional["TaskView"] = None
 
 
 # --- Response builders -----------------------------------------------------
@@ -314,10 +316,31 @@ def own_tasks(user_id: uuid.UUID) -> ColumnElement[bool]:
     return or_(Task.assignee_user_id == user_id, Task.reviewer_user_id == user_id, Task.created_by == user_id)
 
 
-async def ensure_own_task(session: AsyncSession, org_id: uuid.UUID, task_id: uuid.UUID, user_id: uuid.UUID) -> None:
-    """Anyone else's task is "not found" for someone who may see only their own."""
+@dataclass(frozen=True)
+class TaskView:
+    """The tasks someone who may not see every task may see (services/views.py builds it)."""
+
+    user_id: uuid.UUID
+    # Tasks these units own: a read held within them.
+    unit_ids: frozenset[uuid.UUID] = frozenset()
+    # Unassigned tasks these units own: the queues of the teams the user belongs to.
+    queue_unit_ids: frozenset[uuid.UUID] = frozenset()
+
+
+def visible_tasks(view: TaskView) -> ColumnElement[bool]:
+    """Their own tasks, the tasks of the units their read covers, and their teams' queues."""
+    conditions = [own_tasks(view.user_id)]
+    if view.unit_ids:
+        conditions.append(Task.owning_unit_id.in_(view.unit_ids))
+    if view.queue_unit_ids:
+        conditions.append(and_(Task.assignee_user_id.is_(None), Task.owning_unit_id.in_(view.queue_unit_ids)))
+    return or_(*conditions)
+
+
+async def ensure_task_visible(session: AsyncSession, org_id: uuid.UUID, task_id: uuid.UUID, view: TaskView) -> None:
+    """A task outside someone's view is "not found" for them."""
     found = await session.execute(
-        select(Task.id).where(Task.id == task_id, Task.organization_id == org_id, own_tasks(user_id))
+        select(Task.id).where(Task.id == task_id, Task.organization_id == org_id, visible_tasks(view))
     )
     if found.scalar_one_or_none() is None:
         raise TaskNotFoundError(str(task_id))
@@ -449,8 +472,8 @@ async def list_tasks(
 
 def _filtered_tasks(org_id: uuid.UUID, caller_user_id: uuid.UUID, filters: TaskFilters):
     query = select(Task).where(Task.organization_id == org_id)
-    if filters.own_records_of is not None:
-        query = query.where(own_tasks(filters.own_records_of))
+    if filters.view is not None:
+        query = query.where(visible_tasks(filters.view))
 
     if filters.assignee == "me":
         query = query.where(Task.assignee_user_id == caller_user_id)
@@ -458,6 +481,8 @@ def _filtered_tasks(org_id: uuid.UUID, caller_user_id: uuid.UUID, filters: TaskF
         query = query.where(Task.assignee_user_id == _user_id_filter("assignee", filters.assignee))
     if filters.unassigned:
         query = query.where(Task.assignee_user_id.is_(None))
+    if filters.owning_unit_ids is not None:
+        query = query.where(Task.owning_unit_id.in_(filters.owning_unit_ids))
     if filters.owning_unit_id is not None:
         query = query.where(Task.owning_unit_id == filters.owning_unit_id)
     if filters.statuses:
