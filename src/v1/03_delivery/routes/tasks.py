@@ -6,7 +6,7 @@ from fastapi import APIRouter, Depends, Header, Query, Response, status
 
 import permissions
 import services.tasks as service
-from dependencies import CurrentActor, DatabaseSession, OrgId, UserId, require_permission
+from dependencies import CurrentActor, DatabaseSession, OrgId, People, UserId, require_permission
 from schemas.common import PageResponse
 from schemas.tasks import (
     AssignmentResponse,
@@ -149,11 +149,12 @@ async def create_task(
     session: DatabaseSession,
     org_id: OrgId,
     user_id: UserId,
+    people: People,
     response: Response,
     idempotency_key: Optional[str] = Header(None, alias="Idempotency-Key"),
 ) -> TaskResponse:
     """Create a task."""
-    task = await service.create_task(session, org_id, user_id, payload)
+    task = await service.create_task(session, org_id, user_id, payload, people)
     await session.commit()
     response.headers["ETag"] = f'"{task.version}"'
     return task
@@ -207,11 +208,12 @@ async def assign_task(
     session: DatabaseSession,
     org_id: OrgId,
     user_id: UserId,
+    people: People,
     response: Response,
     if_match: Optional[str] = Header(None, alias="If-Match"),
 ) -> TaskResponse:
     """Assign or reassign a task."""
-    task = await service.assign_task(session, org_id, user_id, task_id, payload, if_match)
+    task = await service.assign_task(session, org_id, user_id, task_id, payload, if_match, people)
     await session.commit()
     response.headers["ETag"] = f'"{task.version}"'
     return task
@@ -223,11 +225,12 @@ async def claim_task(
     session: DatabaseSession,
     org_id: OrgId,
     user_id: UserId,
+    people: People,
     response: Response,
     if_match: Optional[str] = Header(None, alias="If-Match"),
 ) -> TaskResponse:
     """Take an unassigned task from the team's queue."""
-    task = await service.claim_task(session, org_id, user_id, task_id, if_match)
+    task = await service.claim_task(session, org_id, user_id, task_id, if_match, people)
     await session.commit()
     response.headers["ETag"] = f'"{task.version}"'
     return task
@@ -289,11 +292,12 @@ async def submit_task(
     session: DatabaseSession,
     org_id: OrgId,
     user_id: UserId,
+    people: People,
     response: Response,
     if_match: Optional[str] = Header(None, alias="If-Match"),
 ) -> TaskResponse:
     """Submit a task."""
-    task = await service.submit_task(session, org_id, user_id, task_id, payload, if_match)
+    task = await service.submit_task(session, org_id, user_id, task_id, payload, if_match, people)
     await session.commit()
     response.headers["ETag"] = f'"{task.version}"'
     return task
@@ -563,10 +567,11 @@ async def accept_handover(
     session: DatabaseSession,
     org_id: OrgId,
     user_id: UserId,
+    people: People,
     if_match: Optional[str] = Header(None, alias="If-Match"),
 ) -> HandoverResponse:
     """Accept a handover."""
-    handover = await service.accept_handover(session, org_id, user_id, handover_id, payload, if_match)
+    handover = await service.accept_handover(session, org_id, user_id, handover_id, payload, if_match, people)
     await session.commit()
     return handover
 

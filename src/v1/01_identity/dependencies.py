@@ -1,4 +1,5 @@
 from collections.abc import Awaitable, Callable
+import secrets
 import uuid
 from typing import Optional
 
@@ -8,6 +9,7 @@ import jwt
 from sqlalchemy import exists, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from config import settings
 from database.session import get_db_session, keep_loaded
 from exceptions import (
     AccountNotActiveError,
@@ -29,6 +31,20 @@ from services.subscription import is_client_usable
 from utils.security import decode_jwt_token
 
 bearer_scheme = HTTPBearer(auto_error=False)
+
+
+def verify_internal_caller(token: Optional[str]) -> None:
+    """
+    Other services call `/internal/*` with the shared X-FBOS-Internal-Token. Without a token
+    configured, only a development build lets them through.
+    """
+    expected = settings.internal_service_token
+    if not expected:
+        if settings.app_env == "development":
+            return
+        raise PermissionDeniedError("internal", "Internal endpoints are disabled: INTERNAL_SERVICE_TOKEN is not set")
+    if not token or not secrets.compare_digest(token, expected):
+        raise PermissionDeniedError("internal", "A valid X-FBOS-Internal-Token is required")
 
 
 def get_client_ip(request: Request) -> str:

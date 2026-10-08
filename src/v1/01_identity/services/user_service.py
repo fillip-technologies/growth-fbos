@@ -46,16 +46,13 @@ from schemas.user import (
 from services.access_control import Actor
 from services.event_publisher import event_publisher
 from services.rate_limiter import rate_limiter
+from services.unit_members import HOME_UNIT_ROLE, TEAM_MEMBER_ROLE, belongs_to
 from services.user_permission_service import user_permission_service
 from utils.dates import iso_utc
 
 logger = logging.getLogger("identity.user_service")
 
 INVITATION_TTL = timedelta(hours=72)
-# `unit_memberships.member_role`: the one row mirroring `users.home_unit_id` (where they work),
-# and extra rows for teams they also belong to. Only teams take extra members.
-HOME_UNIT_ROLE = "home_unit"
-TEAM_MEMBER_ROLE = "team_member"
 
 PERM_READ = "identity.user.read"
 PERM_CREATE = "identity.user.create"
@@ -395,7 +392,7 @@ class UserService:
             query = query.where(User.status == status)
 
         if unit_id:
-            # Members of this unit including its sub-units.
+            # Where people work: their home unit is this unit or one below it.
             unit = await session.get(OrgUnit, unit_id)
             if not unit or unit.organization_id != actor.organization_id:
                 return PaginatedResponse(data=[], page=PageInfo(next_cursor=None, has_more=False, limit=limit))
@@ -406,14 +403,11 @@ class UserService:
             query = query.where(User.home_unit_id.in_(units_below))
 
         if team_id:
-            # Everyone in the team: those who work in it and its extra members.
+            # Everyone in the team: those who work in it and its current extra members.
             team = await session.get(OrgUnit, team_id)
             if not team or team.organization_id != actor.organization_id or team.unit_type != "team":
                 return PaginatedResponse(data=[], page=PageInfo(next_cursor=None, has_more=False, limit=limit))
-            extra_members = select(UnitMembership.user_id).where(
-                UnitMembership.unit_id == team.id, UnitMembership.member_role == TEAM_MEMBER_ROLE
-            )
-            query = query.where((User.home_unit_id == team.id) | User.id.in_(extra_members))
+            query = query.where(belongs_to(team))
 
         if role_code:
             holders = (

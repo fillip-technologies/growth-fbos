@@ -117,12 +117,22 @@ async def test_every_route_is_guarded_unless_meant_to_be_open():
         ("get", "/workflow/definitions", permissions.WORKFLOW_READ),
         ("post", "/workflow/definitions", permissions.WORKFLOW_MANAGE),
         ("post", "/workflow/instances", permissions.WORKFLOW_OPERATE),
+        ("get", "/settings", permissions.TEMPLATE_MANAGE),
+        ("patch", "/settings", permissions.TEMPLATE_MANAGE),
+        ("get", "/assignable-people", permissions.TASK_WRITE),
     ],
 )
 async def test_missing_permission_is_refused(client_as, method, path, required_permission):
     client = client_as(uuid.uuid4())
-    res = await client.request(method.upper(), f"{BASE}{path}", json={} if method == "post" else None)
+    res = await client.request(method.upper(), f"{BASE}{path}", json={} if method in ("post", "patch") else None)
     assert_denied(res, "PERMISSION_DENIED", required_permission)
+
+
+async def test_handover_takers_may_see_who_can_be_given_work(client_as):
+    # They name who in their team picks a handed-over task up, without managing tasks.
+    res = await client_as(uuid.uuid4(), permissions.HANDOVER_WRITE).get(f"{BASE}/assignable-people")
+    assert res.status_code == 200, res.text
+    assert_denied(await client_as(uuid.uuid4(), permissions.TASK_READ).get(f"{BASE}/assignable-people"), "PERMISSION_DENIED")
 
 
 async def test_reading_tasks_does_not_allow_creating_them(client_as):

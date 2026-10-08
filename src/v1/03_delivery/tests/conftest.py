@@ -1,12 +1,13 @@
 import sys
 import uuid
 from pathlib import Path
-from typing import AsyncGenerator, Optional
+from typing import AsyncGenerator, Iterator, Optional
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from fastapi import Header
 import httpx
+import pytest
 import pytest_asyncio
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
@@ -15,12 +16,55 @@ from database.session import get_db_session
 from dependencies import get_actor
 from main import app
 import models  # noqa: F401 — registers every ORM class on Base.metadata
+from exceptions import TeamMembersUnavailableError
 from services.builtins import ensure_builtin_types
-from services.identity_client import Actor
+from services.identity_client import Actor, Person
 from utils.timing import track_queries
 
 TEST_ORG_ID = uuid.UUID("0191f3a2-0011-7011-8077-0000001b2aa9")
 TEST_USER_ID = uuid.UUID("0191f3a2-0015-7015-8093-000000218f0d")
+
+
+class FakePeopleDirectory:
+    """Stands in for identity's /internal/people: `members[unit_id]` belong to that unit."""
+
+    def __init__(self) -> None:
+        self.everyone: list[Person] = []
+        self.members: dict[uuid.UUID, list[Person]] = {}
+        self.unavailable = False
+        self.calls = 0
+
+    def add(self, name: str, *unit_ids: uuid.UUID, person_id: Optional[uuid.UUID] = None) -> Person:
+        person = Person(id=person_id or uuid.uuid4(), name=name)
+        self.everyone.append(person)
+        for unit_id in unit_ids:
+            self.members.setdefault(unit_id, []).append(person)
+        return person
+
+    def leave(self, person: Person, unit_id: uuid.UUID) -> None:
+        self.members[unit_id] = [p for p in self.members.get(unit_id, []) if p.id != person.id]
+
+    async def people(
+        self,
+        organization_id: uuid.UUID,
+        unit_id: Optional[uuid.UUID] = None,
+        user_id: Optional[uuid.UUID] = None,
+    ) -> list[Person]:
+        self.calls += 1
+        if self.unavailable:
+            raise TeamMembersUnavailableError()
+        found = self.members.get(unit_id, []) if unit_id else self.everyone
+        return [p for p in found if user_id is None or p.id == user_id]
+
+
+@pytest.fixture(autouse=True)
+def people() -> Iterator[FakePeopleDirectory]:
+    """Who belongs to which team, for every test. The service's lifespan (and so the real
+    identity client) doesn't run under the test client; tests/test_auth.py covers that client."""
+    directory = FakePeopleDirectory()
+    app.state.identity_client = directory
+    yield directory
+    del app.state.identity_client
 
 
 @pytest_asyncio.fixture(scope="function")

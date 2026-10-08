@@ -14,9 +14,18 @@ import uuid
 
 import httpx
 
-from exceptions import AuthServiceUnavailableError, DeliveryServiceError
+from exceptions import AuthServiceUnavailableError, DeliveryServiceError, TeamMembersUnavailableError
 
 ACTOR_PATH = "/api/identity/v1/internal/authz/actor"
+PEOPLE_PATH = "/api/identity/v1/internal/people"
+
+
+@dataclass(frozen=True)
+class Person:
+    """Someone who may be given work, as identity names them."""
+
+    id: uuid.UUID
+    name: str
 
 
 @dataclass(frozen=True)
@@ -74,6 +83,47 @@ class IdentityClient:
             # An identity that predates the field limits nothing.
             own_records_only=frozenset(body.get("own_records_only", [])),
         )
+
+    async def people(
+        self,
+        organization_id: uuid.UUID,
+        unit_id: Optional[uuid.UUID] = None,
+        user_id: Optional[uuid.UUID] = None,
+    ) -> list[Person]:
+        """
+        The organization's active people; with `unit_id`, those who belong to that unit (identity's
+        rule: home unit there or below, or a current extra team member); with `user_id`, only that
+        person when they qualify. A unit identity doesn't know has nobody.
+        """
+        params = {"organization_id": str(organization_id)}
+        if unit_id:
+            params["unit_id"] = str(unit_id)
+        if user_id:
+            params["user_id"] = str(user_id)
+        headers = {"X-FBOS-Internal-Token": self._internal_token} if self._internal_token else {}
+
+        try:
+            response = await self._http.get(PEOPLE_PATH, params=params, headers=headers)
+        except httpx.HTTPError as exc:
+            raise TeamMembersUnavailableError() from exc
+
+        if response.status_code == 404 and _error_code(response) == "NOT_FOUND":
+            return []
+        # Anything else (a 5xx, or a 404 from an identity that predates this endpoint) means
+        # identity couldn't answer: never read it as "nobody belongs to the team".
+        if response.status_code >= 400:
+            raise TeamMembersUnavailableError()
+        return [Person(id=uuid.UUID(p["id"]), name=p["name"]) for p in response.json()["data"]]
+
+
+def _error_code(response: httpx.Response) -> Optional[str]:
+    """The error code of an identity problem response (top-level `code`), if it carries one."""
+    try:
+        body: Any = response.json()
+    except ValueError:
+        return None
+    code = body.get("code") if isinstance(body, dict) else None
+    return code if isinstance(code, str) else None
 
 
 def _relayed_error(response: httpx.Response) -> Optional[DeliveryServiceError]:

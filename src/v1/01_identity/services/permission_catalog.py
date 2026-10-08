@@ -79,7 +79,7 @@ PERMISSION_CATALOG: list[tuple[str, str, str]] = [
     ("delivery.time_entry.read", "delivery", "View the time everyone has logged"),
     ("delivery.handover.read", "delivery", "View handovers of work between teams"),
     ("delivery.handover.write", "delivery", "Request, accept and reject handovers of work between teams"),
-    ("delivery.template.manage", "delivery", "Manage project types, project templates, task types and task templates"),
+    ("delivery.template.manage", "delivery", "Manage delivery setup: its settings, project types, project templates, task types and task templates"),
     ("delivery.workflow.read", "delivery", "View workflows and where each project is in them"),
     ("delivery.workflow.manage", "delivery", "Design workflows and publish their versions"),
     ("delivery.workflow.operate", "delivery", "Start workflows and move them between stages"),
