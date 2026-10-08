@@ -6,6 +6,7 @@ from models.financial import CostEntry, WorkBudget
 from models.outbox import OutboxEvent
 from models.routing import RoutingRule
 from models.settings import DeliverySettings
+from models.sla_alert import SlaAlert
 from models.task import ChecklistItem, Task, TaskDependency, TaskWatcher
 from models.task_assignment import Handover, TaskAssignment
 from models.task_template import RecurringTaskRule, TaskTemplate, TaskType
@@ -24,6 +25,7 @@ __all__ = [
     "CodeSequence",
     "DeliverySettings",
     "OutboxEvent",
+    "SlaAlert",
     "RoutingRule",
     # Work units
     "WorkUnitType",

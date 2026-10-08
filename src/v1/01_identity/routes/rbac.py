@@ -18,11 +18,12 @@ from schemas.rbac import (
     RoleCreate,
     RolePermissionsReplace,
     RoleResponse,
+    UnitHeadsResponse,
 )
 from services.access_control import Actor
 from services.auth_cache import auth_cache
 from services.rbac_service import rbac_service
-from services.unit_members import active_people, units_at_or_below, units_belonged_to
+from services.unit_members import active_people, unit_heads, units_at_or_below, units_belonged_to
 
 # The most people one /internal/people answer carries.
 PEOPLE_LIMIT = 1000
@@ -303,6 +304,23 @@ async def list_people(
     """
     verify_internal_caller(x_fbos_internal_token)
     return await active_people(db, organization_id, unit_id, user_id, PEOPLE_LIMIT)
+
+
+@internal_router.get(
+    "/unit-heads",
+    response_model=UnitHeadsResponse,
+    status_code=status.HTTP_200_OK,
+    summary="A unit and the units above it, with their heads (internal)",
+)
+async def list_unit_heads(
+    organization_id: uuid.UUID = Query(..., description="The organization the unit belongs to"),
+    unit_id: uuid.UUID = Query(..., description="The unit whose heads to name, nearest first"),
+    x_fbos_internal_token: Optional[str] = Header(None, alias="X-FBOS-Internal-Token"),
+    db: AsyncSession = Depends(get_db_session),
+) -> UnitHeadsResponse:
+    """Other services (delivery) ask whom to tell about a team's work, and whom to escalate to above it."""
+    verify_internal_caller(x_fbos_internal_token)
+    return await unit_heads(db, organization_id, unit_id)
 
 
 async def _permission_catalog(db: AsyncSession) -> list[str]:

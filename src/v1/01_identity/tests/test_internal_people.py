@@ -10,6 +10,7 @@ import pytest_asyncio
 
 from config import settings
 from models.membership import UnitMembership
+from models.org_unit import OrgUnit
 from models.organization import Organization
 from models.user import User
 from services.unit_members import TEAM_MEMBER_ROLE
@@ -17,6 +18,7 @@ from tests.conftest import TEST_CLIENT_ID, TEST_ORG_ID
 
 API = "/api/identity/v1"
 PEOPLE = f"{API}/internal/people"
+UNIT_HEADS = f"{API}/internal/unit-heads"
 
 
 async def make_unit(client, code: str, unit_type: str, parent_id=None) -> str:
@@ -149,3 +151,35 @@ async def test_the_actor_names_unit_scopes_and_the_units_one_belongs_to(async_cl
     assert actor["unit_scopes"] == {"delivery.task.read": sorted([structure["sales"], structure["inside"]])}
     # Home team Inside (with Sales and the branch above it), and the extra team in Ops (with Ops).
     assert actor["member_unit_ids"] == sorted([structure["branch"], structure["sales"], structure["inside"], structure["ops"], ops_team])
+
+
+# --- /internal/unit-heads: whom to tell about a unit's work, and whom to escalate to ---------
+
+
+@pytest.mark.asyncio
+async def test_unit_heads_go_from_the_unit_up_with_active_heads_only(async_client, db_session, structure):
+    gone = await make_person(db_session, "Gopal", home_unit_id=structure["branch"], status="deactivated")
+    (await db_session.get(OrgUnit, uuid.UUID(structure["sales"]))).head_user_id = structure["asha"].id
+    (await db_session.get(OrgUnit, uuid.UUID(structure["branch"]))).head_user_id = gone.id
+    await db_session.commit()
+
+    res = await async_client.get(UNIT_HEADS, params={"organization_id": str(TEST_ORG_ID), "unit_id": structure["inside"]})
+    assert res.status_code == 200, res.text
+    # The team has no head; the department's is Asha; the branch's has left, so it has none.
+    assert [(u["name"], u["head_user_id"]) for u in res.json()["data"]] == [
+        ("INSIDE", None), ("SALES", str(structure["asha"].id)), ("BR", None),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_unit_heads_of_a_unit_the_organization_lacks_are_not_found(async_client, structure):
+    res = await async_client.get(UNIT_HEADS, params={"organization_id": str(TEST_ORG_ID), "unit_id": str(uuid.uuid4())})
+    assert res.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_unit_heads_need_the_internal_token_when_configured(async_client, monkeypatch, structure):
+    monkeypatch.setattr(settings, "internal_service_token", "s3cret")
+    params = {"organization_id": str(TEST_ORG_ID), "unit_id": structure["inside"]}
+    assert (await async_client.get(UNIT_HEADS, params=params)).status_code == 403
+    assert (await async_client.get(UNIT_HEADS, params=params, headers={"X-FBOS-Internal-Token": "s3cret"})).status_code == 200

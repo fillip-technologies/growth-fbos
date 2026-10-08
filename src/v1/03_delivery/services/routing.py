@@ -27,7 +27,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from exceptions import DuplicateRoutingRuleError, NotRequestableError, RoutingRuleNotFoundError
 from models.routing import RoutingRule
-from models.task import TaskWatcher
+from models.task import Task, TaskWatcher
 from models.task_template import TaskType
 from schemas.common import PageResponse
 from schemas.routing import (
@@ -41,8 +41,10 @@ from schemas.routing import (
 )
 from schemas.tasks import TaskCreate, TaskResponse
 from services.assignees import PeopleDirectory
+import services.notifications as notify
 from services.pagination import paginate
 from services.refs import unit_ref, vertical_ref
+from services.settings import team_alerts
 from services.task_profiles import load_profiles
 from services.tasks import WORK_UNIT_SUBJECT, create_task, subject_work_unit, task_type_by_code, visible_task_types
 from services.versions import check_if_match
@@ -267,5 +269,8 @@ async def create_request(
         source="request",
     )
     session.add(TaskWatcher(task_id=task.id, user_id=user_id))
+    # Nobody has it yet (the team's policy gave it to no one): the team's head hears about it.
+    if task.assignee is None and await team_alerts(session, org_id):
+        notify.request_for_team(session, await session.get(Task, task.id), user_id)
     await session.flush()
     return task

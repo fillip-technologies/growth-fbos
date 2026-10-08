@@ -112,6 +112,7 @@ from schemas.tasks import (
 import permissions
 from services.assignees import PeopleDirectory, ensure_assignable, keep_if_assignable
 from services.assignment_policies import pick_assignee
+from services.settings import team_alerts
 import services.notifications as notify
 from services.identity_client import Actor
 from services.codes import next_task_code
@@ -1688,6 +1689,11 @@ async def request_handover(session: AsyncSession, org_id: uuid.UUID, user_id: uu
         created_at=datetime.now(timezone.utc),
     )
     session.add(handover)
+    if await team_alerts(session, org_id):
+        label = f"{handed_over.code} {handed_over.title if isinstance(handed_over, Task) else handed_over.name}"
+        notify.handover_for_team(
+            session, org_id, data.to_unit_id, {"type": data.subject.type, "id": str(data.subject.id)}, label, data.reason, user_id
+        )
     await session.flush()
     return _to_handover_response(handover)
 
