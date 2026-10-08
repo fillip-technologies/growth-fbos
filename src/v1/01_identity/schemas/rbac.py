@@ -140,6 +140,19 @@ class PersonRef(BaseModel):
     name: str
 
 
+class UnitHead(BaseModel):
+    unit_id: uuid.UUID
+    name: str
+    # Who heads the unit, when someone active does.
+    head_user_id: Optional[uuid.UUID] = None
+
+
+class UnitHeadsResponse(BaseModel):
+    """A unit and each unit above it, nearest first, with who heads each (internal)."""
+
+    data: list[UnitHead]
+
+
 class PeopleResponse(BaseModel):
     """Active people of an organization, or of one of its units (internal)."""
 

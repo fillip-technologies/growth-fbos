@@ -26,11 +26,15 @@ TEST_USER_ID = uuid.UUID("0191f3a2-0015-7015-8093-000000218f0d")
 
 
 class FakePeopleDirectory:
-    """Stands in for identity's /internal/people: `members[unit_id]` belong to that unit."""
+    """
+    Stands in for identity's /internal/people: `members[unit_id]` belong to that unit; and its
+    /internal/unit-heads: `heads[unit_id]` head that unit and the ones above it, nearest first.
+    """
 
     def __init__(self) -> None:
         self.everyone: list[Person] = []
         self.members: dict[uuid.UUID, list[Person]] = {}
+        self.heads: dict[uuid.UUID, list[uuid.UUID]] = {}
         self.unavailable = False
         self.calls = 0
 
@@ -55,6 +59,11 @@ class FakePeopleDirectory:
             raise TeamMembersUnavailableError()
         found = self.members.get(unit_id, []) if unit_id else self.everyone
         return [p for p in found if user_id is None or p.id == user_id]
+
+    async def unit_heads(self, organization_id: uuid.UUID, unit_id: uuid.UUID) -> list[uuid.UUID]:
+        if self.unavailable:
+            raise TeamMembersUnavailableError()
+        return self.heads.get(unit_id, [])
 
 
 @pytest.fixture(autouse=True)

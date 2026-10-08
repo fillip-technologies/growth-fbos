@@ -18,6 +18,7 @@ from exceptions import AuthServiceUnavailableError, DeliveryServiceError, TeamMe
 
 ACTOR_PATH = "/api/identity/v1/internal/authz/actor"
 PEOPLE_PATH = "/api/identity/v1/internal/people"
+UNIT_HEADS_PATH = "/api/identity/v1/internal/unit-heads"
 
 
 @dataclass(frozen=True)
@@ -128,6 +129,26 @@ class IdentityClient:
         if response.status_code >= 400:
             raise TeamMembersUnavailableError()
         return [Person(id=uuid.UUID(p["id"]), name=p["name"]) for p in response.json()["data"]]
+
+
+    async def unit_heads(self, organization_id: uuid.UUID, unit_id: uuid.UUID) -> list[uuid.UUID]:
+        """
+        Who heads the unit and the units above it, nearest first, each once, skipping units
+        without an active head: whom to tell about the unit's work, and whom to escalate to.
+        A unit identity doesn't know has nobody.
+        """
+        params = {"organization_id": str(organization_id), "unit_id": str(unit_id)}
+        headers = {"X-FBOS-Internal-Token": self._internal_token} if self._internal_token else {}
+        try:
+            response = await self._http.get(UNIT_HEADS_PATH, params=params, headers=headers)
+        except httpx.HTTPError as exc:
+            raise TeamMembersUnavailableError() from exc
+        if response.status_code == 404 and _error_code(response) == "NOT_FOUND":
+            return []
+        if response.status_code >= 400:
+            raise TeamMembersUnavailableError()
+        heads = [uuid.UUID(u["head_user_id"]) for u in response.json()["data"] if u.get("head_user_id")]
+        return list(dict.fromkeys(heads))
 
 
 def _error_code(response: httpx.Response) -> Optional[str]:

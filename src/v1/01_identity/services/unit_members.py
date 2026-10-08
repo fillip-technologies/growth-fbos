@@ -20,7 +20,7 @@ from exceptions import OrgUnitNotFoundError
 from models.membership import UnitMembership
 from models.org_unit import OrgUnit
 from models.user import User
-from schemas.rbac import PeopleResponse, PersonRef
+from schemas.rbac import PeopleResponse, PersonRef, UnitHead, UnitHeadsResponse
 
 # `unit_memberships.member_role`: the one row mirroring `users.home_unit_id` (where they work),
 # and extra rows for teams they also belong to. Only teams take extra members.
@@ -104,3 +104,30 @@ async def units_belonged_to(session: AsyncSession, organization_id: uuid.UUID, u
     # A path is the chain of unit ids from the top: /branch/department/team/.
     belonged = {uuid.UUID(part) for path in paths for part in path.strip("/").split("/") if part}
     return sorted(belonged, key=str)
+
+
+async def unit_heads(session: AsyncSession, organization_id: uuid.UUID, unit_id: uuid.UUID) -> UnitHeadsResponse:
+    """
+    The unit and each unit above it (read from its path), nearest first, each with its head when
+    that person is active: whom to tell about the unit's work, and whom to escalate to. A unit
+    outside the organization is not found.
+    """
+    unit = await session.get(OrgUnit, unit_id)
+    if unit is None or unit.organization_id != organization_id:
+        raise OrgUnitNotFoundError()
+    chain = [uuid.UUID(part) for part in reversed(unit.path.strip("/").split("/")) if part]
+    rows = (
+        await session.execute(
+            select(OrgUnit.id, OrgUnit.name, OrgUnit.head_user_id, User.status)
+            .outerjoin(User, User.id == OrgUnit.head_user_id)
+            .where(OrgUnit.organization_id == organization_id, OrgUnit.id.in_(chain))
+        )
+    ).all()
+    by_id = {row.id: row for row in rows}
+    nearest_first = [by_id[link] for link in chain if link in by_id]
+    return UnitHeadsResponse(
+        data=[
+            UnitHead(unit_id=row.id, name=row.name, head_user_id=row.head_user_id if row.status == "active" else None)
+            for row in nearest_first
+        ]
+    )
