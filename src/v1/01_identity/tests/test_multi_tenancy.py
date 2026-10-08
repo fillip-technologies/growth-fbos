@@ -554,7 +554,6 @@ async def test_client_creation_email_content_and_base_url(db_session, monkeypatc
 
     monkeypatch.setattr(email_service, "send", fake_send)
     monkeypatch.setattr(settings, "client_admin_base_url", "https://admin.example.test/")
-    event_publisher.clear_events()
 
     await client_service.create_client(
         session=db_session,

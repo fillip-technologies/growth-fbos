@@ -1,9 +1,13 @@
-# On every push to main: tests each service, then deploys to the aaPanel server if they pass.
+# On every pull request to main: tests each service, so a failing change can't be merged.
+# On every push to main: the same tests, then deploys to the aaPanel server if they pass.
+# 07_management, 08_insight and 09_assets have no tests yet; add them to the matrix with their first test.
 # Setup (secrets, deploy key): DEPLOY_AAPANEL.md.
 name: CI/CD
 
 on:
   push:
+    branches: [main]
+  pull_request:
     branches: [main]
   workflow_dispatch:
 
@@ -39,7 +43,7 @@ jobs:
   deploy:
     name: Deploy to aaPanel
     needs: test
-    if: github.ref == 'refs/heads/main'
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     environment:
       name: production
