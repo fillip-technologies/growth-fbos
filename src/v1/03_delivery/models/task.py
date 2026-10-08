@@ -2,7 +2,7 @@ import uuid
 from datetime import datetime, timezone
 from typing import Optional
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, func, Integer, JSON, String, Text, UniqueConstraint
+from sqlalchemy import Boolean, DateTime, ForeignKey, func, Index, Integer, JSON, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column
 
 from database.base import Base
@@ -16,7 +16,13 @@ class Task(Base):
     """
 
     __tablename__ = "tasks"
-    __table_args__ = (UniqueConstraint("organization_id", "code", name="uq_tasks_org_code"),)
+    __table_args__ = (
+        UniqueConstraint("organization_id", "code", name="uq_tasks_org_code"),
+        # The list, board and queue: someone's own tasks, a team's queue, and work by due date.
+        Index("ix_tasks_org_assignee_status", "organization_id", "assignee_user_id", "status"),
+        Index("ix_tasks_org_unit_status", "organization_id", "owning_unit_id", "status"),
+        Index("ix_tasks_org_status_due", "organization_id", "status", "due_at"),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(UUIDType, primary_key=True, default=uuid.uuid4)
     # Self-reference for sub-tasks
