@@ -12,7 +12,7 @@ TaskStatus = Literal[
 TaskPriority = Literal["p1", "p2", "p3", "p4"]
 DependencyType = Literal["finish_to_start", "start_to_start", "finish_to_finish"]
 TaskSource = Literal[
-    "manual", "workflow", "sla_escalation", "corrective_action", "asset_renewal", "recurring", "followup", "handover"
+    "manual", "workflow", "sla_escalation", "corrective_action", "asset_renewal", "recurring", "followup", "handover", "request"
 ]
 
 

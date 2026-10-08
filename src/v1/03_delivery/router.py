@@ -1,5 +1,6 @@
 from fastapi import APIRouter
 
+from routes.routing import router as routing_router
 from routes.settings import router as settings_router
 from routes.task_types import router as task_types_router
 from routes.tasks import router as tasks_router
@@ -12,6 +13,7 @@ core_router.include_router(workflows_router)
 core_router.include_router(task_types_router)
 core_router.include_router(tasks_router)
 core_router.include_router(settings_router)
+core_router.include_router(routing_router)
 
 # Mount both /v1 and /api/delivery/v1 for complete compatibility
 router = APIRouter()

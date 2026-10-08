@@ -76,6 +76,7 @@ PERMISSION_CATALOG: list[tuple[str, str, str]] = [
     ("delivery.task.read", "delivery", "View tasks and work on the ones assigned to you (own records only: just the tasks you're assigned, review or created)"),
     ("delivery.task.write", "delivery", "Create, edit, assign, block and cancel tasks and set up recurring tasks"),
     ("delivery.task.review", "delivery", "Review submitted tasks even when you aren't the named reviewer"),
+    ("delivery.task.request", "delivery", "Ask other teams for work they take requests for, and follow your own requests"),
     ("delivery.time_entry.read", "delivery", "View the time everyone has logged"),
     ("delivery.handover.read", "delivery", "View handovers of work between teams"),
     ("delivery.handover.write", "delivery", "Request, accept and reject handovers of work between teams"),
@@ -106,9 +107,16 @@ MEMBER_ROLE_CODE = "member"
 SENSITIVE_READ_CODES = {"identity.session.read", "identity.audit_log.read", "control.approval.read"}
 
 
+# Beyond reading, what every member may do: ask another team for work (delivery routes it).
+MEMBER_ACTION_CODES = {"delivery.task.request"}
+
+
 def member_permission_codes(catalog_codes: list[str]) -> list[str]:
-    """The `member` preset is read-only access, minus other people's security data."""
-    return [code for code in catalog_codes if code.endswith(".read") and code not in SENSITIVE_READ_CODES]
+    """The `member` preset is read access (minus other people's security data), plus sending requests."""
+    return [
+        code for code in catalog_codes
+        if (code.endswith(".read") and code not in SENSITIVE_READ_CODES) or code in MEMBER_ACTION_CODES
+    ]
 
 
 async def ensure_permission_catalog(session: AsyncSession) -> list[str]:
@@ -118,7 +126,8 @@ async def ensure_permission_catalog(session: AsyncSession) -> list[str]:
 
     Codes added by this call are also granted (organization-wide) to users who hold the
     `admin` preset, so existing org admins keep full access when the catalog grows; the
-    added read codes likewise join every `member` preset (see `_top_up_member_presets`).
+    added member codes (reads, sending requests) likewise join every `member` preset (see
+    `_top_up_member_presets`).
     Codes that already existed are never re-granted, so individual revocations stick.
     Returns the newly added codes.
     """
@@ -162,14 +171,14 @@ async def ensure_permission_catalog(session: AsyncSession) -> list[str]:
     return added
 
 
-async def _top_up_member_presets(session: AsyncSession, new_read_codes: list[str]) -> None:
+async def _top_up_member_presets(session: AsyncSession, new_member_codes: list[str]) -> None:
     """
-    New read codes join every org's `member` preset and reach the users holding it, in the
-    scope (and with the self-only limit and expiry) each was given it. Organizations get
-    their `member` preset when they are created, so without this a service whose
-    permissions arrive later would stay closed to every existing member.
+    New member codes (`member_permission_codes`) join every org's `member` preset and reach
+    the users holding it, in the scope (and with the self-only limit and expiry) each was
+    given it. Organizations get their `member` preset when they are created, so without this
+    a service whose permissions arrive later would stay closed to every existing member.
     """
-    if not new_read_codes:
+    if not new_member_codes:
         return
     member_role_ids = (
         await session.execute(select(Role.id).where(Role.code == MEMBER_ROLE_CODE))
@@ -178,7 +187,7 @@ async def _top_up_member_presets(session: AsyncSession, new_read_codes: list[str
         return
 
     for role_id in member_role_ids:
-        for code in new_read_codes:
+        for code in new_member_codes:
             session.add(RolePermission(role_id=role_id, permission_code=code))
 
     now = datetime.now(timezone.utc).replace(tzinfo=None)  # naive UTC, like the column
@@ -204,13 +213,13 @@ async def _top_up_member_presets(session: AsyncSession, new_read_codes: list[str
         (
             await session.execute(
                 select(UserPermission.user_id, UserPermission.permission_code, UserPermission.scope_unit_id).where(
-                    UserPermission.permission_code.in_(new_read_codes)
+                    UserPermission.permission_code.in_(new_member_codes)
                 )
             )
         ).all()
     )
     for assignment in current_assignments:
-        for code in new_read_codes:
+        for code in new_member_codes:
             grant_key = (assignment.user_id, code, assignment.scope_unit_id)
             if grant_key in granted:
                 continue
