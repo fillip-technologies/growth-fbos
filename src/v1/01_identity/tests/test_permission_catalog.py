@@ -1,8 +1,8 @@
 """
 Growing the permission catalog: codes added later (a new service's permissions) reach the
 organizations that already exist. `admin` holders get every new code organization-wide;
-the `member` preset gets the new read codes, and so does everyone holding it, in the
-scope each of them was given it.
+the `member` preset gets the new member codes (reads, sending requests), and so does
+everyone holding it, in the scope each of them was given it.
 """
 from datetime import datetime, timedelta, timezone
 import uuid
@@ -93,7 +93,35 @@ async def test_new_read_codes_reach_member_presets_and_their_holders(async_clien
     assert await permission_catalog.ensure_permission_catalog(db_session) == []
 
 
+
+@pytest.mark.asyncio
+async def test_a_new_member_action_code_reaches_member_presets_and_their_holders(async_client, db_session, monkeypatch):
+    """Not only reads: a code members may use (like sending requests) reaches existing members too."""
+    first_admin = await make_user(db_session, "first-admin@example.com")
+    await organization_service.bootstrap_org(db_session, TEST_ORG_ID, admin_user_id=first_admin.id)
+    await db_session.commit()
+    member = await make_user(db_session, "member@example.com")
+    await assign(db_session, member, await preset(db_session, "member"))
+    member_id = member.id
+
+    request_code = ("test.widget.request", "test", "Ask for widgets")
+    monkeypatch.setattr(permission_catalog, "PERMISSION_CATALOG", [*permission_catalog.PERMISSION_CATALOG, request_code])
+    monkeypatch.setattr(permission_catalog, "MEMBER_ACTION_CODES", {*permission_catalog.MEMBER_ACTION_CODES, "test.widget.request"})
+    assert await permission_catalog.ensure_permission_catalog(db_session) == ["test.widget.request"]
+    await db_session.commit()
+    db_session.expire_all()
+
+    member_codes = {rp.permission_code for rp in (await preset(db_session, "member")).role_permissions}
+    # A new organization's preset has delivery's request code from the start.
+    assert {"test.widget.request", "delivery.task.request"} <= member_codes
+    assert len(await grants_of(db_session, member_id, "test.widget.request")) == 1
+
 def test_member_preset_leaves_out_sensitive_reads():
     # Approval requests show deals, discounts and costs company-wide: granted per person instead.
     codes = ["control.approval.read", "control.sla.read", "control.sla.write", "identity.audit_log.read"]
     assert permission_catalog.member_permission_codes(codes) == ["control.sla.read"]
+
+
+def test_members_may_send_requests_but_not_manage_tasks():
+    codes = ["delivery.task.read", "delivery.task.request", "delivery.task.write", "delivery.task.review"]
+    assert permission_catalog.member_permission_codes(codes) == ["delivery.task.read", "delivery.task.request"]

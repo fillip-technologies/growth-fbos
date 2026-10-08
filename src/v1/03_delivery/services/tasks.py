@@ -193,6 +193,8 @@ class TaskFilters:
     q: Optional[str] = None
     # Set for someone who may not see every task (services/views.py); not a query parameter.
     view: Optional["TaskView"] = None
+    # Only the requests this person sent to other teams ("My requests"); not a query parameter.
+    requested_by: Optional[uuid.UUID] = None
 
 
 # --- Response builders -----------------------------------------------------
@@ -364,7 +366,7 @@ async def _record_status_history(session: AsyncSession, task: Task, from_status:
 # --- Task templates (task types: services/task_types.py) ---------------------------
 
 
-def _visible_task_types(org_id: uuid.UUID):
+def visible_task_types(org_id: uuid.UUID) -> ColumnElement[bool]:
     """The organization's own task types plus the built-in ones every organization shares."""
     return or_(TaskType.organization_id == org_id, TaskType.organization_id.is_(None))
 
@@ -474,6 +476,8 @@ def _filtered_tasks(org_id: uuid.UUID, caller_user_id: uuid.UUID, filters: TaskF
     query = select(Task).where(Task.organization_id == org_id)
     if filters.view is not None:
         query = query.where(visible_tasks(filters.view))
+    if filters.requested_by is not None:
+        query = query.where(Task.source == "request", Task.created_by == filters.requested_by)
 
     if filters.assignee == "me":
         query = query.where(Task.assignee_user_id == caller_user_id)
@@ -619,11 +623,17 @@ def _user_id_filter(field: str, value: str) -> uuid.UUID:
         raise ValidationFailedError(field, "Must be 'me' or a user id") from None
 
 
+async def task_type_by_code(session: AsyncSession, org_id: uuid.UUID, code: str) -> tuple[TaskType, Profile]:
+    """A task type the organization can use (its own or built-in) with its profile; not found otherwise."""
+    task_type = await _find_task_type(session, org_id, code)
+    return task_type, await load_profile(session, task_type.id)
+
+
 async def _find_task_type(session: AsyncSession, org_id: uuid.UUID, code: str) -> TaskType:
     """The organization's own task type with this code, or the built-in one."""
     task_type = (
         await session.execute(
-            select(TaskType).where(_visible_task_types(org_id), TaskType.code == code)
+            select(TaskType).where(visible_task_types(org_id), TaskType.code == code)
         )
     ).scalars().first()
     if not task_type:
@@ -631,7 +641,7 @@ async def _find_task_type(session: AsyncSession, org_id: uuid.UUID, code: str) -
     return task_type
 
 
-async def _subject_work_unit(
+async def subject_work_unit(
     session: AsyncSession, org_id: uuid.UUID, subject_type: str, subject_id: uuid.UUID
 ) -> Optional[WorkUnit]:
     """The work unit a task is about, checked to be the organization's; None for other subjects."""
@@ -646,14 +656,19 @@ async def _subject_work_unit(
 
 
 async def create_task(
-    session: AsyncSession, org_id: uuid.UUID, user_id: uuid.UUID, data: TaskCreate, people: PeopleDirectory
+    session: AsyncSession,
+    org_id: uuid.UUID,
+    user_id: uuid.UUID,
+    data: TaskCreate,
+    people: PeopleDirectory,
+    source: str = "manual",
 ) -> TaskResponse:
     task_type = await _find_task_type(session, org_id, data.task_type_code)
     profile = await load_profile(session, task_type.id)
     if profile.archived:
         raise TaskTypeArchivedError(task_type.code)
     attributes = clean_attributes(profile.fields, data.attributes, enforce_required=True)
-    work_unit = await _subject_work_unit(session, org_id, data.subject.type, data.subject.id) if data.subject else None
+    work_unit = await subject_work_unit(session, org_id, data.subject.type, data.subject.id) if data.subject else None
     if data.parent_task_id is not None:
         await _get_task(session, org_id, data.parent_task_id)
     if data.assignee_user_id is not None:
@@ -679,7 +694,7 @@ async def create_task(
         estimate_minutes=data.estimate_minutes,
         parent_task_id=data.parent_task_id,
         attributes={**attributes, "labels": data.labels or []},
-        source="manual",
+        source=source,
         created_at=(
             datetime.combine(data.created_on, datetime.min.time(), tzinfo=timezone.utc)
             if data.created_on
@@ -1668,7 +1683,7 @@ async def _handover_subject(
             raise InvalidStateTransitionError(task.status, "handed_over")
         return task
     if subject_type == WORK_UNIT_SUBJECT:
-        return await _subject_work_unit(session, org_id, subject_type, subject_id)
+        return await subject_work_unit(session, org_id, subject_type, subject_id)
     raise ValidationFailedError(
         "subject.type", f"Only tasks ({TASK_SUBJECT}) and projects ({WORK_UNIT_SUBJECT}) can be handed over"
     )
