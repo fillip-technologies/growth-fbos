@@ -112,6 +112,7 @@ from schemas.tasks import (
 import permissions
 from services.assignees import PeopleDirectory, ensure_assignable, keep_if_assignable
 from services.assignment_policies import pick_assignee
+import services.notifications as notify
 from services.identity_client import Actor
 from services.codes import next_task_code
 from services.pagination import paginate
@@ -703,6 +704,8 @@ async def create_task(
         ),
         checklist=[(item.text, item.mandatory if item.mandatory is not None else True) for item in data.checklist or []],
     )
+    if task.assignee_user_id is not None:
+        notify.assigned(session, task, user_id)
     await _give_out_by_team_policy(session, people, org_id, task)
     return await _build_task_response(session, task)
 
@@ -720,6 +723,7 @@ async def _give_out_by_team_policy(session: AsyncSession, people: PeopleDirector
     # Nobody assigned it: the policy did.
     session.add(TaskAssignment(task_id=task.id, unit_id=task.owning_unit_id, user_id=pick.user_id, assigned_by=None))
     await _record_status_history(session, task, "open", "assigned", None, pick.reason)
+    notify.assigned(session, task, None)
     await session.flush()
 
 
@@ -948,7 +952,8 @@ async def assign_task(
         raise InvalidStateTransitionError(task.status, "assigned")
 
     from_status = task.status
-    if task.assignee_user_id != data.assignee_user_id:
+    newly_assigned = task.assignee_user_id != data.assignee_user_id
+    if newly_assigned:
         await ensure_assignable(session, people, org_id, task.owning_unit_id, data.assignee_user_id)
         await _end_assignments(session, task.id, "assignee", data.note or "Reassigned")
         session.add(
@@ -978,6 +983,8 @@ async def assign_task(
 
     if task.status != from_status:
         await _record_status_history(session, task, from_status, task.status, user_id, data.note)
+    if newly_assigned:
+        notify.assigned(session, task, user_id)
 
     task.updated_at = datetime.now(timezone.utc)
     task.version += 1
@@ -1156,10 +1163,12 @@ async def submit_task(
 
     if task_type and task_type.requires_review:
         task.status = "submitted"
+        notify.review_requested(session, task, user_id)
     else:
         task.status = "done"
         task.completed_at = now
         task.progress_pct = 100
+        await notify.done(session, task, user_id)
 
     await _record_status_history(session, task, from_status, task.status, user_id, data.note)
 
@@ -1270,10 +1279,12 @@ async def review_task(session: AsyncSession, org_id: uuid.UUID, actor: Actor, ta
     if data.result == "fail":
         task.status = "rework"
         task.review_round += 1
+        notify.sent_back(session, task, user_id, data.feedback or "")
     else:
         task.status = "done"
         task.completed_at = reviewed_at
         task.progress_pct = 100
+        await notify.done(session, task, user_id)
 
     review = TaskReview(
         task_id=task.id,
@@ -1304,6 +1315,7 @@ async def cancel_task(session: AsyncSession, org_id: uuid.UUID, user_id: uuid.UU
     from_status = task.status
     task.status = "cancelled"
     await _record_status_history(session, task, from_status, task.status, user_id, data.reason)
+    await notify.cancelled(session, task, user_id, data.reason)
 
     task.updated_at = datetime.now(timezone.utc)
     task.version += 1
@@ -1729,10 +1741,13 @@ async def _move_to_receiving_unit(
         return None
     task = handed_over
     if assignee_user_id is not None:
-        if task.assignee_user_id != assignee_user_id:
+        newly_assigned = task.assignee_user_id != assignee_user_id
+        if newly_assigned:
             await _end_assignments(session, task.id, "assignee", _HANDED_OVER)
             session.add(TaskAssignment(task_id=task.id, unit_id=task.owning_unit_id, user_id=assignee_user_id, assigned_by=user_id))
         task.assignee_user_id = assignee_user_id
+        if newly_assigned:
+            notify.assigned(session, task, user_id)
         if task.status in ("draft", "open"):
             await _record_status_history(session, task, task.status, "assigned", user_id, _HANDED_OVER)
             task.status = "assigned"
