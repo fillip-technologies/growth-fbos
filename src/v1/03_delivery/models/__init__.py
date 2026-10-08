@@ -3,6 +3,7 @@ from models.code_sequence import CodeSequence
 from models.control_register import ChangeRequest, Closure, Issue, Risk
 from models.delivery import Deliverable, Milestone, Phase, WorkDependency, WorkPackage
 from models.financial import CostEntry, WorkBudget
+from models.outbox import OutboxEvent
 from models.routing import RoutingRule
 from models.settings import DeliverySettings
 from models.task import ChecklistItem, Task, TaskDependency, TaskWatcher
@@ -22,6 +23,7 @@ __all__ = [
     "AssignmentPolicy",
     "CodeSequence",
     "DeliverySettings",
+    "OutboxEvent",
     "RoutingRule",
     # Work units
     "WorkUnitType",

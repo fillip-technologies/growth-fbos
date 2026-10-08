@@ -39,5 +39,17 @@ class Settings(BaseSettings):
     internal_service_token: str = ""
     identity_timeout_seconds: float = 5.0
 
+    # Notifications about tasks go to the communication service's /internal/notifications,
+    # sent by the background worker (services/outbox_worker.py) from the outbox.
+    communication_service_url: str = ""
+    notification_timeout_seconds: float = 5.0
+    # Seconds between the worker's runs; 0 = off. Every environment shares the database, so
+    # only the live server turns it on (docker-compose.aapanel.yml): one worker sends each event.
+    worker_interval_seconds: int = 0
+
+    @property
+    def worker_enabled(self) -> bool:
+        return self.worker_interval_seconds > 0 and bool(self.communication_service_url)
+
 
 settings = Settings()
