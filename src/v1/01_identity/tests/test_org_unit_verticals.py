@@ -153,3 +153,44 @@ async def test_custom_fields_are_filtered_to_a_units_verticals(async_client, str
 
     # Without a unit, everything is listed as before.
     assert object_types(await async_client.get(f"{API}/field-definitions")) == {"task.task", "work.work_unit"}
+
+
+@pytest.mark.asyncio
+async def test_user_inherits_verticals_from_home_unit(async_client, structure):
+    s = structure
+    # Invite a user assigned to QA team (which inherits Software)
+    res = await async_client.post(
+        f"{API}/users",
+        json={"name": "Dev Alice", "email": "alice.dev@example.com", "home_unit_id": s["team"]["id"]},
+    )
+    assert res.status_code == 201, res.text
+    user_id = res.json()["id"]
+
+    # 1. Check user verticals endpoint
+    uv = await async_client.get(f"{API}/users/{user_id}/verticals")
+    assert uv.status_code == 200, uv.text
+    data = uv.json()
+    assert data["home_unit_id"] == s["team"]["id"]
+    assert names(data["effective"]) == ["Software"]
+    assert data["inherited_from"]["id"] == s["branch"]["id"]
+
+    # 2. Check field definitions filtered by user_id
+    res_pack = await async_client.post(
+        f"{API}/vertical-packs",
+        json={
+            "vertical_id": s["construction"]["id"],
+            "code": "build-user-test",
+            "name": "Build User Test",
+            "content": {"sections": [section("work.work_unit", {"key": "permit_code", "label": "Permit Code", "type": "text"})]},
+        },
+    )
+    assert res_pack.status_code == 201, res_pack.text
+    pack_id = res_pack.json()["id"]
+    await async_client.post(f"{API}/vertical-packs/{pack_id}/versions/1/publish")
+    await async_client.put(f"{API}/vertical-packs/{pack_id}/installation", json={"version_no": 1})
+
+    # User in QA team (Software) does not see construction fields
+    defs = await async_client.get(f"{API}/field-definitions", params={"user_id": user_id})
+    assert defs.status_code == 200
+    assert not any(d["object_type"] == "work.work_unit" and d.get("vertical_id") == s["construction"]["id"] for d in defs.json()["data"])
+

@@ -19,8 +19,10 @@ from schemas.user import (
     UserResponse,
     UserStatus,
     UserUpdateRequest,
+    UserVerticalsResponse,
 )
 from services.access_control import Actor
+from services.org_unit_vertical_service import org_unit_vertical_service
 from services.session_service import PERM_SESSION_READ, PERM_SESSION_REVOKE, session_service
 from services.user_service import (
     PERM_ACCESS_MANAGE,
@@ -104,6 +106,39 @@ async def get_user(
     user = await user_service.get_user(session=db, actor=actor, user_id=user_id)
     response.headers["ETag"] = _etag(user)
     return user
+
+
+@router.get(
+    "/{user_id}/verticals",
+    response_model=UserVerticalsResponse,
+    status_code=status.HTTP_200_OK,
+    summary="The verticals a user operates in, inherited from their home unit",
+)
+async def get_user_verticals(
+    user_id: uuid.UUID,
+    actor: Actor = Depends(require_permission(PERM_READ)),
+    db: AsyncSession = Depends(get_db_session),
+) -> UserVerticalsResponse:
+    user = await user_service.load_user_for(db, actor, user_id, PERM_READ)
+    if not user.home_unit_id:
+        return UserVerticalsResponse(
+            user_id=user.id,
+            home_unit_id=None,
+            own=[],
+            effective=[],
+            inherited_from=None,
+        )
+    unit_res = await org_unit_vertical_service.get_unit_verticals(
+        session=db, organization_id=actor.organization_id, unit_id=user.home_unit_id
+    )
+    return UserVerticalsResponse(
+        user_id=user.id,
+        home_unit_id=user.home_unit_id,
+        own=[v.model_dump() for v in unit_res.own],
+        effective=[v.model_dump() for v in unit_res.effective],
+        inherited_from=unit_res.inherited_from.model_dump() if unit_res.inherited_from else None,
+    )
+
 
 
 @router.patch(

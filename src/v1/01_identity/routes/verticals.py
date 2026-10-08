@@ -24,6 +24,7 @@ from schemas.vertical import (
     VerticalResponse,
     VerticalUpdate,
 )
+from models.user import User
 from services.access_control import Actor
 from services.org_unit_vertical_service import org_unit_vertical_service
 from services.vertical_service import vertical_service
@@ -32,6 +33,11 @@ verticals_router = APIRouter()
 object_types_router = APIRouter()
 field_definitions_router = APIRouter()
 vertical_packs_router = APIRouter()
+
+
+# ---------------------------------------------------------------------------
+# Object Types
+# ---------------------------------------------------------------------------
 
 PACK_MANAGE = "identity.vertical_pack.manage"
 PACK_INSTALL = "identity.vertical_pack.install"
@@ -143,6 +149,9 @@ async def list_field_definitions(
     org_unit_id: Optional[uuid.UUID] = Query(
         None, description="Only definitions that apply in this unit: no vertical, or one of the unit's verticals"
     ),
+    user_id: Optional[uuid.UUID] = Query(
+        None, description="Only definitions that apply to this user's home unit: no vertical, or one of the unit's verticals"
+    ),
     limit: int = Query(25, ge=1, le=100),
     cursor: Optional[str] = Query(None, description="Opaque pagination cursor"),
     sort: Optional[str] = Query(None, description="Comma-separated fields, - for descending"),
@@ -150,9 +159,14 @@ async def list_field_definitions(
     db: AsyncSession = Depends(get_db_session),
 ) -> PaginatedResponse[FieldDefinitionResponse]:
     unit_vertical_ids = None
-    if org_unit_id:
+    target_unit_id = org_unit_id
+    if not target_unit_id and user_id:
+        user = await db.get(User, user_id)
+        if user and user.organization_id == actor.organization_id and user.home_unit_id:
+            target_unit_id = user.home_unit_id
+    if target_unit_id:
         unit_vertical_ids = await org_unit_vertical_service.effective_vertical_ids(
-            session=db, organization_id=actor.organization_id, unit_id=org_unit_id
+            session=db, organization_id=actor.organization_id, unit_id=target_unit_id
         )
     return await vertical_service.list_field_definitions(
         session=db,

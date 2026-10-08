@@ -493,23 +493,23 @@ async def list_work_units(
 
 async def _type_and_template_version(
     session: AsyncSession, org_id: uuid.UUID, data: WorkUnitCreate
-) -> tuple[WorkUnitType, Optional[WorkTemplateVersion]]:
+) -> tuple[WorkUnitType, Optional[WorkTemplateVersion], Optional[uuid.UUID]]:
     """What a new work unit is: a template's type and published version, or just a type."""
     if not data.template_code:
-        return await _find_work_unit_type(session, org_id, data.work_unit_type_code), None
+        return await _find_work_unit_type(session, org_id, data.work_unit_type_code), None, None
 
     template = await _get_template_by_code(session, org_id, data.template_code)
     version = await _published_version(session, template, data.template_version_no)
     unit_type = await session.get(WorkUnitType, template.work_unit_type_id)
     if data.work_unit_type_code and data.work_unit_type_code != unit_type.code:
         raise ValidationFailedError("work_unit_type_code", f"The template makes '{unit_type.code}' projects")
-    return unit_type, version
+    return unit_type, version, template.vertical_id
 
 
 async def create_work_unit(
     session: AsyncSession, org_id: uuid.UUID, user_id: uuid.UUID, data: WorkUnitCreate
 ) -> WorkUnitResponse:
-    unit_type, template_version = await _type_and_template_version(session, org_id, data)
+    unit_type, template_version, template_vertical_id = await _type_and_template_version(session, org_id, data)
     workflow_code = template_version.workflow_definition_code if template_version else None
     if data.start_workflow and not workflow_code:
         raise ValidationFailedError("start_workflow", "Only a project made from a template with a workflow can start one")
@@ -523,7 +523,7 @@ async def create_work_unit(
         objective=data.objective,
         work_unit_type_id=unit_type.id,
         template_version_id=template_version.id if template_version else None,
-        vertical_id=data.vertical_id,
+        vertical_id=data.vertical_id or template_vertical_id,
         owning_unit_id=data.owning_unit_id,
         client_id=data.client_id,
         contract_id=data.contract_id,
