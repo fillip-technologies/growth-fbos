@@ -120,6 +120,13 @@ async def test_every_route_is_guarded_unless_meant_to_be_open():
         ("get", "/settings", permissions.TEMPLATE_MANAGE),
         ("patch", "/settings", permissions.TEMPLATE_MANAGE),
         ("get", "/assignable-people", permissions.TASK_WRITE),
+        ("get", "/routing-rules", permissions.TASK_READ),
+        ("post", "/routing-rules", permissions.TEMPLATE_MANAGE),
+        ("patch", f"/routing-rules/{uuid.uuid4()}", permissions.TEMPLATE_MANAGE),
+        ("get", "/task-routing", permissions.TASK_WRITE),
+        ("get", "/requestable-types", permissions.TASK_REQUEST),
+        ("get", "/requests", permissions.TASK_REQUEST),
+        ("post", "/requests", permissions.TASK_REQUEST),
     ],
 )
 async def test_missing_permission_is_refused(client_as, method, path, required_permission):

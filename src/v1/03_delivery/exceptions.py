@@ -179,6 +179,35 @@ class TaskTypeNotFoundError(DeliveryServiceError):
         super().__init__(status.HTTP_404_NOT_FOUND, "TASK_TYPE_NOT_FOUND", message)
 
 
+class RoutingRuleNotFoundError(DeliveryServiceError):
+    def __init__(self, rule_id: str) -> None:
+        super().__init__(status.HTTP_404_NOT_FOUND, "ROUTING_RULE_NOT_FOUND", f"Routing rule {rule_id} not found")
+
+
+class DuplicateRoutingRuleError(DeliveryServiceError):
+    """409: An active rule already routes the same work (task type or discipline, and vertical)."""
+
+    def __init__(self, rule_id: str) -> None:
+        super().__init__(
+            status.HTTP_409_CONFLICT,
+            "DUPLICATE_ROUTING_RULE",
+            "An active rule already routes this kind of work; change that rule instead.",
+            meta={"rule_id": rule_id},
+        )
+
+
+class NotRequestableError(DeliveryServiceError):
+    """422: No team takes requests for this kind of work (an active routing rule with accepts_requests)."""
+
+    def __init__(self, task_type_code: str) -> None:
+        super().__init__(
+            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            "NOT_REQUESTABLE",
+            f"No team takes requests for '{task_type_code}' work.",
+            meta={"task_type_code": task_type_code},
+        )
+
+
 class TaskTemplateNotFoundError(DeliveryServiceError):
     def __init__(self, template_code: Optional[str] = None) -> None:
         message = (
