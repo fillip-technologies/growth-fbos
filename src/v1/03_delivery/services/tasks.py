@@ -111,6 +111,7 @@ from schemas.tasks import (
 )
 import permissions
 from services.assignees import PeopleDirectory, ensure_assignable, keep_if_assignable
+from services.assignment_policies import pick_assignee
 from services.identity_client import Actor
 from services.codes import next_task_code
 from services.pagination import paginate
@@ -702,7 +703,24 @@ async def create_task(
         ),
         checklist=[(item.text, item.mandatory if item.mandatory is not None else True) for item in data.checklist or []],
     )
+    await _give_out_by_team_policy(session, people, org_id, task)
     return await _build_task_response(session, task)
+
+
+async def _give_out_by_team_policy(session: AsyncSession, people: PeopleDirectory, org_id: uuid.UUID, task: Task) -> None:
+    """A task left in its team's queue goes to whoever the team's assignment policy picks, if the team has one."""
+    if task.assignee_user_id is not None or task.status != "open":
+        return
+    pick = await pick_assignee(session, people, org_id, task.owning_unit_id)
+    if pick is None:
+        return
+    task.assignee_user_id = pick.user_id
+    task.status = "assigned"
+    task.updated_at = datetime.now(timezone.utc)
+    # Nobody assigned it: the policy did.
+    session.add(TaskAssignment(task_id=task.id, unit_id=task.owning_unit_id, user_id=pick.user_id, assigned_by=None))
+    await _record_status_history(session, task, "open", "assigned", None, pick.reason)
+    await session.flush()
 
 
 async def _insert_task(
@@ -1152,6 +1170,7 @@ async def submit_task(
         follow_up = await _schedule_follow_up(
             session, org_id, user_id, task, task_type, profile, follow_up_at, follow_up_assignee
         )
+        await _give_out_by_team_policy(session, people, org_id, follow_up)
         task.attributes = {**attrs, "follow_up_task_id": str(follow_up.id)}
 
     task.updated_at = now
@@ -1691,14 +1710,14 @@ async def _handover_subject(
 
 async def _move_to_receiving_unit(
     session: AsyncSession, org_id: uuid.UUID, handover: Handover, user_id: uuid.UUID, assignee_user_id: Optional[uuid.UUID]
-) -> None:
+) -> Optional[Task]:
     """
     An accepted handover makes the receiving unit the owner of the work. When the accepting side
     names who takes a task on, it goes to them (a task not yet assigned becomes assigned).
     Otherwise the task comes off its assignee, started or not, and the receiving unit assigns
     one of its own people: work being done goes back to the unit's queue, work waiting for
     review stays with its reviewer. Whoever worked on it stays in the task's history (their
-    ended assignment and its status changes).
+    ended assignment and its status changes). Returns the task, when the work is one.
     """
     handed_over = await _handover_subject(session, org_id, handover.subject_type, handover.subject_id)
     if assignee_user_id is not None and not isinstance(handed_over, Task):
@@ -1707,7 +1726,7 @@ async def _move_to_receiving_unit(
     handed_over.version += 1
     handed_over.updated_at = datetime.now(timezone.utc)
     if not isinstance(handed_over, Task):
-        return
+        return None
     task = handed_over
     if assignee_user_id is not None:
         if task.assignee_user_id != assignee_user_id:
@@ -1717,12 +1736,13 @@ async def _move_to_receiving_unit(
         if task.status in ("draft", "open"):
             await _record_status_history(session, task, task.status, "assigned", user_id, _HANDED_OVER)
             task.status = "assigned"
-        return
+        return task
     await _end_assignments(session, task.id, "assignee", _HANDED_OVER)
     task.assignee_user_id = None
     if task.status not in _WAITING_FOR_REVIEW | {"open"}:
         await _record_status_history(session, task, task.status, "open", user_id, _HANDED_OVER)
         task.status = "open"
+    return task
 
 
 HANDOVER_ETAG = "1"  # Handover has no version column; see the workflow-version note for the same pattern.
@@ -1749,7 +1769,10 @@ async def accept_handover(
     handover.status = "accepted"
     handover.responded_by = user_id
     handover.responded_at = datetime.now(timezone.utc)
-    await _move_to_receiving_unit(session, org_id, handover, user_id, data.assignee_user_id)
+    task = await _move_to_receiving_unit(session, org_id, handover, user_id, data.assignee_user_id)
+    if task is not None:
+        # Back in a queue (not waiting for review): the receiving team's policy may give it out.
+        await _give_out_by_team_policy(session, people, org_id, task)
     if data.note:
         handover.notes = f"{handover.notes}\n{data.note}" if handover.notes else data.note
 

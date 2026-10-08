@@ -127,6 +127,8 @@ async def test_every_route_is_guarded_unless_meant_to_be_open():
         ("get", "/requestable-types", permissions.TASK_REQUEST),
         ("get", "/requests", permissions.TASK_REQUEST),
         ("post", "/requests", permissions.TASK_REQUEST),
+        ("get", "/assignment-policies", permissions.TASK_READ),
+        ("put", f"/assignment-policies/{uuid.uuid4()}", permissions.TEMPLATE_MANAGE),
     ],
 )
 async def test_missing_permission_is_refused(client_as, method, path, required_permission):
