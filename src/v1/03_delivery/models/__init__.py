@@ -1,3 +1,4 @@
+from models.assignment_policy import AssignmentPolicy
 from models.code_sequence import CodeSequence
 from models.control_register import ChangeRequest, Closure, Issue, Risk
 from models.delivery import Deliverable, Milestone, Phase, WorkDependency, WorkPackage
@@ -18,6 +19,7 @@ from models.work_unit_template import WorkTemplate, WorkTemplateVersion, WorkUni
 from models.work_unit_tracking import Baseline, ProgressSnapshot, StatusHistory
 
 __all__ = [
+    "AssignmentPolicy",
     "CodeSequence",
     "DeliverySettings",
     "RoutingRule",
