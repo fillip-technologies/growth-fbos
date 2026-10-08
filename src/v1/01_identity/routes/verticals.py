@@ -152,6 +152,9 @@ async def list_field_definitions(
     user_id: Optional[uuid.UUID] = Query(
         None, description="Only definitions that apply to this user's home unit: no vertical, or one of the unit's verticals"
     ),
+    scoped: bool = Query(
+        False, description="When true, only returns definitions matching the resolved vertical(s) or global (vertical_id is null). If no vertical matches, returns only global definitions."
+    ),
     limit: int = Query(25, ge=1, le=100),
     cursor: Optional[str] = Query(None, description="Opaque pagination cursor"),
     sort: Optional[str] = Query(None, description="Comma-separated fields, - for descending"),
@@ -168,6 +171,11 @@ async def list_field_definitions(
         unit_vertical_ids = await org_unit_vertical_service.effective_vertical_ids(
             session=db, organization_id=actor.organization_id, unit_id=target_unit_id
         )
+    elif scoped:
+        if vertical_id:
+            unit_vertical_ids = [vertical_id]
+        else:
+            unit_vertical_ids = []
     return await vertical_service.list_field_definitions(
         session=db,
         organization_id=actor.organization_id,

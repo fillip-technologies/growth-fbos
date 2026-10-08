@@ -194,3 +194,49 @@ async def test_user_inherits_verticals_from_home_unit(async_client, structure):
     assert defs.status_code == 200
     assert not any(d["object_type"] == "work.work_unit" and d.get("vertical_id") == s["construction"]["id"] for d in defs.json()["data"])
 
+
+@pytest.mark.asyncio
+async def test_scoped_field_definitions(async_client, structure):
+    s = structure
+    res_pack = await async_client.post(
+        f"{API}/vertical-packs",
+        json={
+            "vertical_id": s["construction"]["id"],
+            "code": "build-scoped",
+            "name": "Build Scoped",
+            "content": {"sections": [section("work.work_unit", {"key": "permit", "label": "Permit", "type": "text"})]},
+        },
+    )
+    assert res_pack.status_code == 201
+    pack_id = res_pack.json()["id"]
+    await async_client.post(f"{API}/vertical-packs/{pack_id}/versions/1/publish")
+    await async_client.put(f"{API}/vertical-packs/{pack_id}/installation", json={"version_no": 1})
+
+    # Global definition:
+    manual = await async_client.post(
+        f"{API}/field-definitions",
+        json={"object_type": "task.task", "json_schema": {"type": "object", "properties": {"note": {"type": "string"}}}},
+    )
+    assert manual.status_code == 201
+
+    # 1. Without scoped parameter: returns definitions across all verticals (including construction)
+    all_defs = await async_client.get(f"{API}/field-definitions")
+    assert all_defs.status_code == 200
+    assert any(d.get("vertical_id") is not None for d in all_defs.json()["data"])
+
+    # 2. With scoped=true and no unit/vertical: returns only global definitions (none with vertical_id)
+    scoped_defs = await async_client.get(
+        f"{API}/field-definitions", params={"scoped": "true"}
+    )
+    assert scoped_defs.status_code == 200
+    assert not any(d.get("vertical_id") is not None for d in scoped_defs.json()["data"])
+    assert any(d.get("vertical_id") is None for d in scoped_defs.json()["data"])
+
+    # 3. With scoped=true and Construction vertical: returns Construction definition
+    const_defs = await async_client.get(
+        f"{API}/field-definitions",
+        params={"vertical_id": s["construction"]["id"], "scoped": "true"},
+    )
+    assert const_defs.status_code == 200
+    assert any(d.get("vertical_id") == s["construction"]["id"] for d in const_defs.json()["data"])
+

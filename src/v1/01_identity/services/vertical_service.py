@@ -292,7 +292,7 @@ class VerticalService:
 
         if object_type:
             query = query.where(FieldDefinition.object_type == object_type)
-        if vertical_id:
+        if vertical_id and applicable_vertical_ids is None:
             query = query.where(FieldDefinition.vertical_id == vertical_id)
         if status:
             query = query.where(FieldDefinition.status == status)
