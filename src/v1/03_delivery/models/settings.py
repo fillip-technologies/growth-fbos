@@ -24,6 +24,11 @@ class DeliverySettings(Base):
     # or below, or a current extra team member): checked when a task is created with an
     # assignee, assigned, taken from the queue and accepted from a handover. Off: anyone.
     team_assignment_only: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    # What people see follows their teams (services/views.py): a read held within units shows
+    # the work those units own, and everyone also sees their own teams' unassigned queue.
+    # Off: a unit-limited read shows the whole company, and "own records only" shows just one's
+    # own tasks and projects. Added by the migration `9c4f2e7a1b63`.
+    team_visibility: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
     updated_by: Mapped[Optional[uuid.UUID]] = mapped_column(UUIDType, nullable=True)
     updated_at: Mapped[datetime] = mapped_column(
