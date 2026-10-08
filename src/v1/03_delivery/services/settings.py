@@ -22,10 +22,11 @@ async def _settings_row(session: AsyncSession, org_id: uuid.UUID) -> Optional[De
 
 def _response(row: Optional[DeliverySettings]) -> DeliverySettingsResponse:
     if row is None:
-        return DeliverySettingsResponse(team_assignment_only=False, team_visibility=False, version=0)
+        return DeliverySettingsResponse(team_assignment_only=False, team_visibility=False, team_alerts=False, version=0)
     return DeliverySettingsResponse(
         team_assignment_only=row.team_assignment_only,
         team_visibility=row.team_visibility,
+        team_alerts=row.team_alerts,
         version=row.version,
         updated_at=row.updated_at,
         updated_by=user_ref(row.updated_by),
@@ -46,6 +47,11 @@ async def team_visibility(session: AsyncSession, org_id: uuid.UUID) -> bool:
     return row is not None and row.team_visibility
 
 
+async def team_alerts(session: AsyncSession, org_id: uuid.UUID) -> bool:
+    row = await _settings_row(session, org_id)
+    return row is not None and row.team_alerts
+
+
 async def update_settings(
     session: AsyncSession,
     org_id: uuid.UUID,
@@ -58,12 +64,14 @@ async def update_settings(
     check_if_match(if_match, current_version)
 
     if row is None:
-        row = DeliverySettings(organization_id=org_id, team_assignment_only=False, team_visibility=False)
+        row = DeliverySettings(organization_id=org_id, team_assignment_only=False, team_visibility=False, team_alerts=False)
         session.add(row)
     if data.team_assignment_only is not None:
         row.team_assignment_only = data.team_assignment_only
     if data.team_visibility is not None:
         row.team_visibility = data.team_visibility
+    if data.team_alerts is not None:
+        row.team_alerts = data.team_alerts
     row.version = current_version + 1
     row.updated_by = user_id
     row.updated_at = datetime.now(timezone.utc)

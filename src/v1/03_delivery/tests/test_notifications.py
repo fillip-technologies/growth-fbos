@@ -135,7 +135,9 @@ def sessions(test_engine) -> async_sessionmaker[AsyncSession]:
 async def add_event(sessions, **values) -> uuid.UUID:
     event = OutboxEvent(
         organization_id=TEST_ORG_ID, event_type="delivery.task.assigned.v1",
-        payload={"recipient_user_ids": [str(WORKER)], "title": "Assigned to you", "body": "", "action_url": "/tasks/x"},
+        payload=values.pop(
+            "payload", {"recipient_user_ids": [str(WORKER)], "title": "Assigned to you", "body": "", "action_url": "/tasks/x"}
+        ),
         created_at=values.pop("created_at", NOW - timedelta(minutes=1)),
         next_attempt_at=values.pop("next_attempt_at", NOW - timedelta(minutes=1)),
         **values,
@@ -160,8 +162,8 @@ async def test_the_worker_sends_due_events_once(sessions):
     later = await add_event(sessions, next_attempt_at=NOW + timedelta(minutes=5))
     communication = FakeCommunication()
     async with communication.client() as http:
-        assert await send_pending(sessions, http, "secret", now=NOW) == 1
-        assert await send_pending(sessions, http, "secret", now=NOW) == 0  # nothing left that is due
+        assert await send_pending(sessions, http, "secret", FakePeopleDirectory(), now=NOW) == 1
+        assert await send_pending(sessions, http, "secret", FakePeopleDirectory(), now=NOW) == 0  # nothing left that is due
 
     [(payload, headers)] = communication.received
     assert payload["source_event_id"] == str(event_id)
@@ -175,7 +177,7 @@ async def test_busy_or_down_is_tried_again_later_then_given_up(sessions):
     event_id = await add_event(sessions)
     communication = FakeCommunication(*[503] * MAX_ATTEMPTS)
     async with communication.client() as http:
-        await send_pending(sessions, http, "", now=NOW)
+        await send_pending(sessions, http, "", FakePeopleDirectory(), now=NOW)
         first = await stored(sessions, event_id)
         assert (first.status, first.attempts, utc(first.next_attempt_at)) == ("pending", 1, NOW + timedelta(seconds=30))
         assert first.last_error.startswith("503")
@@ -183,7 +185,7 @@ async def test_busy_or_down_is_tried_again_later_then_given_up(sessions):
         moment = NOW
         for attempt in range(2, MAX_ATTEMPTS + 1):
             moment = utc((await stored(sessions, event_id)).next_attempt_at)
-            await send_pending(sessions, http, "", now=moment)
+            await send_pending(sessions, http, "", FakePeopleDirectory(), now=moment)
     given_up = await stored(sessions, event_id)
     assert (given_up.status, given_up.attempts) == ("failed", MAX_ATTEMPTS)
     assert len(communication.received) == MAX_ATTEMPTS
@@ -193,8 +195,8 @@ async def test_a_refusal_is_not_tried_again(sessions):
     event_id = await add_event(sessions)
     communication = FakeCommunication(422)
     async with communication.client() as http:
-        await send_pending(sessions, http, "", now=NOW)
-        await send_pending(sessions, http, "", now=NOW + timedelta(hours=1))
+        await send_pending(sessions, http, "", FakePeopleDirectory(), now=NOW)
+        await send_pending(sessions, http, "", FakePeopleDirectory(), now=NOW + timedelta(hours=1))
     refused = await stored(sessions, event_id)
     assert (refused.status, refused.last_error[:3]) == ("failed", "422")
     assert len(communication.received) == 1
@@ -206,7 +208,7 @@ async def test_stale_events_are_dropped_and_old_ones_cleared_out(sessions):
     old_waiting = await add_event(sessions, created_at=NOW - timedelta(days=15), next_attempt_at=NOW + timedelta(hours=1))
     communication = FakeCommunication()
     async with communication.client() as http:
-        await send_pending(sessions, http, "", now=NOW)
+        await send_pending(sessions, http, "", FakePeopleDirectory(), now=NOW)
 
     assert communication.received == []
     assert ((await stored(sessions, stale)).status, (await stored(sessions, stale)).last_error) == ("failed", "Stale: not sent within a day")

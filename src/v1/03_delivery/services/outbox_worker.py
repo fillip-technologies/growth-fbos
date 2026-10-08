@@ -13,37 +13,57 @@ the outcomes in a new one, so no database transaction waits on the network.
   given up after a few attempts;
 - refused (any other 4xx): failed at once, with communication's answer kept;
 - older than a day before it could be sent (the worker was off): failed as stale, rather than
-  telling people about something long past.
-Sent and failed events are deleted after two weeks.
+  telling people about something long past;
+- nobody left to tell (a team without a head, or only the person who acted): skipped.
+Sent, failed and skipped events are deleted after two weeks.
+
+An event may name a unit instead of people (`unit_heads`): its head (or the n-th head up the
+chain) is asked of identity just before sending, outside any transaction; identity being down
+leaves the event for the next run. Every few minutes the worker also checks time limits
+(services/sla_alerts.py).
 """
 import asyncio
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 import logging
-from typing import Optional
+import time
+from typing import Optional, Protocol
+import uuid
 
 import httpx
 from sqlalchemy import delete, select, update
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from exceptions import TeamMembersUnavailableError
 from models.outbox import OutboxEvent
+from services.sla_alerts import check_time_limits
 
 logger = logging.getLogger("delivery.outbox")
 
 NOTIFICATIONS_PATH = "/internal/notifications"
-PENDING, SENT, FAILED = "pending", "sent", "failed"
+PENDING, SENT, FAILED, SKIPPED = "pending", "sent", "failed", "skipped"
 BATCH_SIZE = 50
 MAX_ATTEMPTS = 8
 FIRST_RETRY = timedelta(seconds=30)
 LONGEST_WAIT = timedelta(hours=1)
 STALE_AFTER = timedelta(hours=24)
 KEEP_FOR = timedelta(days=14)
+# How often the worker checks time limits (it sends every `worker_interval_seconds`).
+TIME_LIMIT_CHECK_SECONDS = 300
+# What the worker adds to the event for communication, and keeps to itself.
+_RECIPIENT_KEYS = ("unit_heads", "exclude_user_ids")
+
+
+class UnitHeads(Protocol):
+    """Who heads a unit and the units above it: identity, through `IdentityClient.unit_heads`."""
+
+    async def unit_heads(self, organization_id: uuid.UUID, unit_id: uuid.UUID) -> list[uuid.UUID]: ...
 
 
 @dataclass(frozen=True)
 class Outcome:
-    status: str  # SENT, FAILED, or PENDING to try again
+    status: str  # SENT, FAILED, SKIPPED, or PENDING to try again
     error: Optional[str] = None
 
 
@@ -52,9 +72,27 @@ def retry_wait(attempts: int) -> timedelta:
     return min(FIRST_RETRY * 2 ** (attempts - 1), LONGEST_WAIT)
 
 
-async def _deliver(http: httpx.AsyncClient, internal_token: str, event: OutboxEvent) -> Outcome:
+async def _recipients(heads: UnitHeads, event: OutboxEvent) -> list[str]:
+    """The people the event names, plus the unit head it asks for, less whoever acted."""
+    to = set(event.payload.get("recipient_user_ids", []))
+    spec = event.payload.get("unit_heads")
+    if spec:
+        chain = await heads.unit_heads(event.organization_id, uuid.UUID(spec["unit_id"]))
+        if len(chain) > spec["skip"]:
+            to.add(str(chain[spec["skip"]]))
+    return sorted(to - set(event.payload.get("exclude_user_ids", [])))
+
+
+async def _deliver(http: httpx.AsyncClient, internal_token: str, heads: UnitHeads, event: OutboxEvent) -> Outcome:
+    try:
+        recipients = await _recipients(heads, event)
+    except TeamMembersUnavailableError:
+        return Outcome(PENDING, "Identity couldn't name the team's head")
+    if not recipients:
+        return Outcome(SKIPPED, "Nobody to tell")
     payload = {
-        **event.payload,
+        **{key: value for key, value in event.payload.items() if key not in _RECIPIENT_KEYS},
+        "recipient_user_ids": recipients,
         "organization_id": str(event.organization_id),
         "event_type": event.event_type,
         "source_event_id": str(event.id),
@@ -95,6 +133,7 @@ async def send_pending(
     session_factory: async_sessionmaker[AsyncSession],
     http: httpx.AsyncClient,
     internal_token: str,
+    heads: UnitHeads,
     now: Optional[datetime] = None,
 ) -> int:
     """One run: sends the events that are due, records how each went, and clears out old ones. Returns how many were sent."""
@@ -117,7 +156,7 @@ async def send_pending(
         if now - _created(event) > STALE_AFTER:
             outcomes.append((event, Outcome(FAILED, "Stale: not sent within a day")))
         else:
-            outcomes.append((event, await _deliver(http, internal_token, event)))
+            outcomes.append((event, await _deliver(http, internal_token, heads, event)))
 
     async with session_factory() as session:
         for event, outcome in outcomes:
@@ -135,15 +174,26 @@ async def send_pending(
 
 
 async def run_worker(
-    session_factory: async_sessionmaker[AsyncSession], http: httpx.AsyncClient, internal_token: str, interval_seconds: int
+    session_factory: async_sessionmaker[AsyncSession],
+    http: httpx.AsyncClient,
+    internal_token: str,
+    heads: UnitHeads,
+    interval_seconds: int,
 ) -> None:
-    logger.info("Delivery worker on: sending notifications every %d s", interval_seconds)
+    logger.info(
+        "Delivery worker on: sending notifications every %d s, checking time limits every %d s",
+        interval_seconds, TIME_LIMIT_CHECK_SECONDS,
+    )
+    last_check: Optional[float] = None
     while True:
         try:
-            await send_pending(session_factory, http, internal_token)
+            if last_check is None or time.monotonic() - last_check >= TIME_LIMIT_CHECK_SECONDS:
+                last_check = time.monotonic()
+                await check_time_limits(session_factory)
+            await send_pending(session_factory, http, internal_token, heads)
         except SQLAlchemyError as exc:
-            # The database was unreachable this time: the events wait for the next run.
-            logger.warning("Notifications not sent this run: %s", exc)
+            # The database was unreachable this time: the work waits for the next run.
+            logger.warning("Delivery worker run skipped: %s", exc)
         await asyncio.sleep(interval_seconds)
 
 
@@ -153,8 +203,12 @@ def _report_stopped(task: asyncio.Task) -> None:
 
 
 def start_worker(
-    session_factory: async_sessionmaker[AsyncSession], http: httpx.AsyncClient, internal_token: str, interval_seconds: int
+    session_factory: async_sessionmaker[AsyncSession],
+    http: httpx.AsyncClient,
+    internal_token: str,
+    heads: UnitHeads,
+    interval_seconds: int,
 ) -> asyncio.Task:
-    task = asyncio.get_running_loop().create_task(run_worker(session_factory, http, internal_token, interval_seconds))
+    task = asyncio.get_running_loop().create_task(run_worker(session_factory, http, internal_token, heads, interval_seconds))
     task.add_done_callback(_report_stopped)
     return task

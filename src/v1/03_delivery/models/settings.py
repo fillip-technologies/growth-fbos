@@ -29,6 +29,11 @@ class DeliverySettings(Base):
     # Off: a unit-limited read shows the whole company, and "own records only" shows just one's
     # own tasks and projects. Added by the migration `9c4f2e7a1b63`.
     team_visibility: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    # Alerts (services/sla_alerts.py, services/notifications.py): a task's time limit close or
+    # missed is told to its assignee and escalated to team heads, and team heads hear about new
+    # requests and handovers for their team. Off: only the people a task names hear about it.
+    # Added by the migration `b5e7c3a9d1f2`.
+    team_alerts: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
     updated_by: Mapped[Optional[uuid.UUID]] = mapped_column(UUIDType, nullable=True)
     updated_at: Mapped[datetime] = mapped_column(

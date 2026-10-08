@@ -1,6 +1,7 @@
 import asyncio
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager, suppress
+import logging
 
 from fastapi import FastAPI
 import httpx
@@ -13,6 +14,16 @@ from services.outbox_worker import start_worker
 from utils.timing import ServerTimingMiddleware
 
 
+# The service's own messages (the worker starting, notifications given up) reach the container
+# log from INFO up. Libraries keep Python's default (warnings), so httpx doesn't log every call.
+_log_handler = logging.StreamHandler()
+_log_handler.setFormatter(logging.Formatter("%(levelname)s:     %(name)s: %(message)s"))
+_delivery_log = logging.getLogger("delivery")
+_delivery_log.setLevel(logging.INFO)
+_delivery_log.addHandler(_log_handler)
+_delivery_log.propagate = False
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     async with httpx.AsyncClient(
@@ -20,12 +31,14 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     ) as http, httpx.AsyncClient(
         base_url=settings.communication_service_url, timeout=settings.notification_timeout_seconds
     ) as communication_http:
-        app.state.identity_client = IdentityClient(http, settings.internal_service_token)
+        identity = IdentityClient(http, settings.internal_service_token)
+        app.state.identity_client = identity
         await warm_pool()
         worker = None
         if settings.worker_enabled:
             worker = start_worker(
-                async_session_factory, communication_http, settings.internal_service_token, settings.worker_interval_seconds
+                async_session_factory, communication_http, settings.internal_service_token, identity,
+                settings.worker_interval_seconds,
             )
         yield
         if worker is not None:
