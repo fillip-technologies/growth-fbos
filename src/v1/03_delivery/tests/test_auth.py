@@ -213,3 +213,29 @@ async def test_an_unreachable_identity_is_unavailable():
 
     with pytest.raises(TeamMembersUnavailableError):
         await _people_client(handler).people(TEST_ORG_ID)
+
+
+async def test_the_actor_comes_with_its_units():
+    """Delivery asks for the units each code covers and the units the caller belongs to (services/views.py)."""
+    sales, team = uuid.uuid4(), uuid.uuid4()
+    seen: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        body = _actor_body(["delivery.task.read"])
+        body.update(unit_scopes={"delivery.task.read": [str(sales), str(team)]}, member_unit_ids=[str(team)])
+        return httpx.Response(200, json=body)
+
+    actor = await _people_client(handler).resolve_actor(TOKEN, None)
+    assert dict(seen[0].url.params) == {"with_units": "true"}
+    assert actor.units_for("delivery.task.read") == frozenset({sales, team})
+    assert actor.units_for("delivery.work_unit.read") is None
+    assert actor.member_unit_ids == frozenset({team})
+
+
+async def test_an_identity_without_units_limits_nothing():
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json=_actor_body(["delivery.task.read"]))
+
+    actor = await _people_client(handler).resolve_actor(TOKEN, None)
+    assert (actor.units_for("delivery.task.read"), actor.member_unit_ids) == (None, frozenset())

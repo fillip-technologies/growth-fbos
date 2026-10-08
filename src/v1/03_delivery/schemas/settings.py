@@ -11,6 +11,7 @@ class DeliverySettingsResponse(BaseModel):
     """The organization's delivery settings (models/settings.py says what each one does)."""
 
     team_assignment_only: bool
+    team_visibility: bool
     # 0 while every setting is still at its default; send it back as If-Match to change them.
     version: int
     updated_at: Optional[datetime] = None
@@ -21,6 +22,7 @@ class DeliverySettingsUpdate(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     team_assignment_only: Optional[bool] = None
+    team_visibility: Optional[bool] = None
 
 
 class AssignablePerson(BaseModel):

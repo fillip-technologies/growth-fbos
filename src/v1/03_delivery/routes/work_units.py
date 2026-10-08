@@ -5,6 +5,7 @@ from fastapi import APIRouter, Depends, Header, Query, Response, status
 
 import permissions
 import services.work_units as service
+from services.views import project_view
 from dependencies import CurrentActor, DatabaseSession, OrgId, UserId, require_permission
 from exceptions import PermissionDeniedError
 from schemas.common import PageResponse
@@ -48,9 +49,10 @@ CAN_DECIDE_CHANGES = Depends(require_permission(permissions.CHANGE_REQUEST_APPRO
 
 
 async def _work_unit_in_view(work_unit_id: uuid.UUID, actor: CurrentActor, session: DatabaseSession) -> None:
-    """Someone who may see only their own projects gets "not found" for anyone else's."""
-    if actor.only_own(permissions.WORK_UNIT_READ):
-        await service.ensure_own_work_unit(session, actor.organization_id, work_unit_id, actor.user_id)
+    """A project outside what someone may see (services/views.py) is "not found" for them."""
+    view = await project_view(session, actor)
+    if view is not None:
+        await service.ensure_work_unit_visible(session, actor.organization_id, work_unit_id, view)
 
 
 # On every /work-units/{work_unit_id} route, after the permission check.
@@ -142,10 +144,10 @@ async def list_work_units(
     cursor: Optional[str] = Query(None),
     sort: Optional[str] = Query(None),
 ) -> PageResponse[WorkUnitResponse]:
-    """List work units: only the caller's own when they may see no others."""
+    """List work units: only those the caller may see (services/views.py)."""
     return await service.list_work_units(
         session, org_id, status_, owning_unit_id, vertical_id, client_id, manager_user_id, health, q, limit, cursor,
-        own_records_of=actor.user_id if actor.only_own(permissions.WORK_UNIT_READ) else None,
+        view=await project_view(session, actor),
     )
 
 
