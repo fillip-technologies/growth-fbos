@@ -24,6 +24,8 @@ from services.access_control import Actor
 from services.auth_cache import auth_cache
 from services.rbac_service import rbac_service
 from services.unit_members import active_people, unit_heads, units_at_or_below, units_belonged_to
+from services.work_calendars import work_calendars
+from schemas.calendar import WorkCalendarsResponse
 
 # The most people one /internal/people answer carries.
 PEOPLE_LIMIT = 1000
@@ -321,6 +323,22 @@ async def list_unit_heads(
     """Other services (delivery) ask whom to tell about a team's work, and whom to escalate to above it."""
     verify_internal_caller(x_fbos_internal_token)
     return await unit_heads(db, organization_id, unit_id)
+
+
+@internal_router.get(
+    "/work-calendars",
+    response_model=WorkCalendarsResponse,
+    status_code=status.HTTP_200_OK,
+    summary="Which working calendar each unit of an organization follows (internal)",
+)
+async def list_work_calendars(
+    organization_id: uuid.UUID = Query(..., description="The organization whose calendars to name"),
+    x_fbos_internal_token: Optional[str] = Header(None, alias="X-FBOS-Internal-Token"),
+    db: AsyncSession = Depends(get_db_session),
+) -> WorkCalendarsResponse:
+    """Other services (delivery) count working time with these: time limits in working hours."""
+    verify_internal_caller(x_fbos_internal_token)
+    return await work_calendars(db, organization_id)
 
 
 async def _permission_catalog(db: AsyncSession) -> list[str]:

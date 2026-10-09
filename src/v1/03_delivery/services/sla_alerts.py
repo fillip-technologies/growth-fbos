@@ -12,9 +12,15 @@ Each level is told once (models/sla_alert.py). When several levels are reached a
 highest is told. A level reached long before it was seen (the worker was off, or the company
 just turned alerts on) is recorded without telling anyone, so nobody gets a flood about old
 work. A paused clock, and one already met or closed, alerts nobody.
+
+With the `working_hours` setting the clocks run in working time on the team's calendar, as the
+task page shows them. The calendars are read before the check's transaction opens; when an
+organization's are unknown right now (identity down, nothing remembered), its tasks wait for the
+next run rather than be measured around the clock.
 """
 from datetime import datetime, timedelta, timezone
 from typing import Optional
+import uuid
 
 from sqlalchemy import exists, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
@@ -23,8 +29,9 @@ from database.insert_ignore import insert_ignore
 from models.settings import DeliverySettings
 from models.sla_alert import SlaAlert
 from models.task import Task
+from services.calendars import OrgCalendars, working_calendars
 import services.notifications as notify
-from services.task_profiles import AT_RISK_PCT, load_profiles, resolution_sla, response_sla
+from services.task_profiles import AT_RISK_PCT, clock_add, load_profiles, resolution_sla, response_sla
 
 LEVELS = (("at_risk", AT_RISK_PCT), ("breached", 100.0), ("escalated", 150.0))
 # A level reached longer ago than this is recorded without telling anyone.
@@ -66,7 +73,22 @@ async def check_time_limits(session_factory: async_sessionmaker[AsyncSession], n
     """One run over the open tasks of organizations with alerts on. Returns how many alerts were told."""
     now = now or datetime.now(timezone.utc)
     async with session_factory() as session:
-        with_alerts = select(DeliverySettings.organization_id).where(DeliverySettings.team_alerts.is_(True))
+        settings = (
+            await session.execute(
+                select(DeliverySettings.organization_id, DeliverySettings.working_hours).where(
+                    DeliverySettings.team_alerts.is_(True)
+                )
+            )
+        ).all()
+    calendars: dict[uuid.UUID, Optional[OrgCalendars]] = {}
+    for org_id, counts_working_hours in settings:
+        if counts_working_hours:
+            calendars[org_id] = await working_calendars.of(org_id)
+    with_alerts = [org_id for org_id, _ in settings if not (org_id in calendars and calendars[org_id] is None)]
+    if not with_alerts:
+        return 0
+
+    async with session_factory() as session:
         fully_escalated = exists().where(
             SlaAlert.task_id == Task.id, SlaAlert.kind == "resolution", SlaAlert.level == "escalated"
         )
@@ -93,8 +115,10 @@ async def check_time_limits(session_factory: async_sessionmaker[AsyncSession], n
 
         told = 0
         for task in tasks:
+            org_calendars: Optional[OrgCalendars] = calendars.get(task.organization_id)
+            calendar = org_calendars.for_unit(task.owning_unit_id) if org_calendars else None
             for kind, clock in _CLOCKS:
-                sla = clock(task, profiles[task.task_type_id], now)
+                sla = clock(task, profiles[task.task_type_id], now, calendar)
                 if sla is None or sla["state"] not in ("at_risk", "breached"):
                     continue
                 reached = [
@@ -105,7 +129,7 @@ async def check_time_limits(session_factory: async_sessionmaker[AsyncSession], n
                     continue
                 highest = reached[-1][0]
                 for level, pct in reached:
-                    reached_at = sla["due_at"] + timedelta(minutes=sla["target_minutes"] * (pct / 100 - 1))
+                    reached_at = clock_add(task.created_at, sla["target_minutes"] * pct / 100 + sla["paused_minutes"], calendar)
                     tell = level == highest and now - reached_at <= TOO_LATE
                     inserted = await session.execute(
                         insert_ignore(SlaAlert).values(task_id=task.id, kind=kind, level=level, notified=tell, created_at=now)

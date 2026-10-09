@@ -56,6 +56,8 @@ class TaskSla(BaseModel):
     consumed_pct: float
     target_minutes: int
     paused_minutes: int = 0
+    # Counted in working time on the team's calendar (the organization's `working_hours` setting).
+    working_hours: bool = False
 
 
 # --- Tasks ---------------------------------------------------------------
