@@ -9,6 +9,7 @@ import httpx
 from config import settings
 from database.session import async_session_factory, dispose_engine, warm_pool
 from router import router
+from services.calendars import working_calendars
 from services.identity_client import IdentityClient
 from services.outbox_worker import start_worker
 from utils.timing import ServerTimingMiddleware
@@ -33,6 +34,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     ) as communication_http:
         identity = IdentityClient(http, settings.internal_service_token)
         app.state.identity_client = identity
+        working_calendars.start(identity)
         await warm_pool()
         worker = None
         if settings.worker_enabled:
@@ -45,6 +47,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             worker.cancel()
             with suppress(asyncio.CancelledError):
                 await worker
+        working_calendars.stop()
     await dispose_engine()
 
 

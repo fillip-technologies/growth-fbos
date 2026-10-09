@@ -63,6 +63,17 @@ class AuthServiceUnavailableError(DeliveryServiceError):
         )
 
 
+class WorkingCalendarsUnavailableError(DeliveryServiceError):
+    """503: Identity could not name the working calendars; time limits fall back to what is remembered."""
+
+    def __init__(self) -> None:
+        super().__init__(
+            status.HTTP_503_SERVICE_UNAVAILABLE,
+            "WORKING_CALENDARS_UNAVAILABLE",
+            "The working calendars could not be read right now. Try again shortly.",
+        )
+
+
 class TeamMembersUnavailableError(DeliveryServiceError):
     """503: Identity could not say who belongs to a team, so nobody is given its work yet."""
 

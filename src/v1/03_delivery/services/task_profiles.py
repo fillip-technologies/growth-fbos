@@ -5,9 +5,10 @@ Attributes not named by the type's fields pass through unchecked: the organizati
 fields for tasks (identity's field definitions, installed by vertical packs) live there too,
 and delivery can't read their schemas. Keys the service writes itself are refused from callers.
 
-SLA clocks run on calendar time from the task's creation, as the type's targets for the task's
-priority say. A block that pauses the SLA (`pause_sla`) stops the resolution clock until the
-task is unblocked. Business-hours calendars aren't applied yet.
+SLA clocks run from the task's creation, as the type's targets for the task's priority say:
+around the clock, or, given the team's working calendar (the organization's `working_hours`
+setting, services/calendars.py), in working time only. A block that pauses the SLA (`pause_sla`)
+stops the resolution clock until the task is unblocked; the pause is counted the same way.
 """
 
 import re
@@ -23,6 +24,7 @@ from exceptions import TaskAttributesInvalidError
 from models.task import Task
 from models.task_type_profile import TaskTypeProfile
 from schemas.task_types import RESERVED_ATTRIBUTE_KEYS, TaskField, TaskOutcome, TaskTypeBehaviour
+from services.work_calendar import WorkCalendar
 
 AT_RISK_PCT = 75.0
 _EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
@@ -212,31 +214,47 @@ def as_utc(moment: datetime) -> datetime:
     return moment.replace(tzinfo=timezone.utc) if moment.tzinfo is None else moment.astimezone(timezone.utc)
 
 
-def resolution_due_at(created_at: datetime, profile: Profile, priority: str, paused_minutes: int = 0) -> Optional[datetime]:
+def clock_minutes(start: datetime, end: datetime, calendar: Optional[WorkCalendar] = None) -> float:
+    """Minutes from `start` to `end`: working minutes on `calendar`, else every minute."""
+    if calendar is not None:
+        return calendar.minutes_between(as_utc(start), as_utc(end))
+    return (as_utc(end) - as_utc(start)).total_seconds() / 60
+
+
+def clock_add(start: datetime, minutes: float, calendar: Optional[WorkCalendar] = None) -> datetime:
+    """When `minutes` from `start` run out: working minutes on `calendar`, else every minute."""
+    if calendar is not None:
+        return calendar.add_minutes(as_utc(start), minutes)
+    return as_utc(start) + timedelta(minutes=minutes)
+
+
+def resolution_due_at(
+    created_at: datetime, profile: Profile, priority: str, paused_minutes: int = 0, calendar: Optional[WorkCalendar] = None
+) -> Optional[datetime]:
     target = profile.resolution_sla_minutes.get(priority)
     if not target:
         return None
-    return as_utc(created_at) + timedelta(minutes=target + paused_minutes)
+    return clock_add(created_at, target + paused_minutes, calendar)
 
 
-def paused_minutes(task: Task, until: datetime) -> int:
+def paused_minutes(task: Task, until: datetime, calendar: Optional[WorkCalendar] = None) -> int:
     """Minutes the resolution clock has been paused, including a pause still running."""
     attributes = task.attributes or {}
     total = int(attributes.get("sla_paused_minutes") or 0)
     since = attributes.get("sla_paused_since")
     if since:
-        total += max(0, int((until - as_utc(datetime.fromisoformat(since))).total_seconds() // 60))
+        total += max(0, int(clock_minutes(datetime.fromisoformat(since), until, calendar)))
     return total
 
 
-def resolution_sla(task: Task, profile: Profile, now: datetime) -> Optional[dict]:
+def resolution_sla(task: Task, profile: Profile, now: datetime, calendar: Optional[WorkCalendar] = None) -> Optional[dict]:
     target = profile.resolution_sla_minutes.get(task.priority)
     if not target or task.status == "cancelled":
         return None
     finished_at = as_utc(task.completed_at) if task.status == "done" and task.completed_at else None
-    paused = paused_minutes(task, finished_at or now)
-    due_at = as_utc(task.created_at) + timedelta(minutes=target + paused)
-    elapsed = ((finished_at or now) - as_utc(task.created_at)).total_seconds() / 60 - paused
+    paused = paused_minutes(task, finished_at or now, calendar)
+    due_at = clock_add(task.created_at, target + paused, calendar)
+    elapsed = clock_minutes(task.created_at, finished_at or now, calendar) - paused
     consumed = round(max(0.0, elapsed) / target * 100, 1)
     if finished_at:
         state = "met" if finished_at <= due_at else "breached_closed"
@@ -244,27 +262,33 @@ def resolution_sla(task: Task, profile: Profile, now: datetime) -> Optional[dict
         state = "paused"
     else:
         state = _running_state(consumed)
-    return {"kind": "resolution", "state": state, "due_at": due_at, "consumed_pct": consumed, "target_minutes": target, "paused_minutes": paused}
+    return {
+        "kind": "resolution", "state": state, "due_at": due_at, "consumed_pct": consumed, "target_minutes": target,
+        "paused_minutes": paused, "working_hours": calendar is not None,
+    }
 
 
-def response_sla(task: Task, profile: Profile, now: datetime) -> Optional[dict]:
+def response_sla(task: Task, profile: Profile, now: datetime, calendar: Optional[WorkCalendar] = None) -> Optional[dict]:
     """Time to first response: the task is started (picked up) within the target."""
     target = profile.response_sla_minutes.get(task.priority)
     if not target or task.status == "cancelled":
         return None
     created_at = as_utc(task.created_at)
-    due_at = created_at + timedelta(minutes=target)
+    due_at = clock_add(created_at, target, calendar)
     responded = (task.attributes or {}).get("responded_at")
     responded_at = as_utc(datetime.fromisoformat(responded)) if responded else None
     if responded_at is None and task.status == "done" and task.completed_at:
         responded_at = as_utc(task.completed_at)
-    elapsed = ((responded_at or now) - created_at).total_seconds() / 60
+    elapsed = clock_minutes(created_at, responded_at or now, calendar)
     consumed = round(max(0.0, elapsed) / target * 100, 1)
     if responded_at:
         state = "met" if responded_at <= due_at else "breached_closed"
     else:
         state = _running_state(consumed)
-    return {"kind": "response", "state": state, "due_at": due_at, "consumed_pct": consumed, "target_minutes": target, "paused_minutes": 0}
+    return {
+        "kind": "response", "state": state, "due_at": due_at, "consumed_pct": consumed, "target_minutes": target,
+        "paused_minutes": 0, "working_hours": calendar is not None,
+    }
 
 
 def _running_state(consumed_pct: float) -> str:

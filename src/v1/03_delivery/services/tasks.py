@@ -112,7 +112,9 @@ from schemas.tasks import (
 import permissions
 from services.assignees import PeopleDirectory, ensure_assignable, keep_if_assignable
 from services.assignment_policies import pick_assignee
-from services.settings import team_alerts
+from services.calendars import working_calendars
+from services.settings import team_alerts, working_hours
+from services.work_calendar import WorkCalendar
 import services.notifications as notify
 from services.identity_client import Actor
 from services.codes import next_task_code
@@ -123,6 +125,8 @@ from services.task_profiles import (
     as_utc,
     carried_attributes,
     clean_attributes,
+    clock_add,
+    clock_minutes,
     load_profile,
     load_profiles,
     merge_attributes,
@@ -229,14 +233,34 @@ async def _task_responses(session: AsyncSession, tasks: list[Task]) -> list[Task
     for item in items.scalars().all():
         checklists[item.task_id].append(_checklist_item_response(item))
     project_verticals = await _project_verticals(session, {t.work_unit_id for t in tasks if t.work_unit_id})
+    calendars = await _page_calendars(session, tasks)
     now = datetime.now(timezone.utc)
     return [
         _task_response(
             task, task_types[task.task_type_id], profiles[task.task_type_id], checklists[task.id], now,
-            _custom_field_scope(task, project_verticals),
+            _custom_field_scope(task, project_verticals), calendars.get(task.owning_unit_id),
         )
         for task in tasks
     ]
+
+
+async def _calendar_for(session: AsyncSession, org_id: uuid.UUID, unit_id: Optional[uuid.UUID]) -> Optional[WorkCalendar]:
+    """The working calendar a team's time limits run on; None: around the clock (or unknown right now)."""
+    if not await working_hours(session, org_id):
+        return None
+    calendars = await working_calendars.of(org_id)
+    return calendars.for_unit(unit_id) if calendars else None
+
+
+async def _page_calendars(session: AsyncSession, tasks: list[Task]) -> dict[Optional[uuid.UUID], Optional[WorkCalendar]]:
+    """The calendar of each team on a page of one organization's tasks; empty when it counts every minute."""
+    org_id = tasks[0].organization_id
+    if not await working_hours(session, org_id):
+        return {}
+    calendars = await working_calendars.of(org_id)
+    if calendars is None:
+        return {}
+    return {task.owning_unit_id: calendars.for_unit(task.owning_unit_id) for task in tasks}
 
 
 async def _project_verticals(session: AsyncSession, work_unit_ids: set[uuid.UUID]) -> dict[uuid.UUID, Optional[uuid.UUID]]:
@@ -260,10 +284,11 @@ def _task_response(
     checklist: list[ChecklistItemResponse],
     now: datetime,
     custom_field_scope: CustomFieldScope,
+    calendar: Optional[WorkCalendar] = None,
 ) -> TaskResponse:
     attributes = task.attributes or {}
-    resolution = resolution_sla(task, profile, now)
-    response = response_sla(task, profile, now)
+    resolution = resolution_sla(task, profile, now, calendar)
+    response = response_sla(task, profile, now, calendar)
     follow_up_task_id = attributes.get("follow_up_task_id")
     return TaskResponse(
         id=task.id,
@@ -757,7 +782,7 @@ async def _insert_task(
     A new task with its checklist, first assignment and first history entry. Without a due
     date of its own, a task whose type has a resolution SLA is due when the SLA runs out.
     """
-    sla_due = resolution_due_at(created_at, profile, priority)
+    sla_due = resolution_due_at(created_at, profile, priority, calendar=await _calendar_for(session, org_id, owning_unit_id))
     if due_at is None and sla_due is not None:
         due_at = sla_due
         attributes = {**attributes, "due_from_sla": True}
@@ -913,7 +938,8 @@ async def update_task(
         if attrs.get("due_from_sla"):
             # The SLA-given due date follows the new priority's target.
             now = datetime.now(timezone.utc)
-            task.due_at = resolution_due_at(task.created_at, profile, task.priority, paused_minutes(task, now))
+            calendar = await _calendar_for(session, org_id, task.owning_unit_id)
+            task.due_at = resolution_due_at(task.created_at, profile, task.priority, paused_minutes(task, now, calendar), calendar)
             if task.due_at is None:
                 attrs.pop("due_from_sla", None)
     task.attributes = attrs
@@ -1100,7 +1126,7 @@ async def unblock_task(session: AsyncSession, org_id: uuid.UUID, actor: Actor, t
         raise InvalidStateTransitionError(task.status, "in_progress")
 
     now = datetime.now(timezone.utc)
-    _end_sla_pause(task, now)
+    _end_sla_pause(task, now, await _calendar_for(session, org_id, task.owning_unit_id))
     attrs = dict(task.attributes or {})
     attrs.pop("blocked_reason", None)
     attrs.pop("blocked_by_task_id", None)
@@ -1114,16 +1140,19 @@ async def unblock_task(session: AsyncSession, org_id: uuid.UUID, actor: Actor, t
     return await _build_task_response(session, task)
 
 
-def _end_sla_pause(task: Task, now: datetime) -> None:
-    """Add a running pause to the paused total; an SLA-given due date moves out by as much."""
+def _end_sla_pause(task: Task, now: datetime, calendar: Optional[WorkCalendar]) -> None:
+    """
+    Add a running pause to the paused total (working minutes, given the team's calendar); an
+    SLA-given due date moves out by as much.
+    """
     attrs = dict(task.attributes or {})
     since = attrs.pop("sla_paused_since", None)
     if not since:
         return
-    paused = max(0, int((now - as_utc(datetime.fromisoformat(since))).total_seconds() // 60))
+    paused = max(0, int(clock_minutes(datetime.fromisoformat(since), now, calendar)))
     attrs["sla_paused_minutes"] = int(attrs.get("sla_paused_minutes") or 0) + paused
     if attrs.get("due_from_sla") and task.due_at is not None:
-        task.due_at = as_utc(task.due_at) + timedelta(minutes=paused)
+        task.due_at = clock_add(task.due_at, paused, calendar)
     task.attributes = attrs
 
 

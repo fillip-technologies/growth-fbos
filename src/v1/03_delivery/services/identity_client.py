@@ -14,11 +14,17 @@ import uuid
 
 import httpx
 
-from exceptions import AuthServiceUnavailableError, DeliveryServiceError, TeamMembersUnavailableError
+from exceptions import (
+    AuthServiceUnavailableError,
+    DeliveryServiceError,
+    TeamMembersUnavailableError,
+    WorkingCalendarsUnavailableError,
+)
 
 ACTOR_PATH = "/api/identity/v1/internal/authz/actor"
 PEOPLE_PATH = "/api/identity/v1/internal/people"
 UNIT_HEADS_PATH = "/api/identity/v1/internal/unit-heads"
+WORK_CALENDARS_PATH = "/api/identity/v1/internal/work-calendars"
 
 
 @dataclass(frozen=True)
@@ -149,6 +155,25 @@ class IdentityClient:
             raise TeamMembersUnavailableError()
         heads = [uuid.UUID(u["head_user_id"]) for u in response.json()["data"] if u.get("head_user_id")]
         return list(dict.fromkeys(heads))
+
+
+    async def work_calendars(self, organization_id: uuid.UUID) -> dict[str, Any]:
+        """
+        Which working calendar each of the organization's units follows, with the calendars
+        (identity's /internal/work-calendars). An organization identity doesn't know has none.
+        """
+        headers = {"X-FBOS-Internal-Token": self._internal_token} if self._internal_token else {}
+        try:
+            response = await self._http.get(
+                WORK_CALENDARS_PATH, params={"organization_id": str(organization_id)}, headers=headers
+            )
+        except httpx.HTTPError as exc:
+            raise WorkingCalendarsUnavailableError() from exc
+        if response.status_code == 404 and _error_code(response) == "ORGANIZATION_NOT_FOUND":
+            return {}
+        if response.status_code >= 400:
+            raise WorkingCalendarsUnavailableError()
+        return response.json()
 
 
 def _error_code(response: httpx.Response) -> Optional[str]:
