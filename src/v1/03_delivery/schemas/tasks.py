@@ -56,6 +56,8 @@ class TaskSla(BaseModel):
     consumed_pct: float
     target_minutes: int
     paused_minutes: int = 0
+    # Counted in working time on the team's calendar (the organization's `working_hours` setting).
+    working_hours: bool = False
 
 
 # --- Tasks ---------------------------------------------------------------
@@ -451,3 +453,5 @@ class RecurringRuleResponse(BaseModel):
     next_run_at: Optional[datetime] = None
     ends_at: Optional[datetime] = None
     status: Literal["active", "paused", "ended"]
+    # When the worker last made a task from the rule.
+    last_run_at: Optional[datetime] = None

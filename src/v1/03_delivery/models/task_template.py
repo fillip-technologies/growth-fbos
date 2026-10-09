@@ -54,7 +54,8 @@ class TaskTemplate(Base):
 
 class RecurringTaskRule(Base):
     """
-    Recurrence schedule generator (RRULE) that periodically spawns tasks from a template.
+    Recurrence schedule generator (RRULE) that periodically spawns tasks from a template: the
+    worker creates one at each occurrence (services/recurring.py), moving `next_run_at` on.
     """
 
     __tablename__ = "recurring_task_rules"
@@ -72,3 +73,8 @@ class RecurringTaskRule(Base):
     next_run_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, index=True)
     ends_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
     status: Mapped[str] = mapped_column(String(50), nullable=False, default="active", index=True)
+    # Where the series begins (the RRULE's DTSTART, so INTERVAL and COUNT keep their place);
+    # rules made before it was kept start from their `next_run_at`. Added by `d4b9f2a7c6e1`.
+    series_start: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    # When the worker last created a task from the rule.
+    last_run_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)

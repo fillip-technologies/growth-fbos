@@ -34,6 +34,10 @@ class DeliverySettings(Base):
     # requests and handovers for their team. Off: only the people a task names hear about it.
     # Added by the migration `b5e7c3a9d1f2`.
     team_alerts: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    # Time limits count working time (services/calendars.py): the team's working calendar, else
+    # the company's, leaves nights, days off and holidays out. Off: they run around the clock.
+    # Added by the migration `c3a8e6f1b2d7`.
+    working_hours: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
     updated_by: Mapped[Optional[uuid.UUID]] = mapped_column(UUIDType, nullable=True)
     updated_at: Mapped[datetime] = mapped_column(
