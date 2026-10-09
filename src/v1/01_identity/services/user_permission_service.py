@@ -319,15 +319,15 @@ class UserPermissionService:
             row.granted_by_id = actor.user_id
             row.granted_at = datetime.now(timezone.utc)
 
-        # A preset record stays only while the user still holds all of that role's
-        # permissions in its scope; otherwise it would misreport where access came from.
+        # The request's presets are the complete set of role presets: drop the existing
+        # records and record the ones sent, so a preset can be removed even while another
+        # role still covers its permissions.
         existing_presets = (
             await session.execute(select(RoleAssignment).where(RoleAssignment.user_id == user.id))
         ).unique().scalars().all()
         for assignment in existing_presets:
-            role_codes = {rp.permission_code for rp in assignment.role.role_permissions} if assignment.role else set()
-            if not role_codes or any((code, assignment.scope_unit_id) not in wanted for code in role_codes):
-                await session.delete(assignment)
+            await session.delete(assignment)
+        await session.flush()
         self.add_to_user(session, actor, user, added, presets, reason)
         return sorted({g.code for g in added + changed}), sorted({r.permission_code for r in removed_rows})
 
