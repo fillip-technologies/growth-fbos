@@ -763,10 +763,11 @@ class UserService:
             )
 
         grants, presets = await user_permission_service.resolve(
-            session, user.organization_id, data.permissions, data.role_assignments
+            session, user.organization_id, data.permissions, data.role_assignments or []
         )
         added, removed = await user_permission_service.replace_for_user(
-            session, actor, user, grants, presets, data.reason
+            session, actor, user, grants, presets, data.reason,
+            replace_presets=data.role_assignments is not None,
         )
         await session.commit()
 

@@ -651,3 +651,45 @@ async def test_preset_record_survives_edits_until_its_permissions_are_removed(as
     )
     assert [p["code"] for p in res.json()["permissions"]] == ["identity.user.read"]
     assert await presets() == []
+
+
+@pytest.mark.asyncio
+async def test_sent_presets_replace_the_users_presets_even_when_another_role_covers_them(async_client, db_session):
+    broad = Role(id=uuid.uuid4(), organization_id=TEST_ORG_ID, code="broad", name="Broad", version=1)
+    narrow = Role(id=uuid.uuid4(), organization_id=TEST_ORG_ID, code="narrow", name="Narrow", version=1)
+    db_session.add_all([broad, narrow])
+    await db_session.commit()
+    await async_client.put(
+        f"{API}/roles/{broad.id}/permissions",
+        json={"permissions": ["identity.user.read", "identity.org_unit.read"]}, headers={"If-Match": '"1"'},
+    )
+    await async_client.put(
+        f"{API}/roles/{narrow.id}/permissions", json={"permissions": ["identity.user.read"]}, headers={"If-Match": '"1"'},
+    )
+    user = (await async_client.post(
+        f"{API}/users",
+        json={"name": "M", "email": "m@example.com", "role_assignments": [{"role_code": "broad"}, {"role_code": "narrow"}]},
+    )).json()
+
+    async def presets() -> list[str]:
+        res = await async_client.get(f"{API}/role-assignments", params={"user_id": user["id"]})
+        return sorted(a["role"]["code"] for a in res.json()["data"])
+
+    assert await presets() == ["broad", "narrow"]
+    held = [{"code": "identity.user.read"}, {"code": "identity.org_unit.read"}]
+
+    # Removing one preset keeps the other, though the remaining role still covers it.
+    res = await async_client.put(
+        f"{API}/users/{user['id']}/permissions",
+        json={"permissions": held, "role_assignments": [{"role_code": "broad"}], "reason": "drop narrow"},
+    )
+    assert res.status_code == 200
+    assert await presets() == ["broad"]
+
+    # Sending none removes them all and leaves the permissions as sent.
+    res = await async_client.put(
+        f"{API}/users/{user['id']}/permissions", json={"permissions": held, "role_assignments": [], "reason": "none"},
+    )
+    assert res.status_code == 200
+    assert await presets() == []
+    assert sorted(p["code"] for p in res.json()["permissions"]) == ["identity.org_unit.read", "identity.user.read"]
