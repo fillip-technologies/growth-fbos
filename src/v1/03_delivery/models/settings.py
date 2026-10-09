@@ -38,6 +38,10 @@ class DeliverySettings(Base):
     # the company's, leaves nights, days off and holidays out. Off: they run around the clock.
     # Added by the migration `c3a8e6f1b2d7`.
     working_hours: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    # A finished sales task (a call, an email, a meeting) about a lead, opportunity or contract
+    # is logged on its activity timeline in revenue (services/revenue_activities.py). Off: people
+    # log them there by hand. Added by the migration `f1b6d4a8c2e7`.
+    revenue_activities: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
     updated_by: Mapped[Optional[uuid.UUID]] = mapped_column(UUIDType, nullable=True)
     updated_at: Mapped[datetime] = mapped_column(

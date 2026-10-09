@@ -31,7 +31,9 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         base_url=settings.identity_service_url, timeout=settings.identity_timeout_seconds
     ) as http, httpx.AsyncClient(
         base_url=settings.communication_service_url, timeout=settings.notification_timeout_seconds
-    ) as communication_http:
+    ) as communication_http, httpx.AsyncClient(
+        base_url=settings.revenue_service_url, timeout=settings.notification_timeout_seconds
+    ) as revenue_http:
         identity = IdentityClient(http, settings.internal_service_token)
         app.state.identity_client = identity
         working_calendars.start(identity)
@@ -40,7 +42,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         if settings.worker_enabled:
             worker = start_worker(
                 async_session_factory, communication_http, settings.internal_service_token, identity, identity,
-                settings.worker_interval_seconds,
+                settings.worker_interval_seconds, revenue_http if settings.revenue_service_url else None,
             )
         yield
         if worker is not None:

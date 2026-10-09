@@ -23,13 +23,15 @@ async def _settings_row(session: AsyncSession, org_id: uuid.UUID) -> Optional[De
 def _response(row: Optional[DeliverySettings]) -> DeliverySettingsResponse:
     if row is None:
         return DeliverySettingsResponse(
-            team_assignment_only=False, team_visibility=False, team_alerts=False, working_hours=False, version=0
+            team_assignment_only=False, team_visibility=False, team_alerts=False, working_hours=False,
+            revenue_activities=False, version=0,
         )
     return DeliverySettingsResponse(
         team_assignment_only=row.team_assignment_only,
         team_visibility=row.team_visibility,
         team_alerts=row.team_alerts,
         working_hours=row.working_hours,
+        revenue_activities=row.revenue_activities,
         version=row.version,
         updated_at=row.updated_at,
         updated_by=user_ref(row.updated_by),
@@ -60,6 +62,11 @@ async def working_hours(session: AsyncSession, org_id: uuid.UUID) -> bool:
     return row is not None and row.working_hours
 
 
+async def revenue_activities(session: AsyncSession, org_id: uuid.UUID) -> bool:
+    row = await _settings_row(session, org_id)
+    return row is not None and row.revenue_activities
+
+
 async def update_settings(
     session: AsyncSession,
     org_id: uuid.UUID,
@@ -73,7 +80,8 @@ async def update_settings(
 
     if row is None:
         row = DeliverySettings(
-            organization_id=org_id, team_assignment_only=False, team_visibility=False, team_alerts=False, working_hours=False
+            organization_id=org_id, team_assignment_only=False, team_visibility=False, team_alerts=False,
+            working_hours=False, revenue_activities=False,
         )
         session.add(row)
     if data.team_assignment_only is not None:
@@ -84,6 +92,8 @@ async def update_settings(
         row.team_alerts = data.team_alerts
     if data.working_hours is not None:
         row.working_hours = data.working_hours
+    if data.revenue_activities is not None:
+        row.revenue_activities = data.revenue_activities
     row.version = current_version + 1
     row.updated_by = user_id
     row.updated_at = datetime.now(timezone.utc)

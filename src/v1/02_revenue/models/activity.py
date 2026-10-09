@@ -2,7 +2,7 @@ import uuid
 from datetime import datetime
 from typing import Optional
 
-from sqlalchemy import DateTime, String, Text
+from sqlalchemy import DateTime, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column
 
 from database.base import Base
@@ -16,6 +16,8 @@ class Activity(Base):
     """
 
     __tablename__ = "activities"
+    # One activity per record another service logs it from (a delivery task): a resend finds it.
+    __table_args__ = (UniqueConstraint("organization_id", "source_type", "source_id", name="uq_activities_source"),)
 
     id: Mapped[uuid.UUID] = mapped_column(UUIDType, primary_key=True, default=uuid.uuid4)
     organization_id: Mapped[uuid.UUID] = mapped_column(UUIDType, nullable=False, index=True)
@@ -27,3 +29,7 @@ class Activity(Base):
     outcome_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
     summary: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     outcome: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    # Logged from another service's record (a finished delivery task, "task.task"); none when typed in.
+    # Added by the migration `a7d3c9e1f5b2`.
+    source_type: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
+    source_id: Mapped[Optional[uuid.UUID]] = mapped_column(UUIDType, nullable=True)

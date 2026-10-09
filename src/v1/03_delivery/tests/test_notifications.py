@@ -134,7 +134,7 @@ def sessions(test_engine) -> async_sessionmaker[AsyncSession]:
 
 async def add_event(sessions, **values) -> uuid.UUID:
     event = OutboxEvent(
-        organization_id=TEST_ORG_ID, event_type="delivery.task.assigned.v1",
+        organization_id=TEST_ORG_ID, event_type=values.pop("event_type", "delivery.task.assigned.v1"),
         payload=values.pop(
             "payload", {"recipient_user_ids": [str(WORKER)], "title": "Assigned to you", "body": "", "action_url": "/tasks/x"}
         ),
