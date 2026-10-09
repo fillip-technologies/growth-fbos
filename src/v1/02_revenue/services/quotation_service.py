@@ -1,10 +1,9 @@
-import json
-import uuid
-from datetime import datetime, timezone
-from decimal import Decimal, InvalidOperation
+from dataclasses import dataclass
+from datetime import date, datetime, timezone
 from typing import List, Optional
+import uuid
 
-from sqlalchemy import func, select
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from exceptions import (
@@ -16,7 +15,12 @@ from exceptions import (
     QuotationNotFoundError,
     VersionConflictError,
 )
+from finance import policies
+from finance.money import ZERO, as_float, to_decimal
+from finance.numbering import next_document_number
+from finance.tax.store import load_snapshot
 from models.client import Client
+from models.document_tax import DocumentTaxLine
 from models.offering import Offering
 from models.opportunity import Opportunity
 from models.quotation import NegotiationNote, Quotation, QuotationItem
@@ -31,124 +35,161 @@ from schemas.quotation import (
     QuotationResponse,
     QuotationTotals,
 )
+from schemas.tax import LineTax, TaxAmount, WithholdingPreview
+from services.tax_service import (
+    DocumentLineSpec,
+    TaxCalculation,
+    calculate_document,
+    copy_tax_lines,
+    legacy_rate,
+    legacy_split,
+    load_tax_lines,
+    replace_tax_lines,
+    totals_of,
+    withholding_json,
+)
 
 
-def calculate_tax_and_totals(
-    items_input: List[QuotationItemInput],
-    offerings_map: dict[uuid.UUID, Offering],
-    place_of_supply: str,
-    org_state_code: str = "29",
-) -> tuple[List[dict], QuotationTotals]:
-    """Calculate subtotal, discount, taxable value, GST split (CGST+SGST vs IGST), and totals."""
-    processed_items = []
-    subtotal_acc = Decimal("0.00")
-    discount_acc = Decimal("0.00")
-    taxable_acc = Decimal("0.00")
-    cgst_acc = Decimal("0.00")
-    sgst_acc = Decimal("0.00")
-    igst_acc = Decimal("0.00")
+QUOTATION_DOCUMENT = "quotation"  # DocumentTaxLine.document_type
 
-    is_inter_state = place_of_supply.strip() != org_state_code.strip()
 
-    for idx, item in enumerate(items_input, start=1):
-        offering = offerings_map.get(item.offering_id)
+@dataclass(frozen=True)
+class _QuotedItem:
+    offering: Offering
+    description: str
+    spec: DocumentLineSpec
+
+
+async def _quoted_items(session: AsyncSession, org_id: uuid.UUID, items: List[QuotationItemInput]) -> list[_QuotedItem]:
+    offering_ids = {item.offering_id for item in items}
+    rows = await session.execute(select(Offering).where(Offering.id.in_(offering_ids), Offering.organization_id == org_id))
+    offerings = {offering.id: offering for offering in rows.scalars().all()}
+    quoted = []
+    for line_no, item in enumerate(items, start=1):
+        offering = offerings.get(item.offering_id)
         if not offering:
             raise OfferingNotFoundError(str(item.offering_id))
+        unit_price = item.unit_price.amount if item.unit_price is not None else (offering.list_price or 0)
+        quoted.append(_QuotedItem(
+            offering=offering,
+            description=item.description or offering.name,
+            spec=DocumentLineSpec(
+                line_no=line_no,
+                quantity=to_decimal(item.quantity),
+                unit_price=to_decimal(unit_price),
+                discount_percent=to_decimal(item.discount_pct),
+                category_code=offering.tax_category_code,
+                legacy_rate=None if offering.tax_category_code else legacy_rate(offering.gst_code),
+                classification_code=offering.sac_code,
+            ),
+        ))
+    return quoted
 
-        if item.unit_price is not None:
-            unit_price_val = Decimal(str(item.unit_price.amount))
-        elif offering.list_price is not None:
-            unit_price_val = Decimal(str(offering.list_price))
-        else:
-            unit_price_val = Decimal("0.00")
 
-        qty = Decimal(str(item.quantity))
-        disc_pct = Decimal(str(item.discount_pct))
-
-        raw_subtotal = qty * unit_price_val
-        disc_amount = (raw_subtotal * disc_pct) / Decimal("100.00")
-        taxable_value = raw_subtotal - disc_amount
-
-        try:
-            gst_rate_val = Decimal(str(offering.gst_code or "18.0"))
-        except InvalidOperation:
-            gst_rate_val = Decimal("18.0")
-
-        if is_inter_state:
-            item_cgst = Decimal("0.00")
-            item_sgst = Decimal("0.00")
-            item_igst = (taxable_value * gst_rate_val) / Decimal("100.00")
-        else:
-            half_rate = gst_rate_val / Decimal("2.00")
-            item_cgst = (taxable_value * half_rate) / Decimal("100.00")
-            item_sgst = (taxable_value * half_rate) / Decimal("100.00")
-            item_igst = Decimal("0.00")
-
-        line_total = taxable_value + item_cgst + item_sgst + item_igst
-
-        subtotal_acc += raw_subtotal
-        discount_acc += disc_amount
-        taxable_acc += taxable_value
-        cgst_acc += item_cgst
-        sgst_acc += item_sgst
-        igst_acc += item_igst
-
-        processed_items.append(
-            {
-                "line_no": idx,
-                "offering_id": offering.id,
-                "description": item.description or offering.name,
-                "quantity": float(qty),
-                "unit": offering.unit or "project",
-                "unit_price": Money(amount=float(unit_price_val), currency="INR"),
-                "discount_pct": float(disc_pct),
-                "taxable_value": Money(amount=float(taxable_value), currency="INR"),
-                "gst_rate": float(gst_rate_val),
-                "sac_code": offering.sac_code,
-                "line_total": Money(amount=float(line_total), currency="INR"),
-                "billing_model": offering.billing_model,
-                "cgst": item_cgst,
-                "sgst": item_sgst,
-                "igst": item_igst,
-            }
-        )
-
-    grand_total = taxable_acc + cgst_acc + sgst_acc + igst_acc
-    totals = QuotationTotals(
-        subtotal=Money(amount=float(subtotal_acc), currency="INR"),
-        discount_total=Money(amount=float(discount_acc), currency="INR"),
-        taxable_total=Money(amount=float(taxable_acc), currency="INR"),
-        cgst=Money(amount=float(cgst_acc), currency="INR"),
-        sgst=Money(amount=float(sgst_acc), currency="INR"),
-        igst=Money(amount=float(igst_acc), currency="INR"),
-        grand_total=Money(amount=float(grand_total), currency="INR"),
+async def _stored_items_as_quoted(session: AsyncSession, org_id: uuid.UUID, items: list[QuotationItem]) -> list[_QuotedItem]:
+    rows = await session.execute(
+        select(Offering).where(Offering.id.in_({item.offering_id for item in items}), Offering.organization_id == org_id)
     )
-    return processed_items, totals
+    offerings = {offering.id: offering for offering in rows.scalars().all()}
+    return [
+        _QuotedItem(
+            offering=offerings[item.offering_id],
+            description=item.description or offerings[item.offering_id].name,
+            spec=DocumentLineSpec(
+                line_no=item.line_no,
+                quantity=to_decimal(item.quantity),
+                unit_price=to_decimal(item.unit_price),
+                discount_percent=to_decimal(item.discount_pct),
+                category_code=item.tax_category_code,
+                classification_code=offerings[item.offering_id].sac_code,
+            ),
+        )
+        for item in items
+    ]
+
+
+async def _calculate(
+    session: AsyncSession, org_id: uuid.UUID, client: Client, quoted: list[_QuotedItem], quote: Quotation
+) -> TaxCalculation:
+    return await calculate_document(
+        session, org_id, client, [item.spec for item in quoted], date.today(), QUOTATION_DOCUMENT, quote.currency,
+        quote.tax_registration_id, quote.place_of_supply,
+    )
+
+
+async def _store_calculation(
+    session: AsyncSession, org_id: uuid.UUID, quote: Quotation, quoted: list[_QuotedItem], calculation: TaxCalculation
+) -> list[QuotationItem]:
+    """Write totals, items and frozen tax lines from a calculation, replacing any previous ones."""
+    result = calculation.result
+    quote.tax_registration_id = calculation.registration.id
+    quote.place_of_supply = result.place_of_supply or quote.place_of_supply
+    quote.supply_type = result.supply_type
+    quote.config_revision = result.config_revision
+    quote.subtotal = result.subtotal
+    quote.discount_total = result.discount_total
+    quote.tax_total = result.tax_total
+    quote.round_off = result.round_off
+    quote.grand_total = result.grand_total
+    quote.tax_notes = list(result.notes)
+    quote.withholding = withholding_json(result)
+
+    old_items = await session.execute(select(QuotationItem).where(QuotationItem.quotation_id == quote.id))
+    for old_item in old_items.scalars().all():
+        await session.delete(old_item)
+    items = [
+        QuotationItem(
+            quotation_id=quote.id, offering_id=item.offering.id, line_no=line.line_no, description=item.description,
+            quantity=item.spec.quantity, unit=item.offering.unit or "project", unit_price=item.spec.unit_price,
+            discount_pct=item.spec.discount_percent, gst_rate=line.effective_percent, net_price=line.taxable_value,
+            billing_model=item.offering.billing_model, line_total=line.line_total, tax_category_code=line.category_code,
+        )
+        for line, item in zip(result.lines, quoted)
+    ]
+    session.add_all(items)
+    await replace_tax_lines(session, org_id, QUOTATION_DOCUMENT, quote.id, result)
+    await session.flush()
+    return items
+
+
+def _money(amount, currency: str) -> Money:
+    return Money(amount=as_float(to_decimal(amount)), currency=currency)
 
 
 def format_quotation_response(
     quote: Quotation,
     client: Client,
     items: List[QuotationItem],
-    totals: QuotationTotals,
+    tax_lines: list[DocumentTaxLine],
 ) -> QuotationResponse:
+    currency = quote.currency
+    totals = totals_of(tax_lines)
+    split = legacy_split(totals)
     item_responses = [
         QuotationItemResponse(
-            line_no=it.line_no,
-            offering_id=it.offering_id,
-            description=it.description,
-            quantity=float(it.quantity),
-            unit=it.unit or "project",
-            unit_price=Money(amount=float(it.unit_price), currency=quote.currency),
-            discount_pct=float(it.discount_pct),
-            taxable_value=Money(amount=float(it.net_price), currency=quote.currency),
-            gst_rate=float(it.gst_rate),
+            line_no=item.line_no,
+            offering_id=item.offering_id,
+            description=item.description,
+            quantity=float(item.quantity),
+            unit=item.unit or "project",
+            unit_price=_money(item.unit_price, currency),
+            discount_pct=float(item.discount_pct),
+            taxable_value=_money(item.net_price, currency),
+            gst_rate=float(item.gst_rate),
             sac_code=None,
-            line_total=Money(amount=float(it.line_total), currency=quote.currency),
+            line_total=_money(item.line_total, currency),
+            tax_category_code=item.tax_category_code,
+            taxes=[
+                LineTax(component_code=tax.component_code, label=tax.label, behaviour=tax.behaviour,
+                        rate=as_float(to_decimal(tax.rate_percent)), amount=_money(tax.tax_amount, currency),
+                        base=_money(tax.base_amount, currency), rule_code=tax.rule_code)
+                for tax in tax_lines
+                if tax.line_no == item.line_no
+            ],
         )
-        for it in items
+        for item in items
     ]
-
+    withheld = sum((to_decimal(entry["amount"]) for entry in quote.withholding or []), ZERO)
     return QuotationResponse(
         id=quote.id,
         quote_no=quote.quote_no,
@@ -158,17 +199,59 @@ def format_quotation_response(
         client=ClientRef(id=client.id, name=client.name),
         status=quote.status,
         valid_until=quote.completed_at.date() if quote.completed_at else datetime.now(timezone.utc).date(),
-        currency=quote.currency,
-        place_of_supply=quote.place_of_supply or "29",
+        currency=currency,
+        place_of_supply=quote.place_of_supply or "",
         items=item_responses,
-        totals=totals,
+        totals=QuotationTotals(
+            subtotal=_money(quote.subtotal, currency),
+            discount_total=_money(quote.discount_total, currency),
+            taxable_total=_money(to_decimal(quote.subtotal) - to_decimal(quote.discount_total), currency),
+            cgst=_money(split["cgst"], currency),
+            sgst=_money(split["sgst"], currency),
+            igst=_money(split["igst"], currency),
+            grand_total=_money(quote.grand_total, currency),
+            taxes=[
+                TaxAmount(component_code=total.component_code, label=total.label, behaviour=total.behaviour,
+                          rate=as_float(total.percent), amount=_money(total.amount, currency))
+                for total in totals
+            ],
+            tax_total=_money(quote.tax_total, currency),
+            round_off=_money(quote.round_off, currency),
+        ),
         approval_request_id=quote.approved_request_id,
         pdf_document_id=None,
         terms=quote.summary,
         sent_at=quote.completed_at if quote.status in ("sent", "accepted", "rejected") else None,
         accepted_at=quote.completed_at if quote.status == "accepted" else None,
         version=quote.version,
+        supply_type=quote.supply_type,
+        tax_notes=list(quote.tax_notes or []),
+        withholding=[
+            WithholdingPreview(
+                section_code=entry["section_code"], statute_ref=entry["statute_ref"], payment_code=entry.get("payment_code"),
+                rate=float(entry["percent"]), base=_money(entry["base"], currency), amount=_money(entry["amount"], currency),
+                certificate_no=entry.get("certificate_no"),
+            )
+            for entry in quote.withholding or []
+        ],
+        net_receivable=_money(to_decimal(quote.grand_total) - withheld, currency),
     )
+
+
+async def _quote_number(session: AsyncSession, org_id: uuid.UUID, on: date) -> str:
+    snapshot = await load_snapshot(session, org_id, on)
+    settings = await policies.load_settings(session, org_id)
+
+    async def numbers_used() -> list[str]:
+        rows = await session.execute(
+            select(Quotation.quote_no).join(Client, Client.id == Quotation.client_id).where(Client.organization_id == org_id)
+        )
+        return list(rows.scalars().all())
+
+    _, number = await next_document_number(
+        session, org_id, "quotation", on, snapshot, policies.fiscal_year_start(settings, None), numbers_used
+    )
+    return number
 
 
 async def get_quote_in_org(session: AsyncSession, org_id: uuid.UUID, quotation_id: uuid.UUID) -> Quotation:
@@ -207,78 +290,29 @@ class QuotationService:
             raise OpportunityNotFoundError(str(opportunity_id))
 
         client = await session.get(Client, opp.client_id)
-
-        # Determine place of supply
-        place_of_supply = payload.place_of_supply
-        if not place_of_supply and client and client.billing_address:
-            try:
-                addr_dict = json.loads(client.billing_address) if isinstance(client.billing_address, str) else client.billing_address
-                place_of_supply = addr_dict.get("state_code", "29")
-            except (json.JSONDecodeError, AttributeError, TypeError):
-                place_of_supply = "29"
-        if not place_of_supply:
-            place_of_supply = "29"
-
-        # Fetch offerings
-        offering_ids = [it.offering_id for it in payload.items]
-        off_res = await session.execute(select(Offering).where(Offering.id.in_(offering_ids)))
-        offerings_map = {o.id: o for o in off_res.scalars().all()}
-
-        processed_items, totals = calculate_tax_and_totals(
-            items_input=payload.items,
-            offerings_map=offerings_map,
-            place_of_supply=place_of_supply,
-        )
-
-        current_year = datetime.now(timezone.utc).year
-        count_res = await session.execute(select(func.count(Quotation.id)))
-        q_count = (count_res.scalar_one() or 0) + 1
-        quote_no = f"QT-{current_year}-{q_count:04d}"
-
-        valid_until_dt = datetime.combine(payload.valid_until, datetime.min.time())
+        quoted = await _quoted_items(session, org_id, payload.items)
 
         quote = Quotation(
             opportunity_id=opp.id,
             client_id=client.id,
-            quote_no=quote_no,
+            quote_no=await _quote_number(session, org_id, date.today()),
             revision_no=1,
             currency="INR",
             summary=payload.terms,
-            place_of_supply=place_of_supply,
-            subtotal=totals.subtotal.amount,
-            discount_total=totals.discount_total.amount,
-            tax_total=totals.cgst.amount + totals.sgst.amount + totals.igst.amount,
-            grand_total=totals.grand_total.amount,
+            place_of_supply=payload.place_of_supply,
+            tax_registration_id=payload.tax_registration_id,
             status="draft",
-            completed_at=valid_until_dt,
+            completed_at=datetime.combine(payload.valid_until, datetime.min.time()),
             version=1,
         )
         if payload.created_on:
             quote.created_at = datetime.combine(payload.created_on, datetime.min.time())
+        calculation = await _calculate(session, org_id, client, quoted, quote)
         session.add(quote)
         await session.flush()
 
-        persisted_items = []
-        for p in processed_items:
-            q_item = QuotationItem(
-                quotation_id=quote.id,
-                offering_id=p["offering_id"],
-                line_no=p["line_no"],
-                description=p["description"],
-                quantity=p["quantity"],
-                unit=p["unit"],
-                unit_price=p["unit_price"].amount,
-                discount_pct=p["discount_pct"],
-                gst_rate=p["gst_rate"],
-                net_price=p["taxable_value"].amount,
-                billing_model=p["billing_model"],
-                line_total=p["line_total"].amount,
-            )
-            session.add(q_item)
-            persisted_items.append(q_item)
-
-        await session.flush()
-        return format_quotation_response(quote, client, persisted_items, totals)
+        items = await _store_calculation(session, org_id, quote, quoted, calculation)
+        return format_quotation_response(quote, client, items, await load_tax_lines(session, QUOTATION_DOCUMENT, [quote.id]))
 
     @staticmethod
     async def get_quotation(
@@ -294,16 +328,7 @@ class QuotationService:
         )
         items = list(items_res.scalars().all())
 
-        totals = QuotationTotals(
-            subtotal=Money(amount=float(quote.subtotal), currency=quote.currency),
-            discount_total=Money(amount=float(quote.discount_total), currency=quote.currency),
-            taxable_total=Money(amount=float(quote.subtotal - quote.discount_total), currency=quote.currency),
-            cgst=Money(amount=float(quote.tax_total / 2), currency=quote.currency),
-            sgst=Money(amount=float(quote.tax_total / 2), currency=quote.currency),
-            igst=Money(amount=0.0, currency=quote.currency),
-            grand_total=Money(amount=float(quote.grand_total), currency=quote.currency),
-        )
-        return format_quotation_response(quote, client, items, totals)
+        return format_quotation_response(quote, client, items, await load_tax_lines(session, QUOTATION_DOCUMENT, [quote.id]))
 
     @staticmethod
     async def replace_quotation_items(
@@ -325,50 +350,12 @@ class QuotationService:
             raise QuotationFrozenError("replace items on", quote.status)
 
         client = await session.get(Client, quote.client_id)
-
-        # Fetch offerings
-        offering_ids = [it.offering_id for it in payload.items]
-        off_res = await session.execute(select(Offering).where(Offering.id.in_(offering_ids)))
-        offerings_map = {o.id: o for o in off_res.scalars().all()}
-
-        processed_items, totals = calculate_tax_and_totals(
-            items_input=payload.items,
-            offerings_map=offerings_map,
-            place_of_supply=quote.place_of_supply or "29",
-        )
-
-        # Remove existing items
-        old_items = await session.execute(select(QuotationItem).where(QuotationItem.quotation_id == quotation_id))
-        for item in old_items.scalars().all():
-            await session.delete(item)
-
-        persisted_items = []
-        for p in processed_items:
-            q_item = QuotationItem(
-                quotation_id=quote.id,
-                offering_id=p["offering_id"],
-                line_no=p["line_no"],
-                description=p["description"],
-                quantity=p["quantity"],
-                unit=p["unit"],
-                unit_price=p["unit_price"].amount,
-                discount_pct=p["discount_pct"],
-                gst_rate=p["gst_rate"],
-                net_price=p["taxable_value"].amount,
-                billing_model=p["billing_model"],
-                line_total=p["line_total"].amount,
-            )
-            session.add(q_item)
-            persisted_items.append(q_item)
-
-        quote.subtotal = totals.subtotal.amount
-        quote.discount_total = totals.discount_total.amount
-        quote.tax_total = totals.cgst.amount + totals.sgst.amount + totals.igst.amount
-        quote.grand_total = totals.grand_total.amount
+        quoted = await _quoted_items(session, org_id, payload.items)
+        calculation = await _calculate(session, org_id, client, quoted, quote)
+        items = await _store_calculation(session, org_id, quote, quoted, calculation)
         quote.version += 1
         await session.flush()
-
-        return format_quotation_response(quote, client, persisted_items, totals)
+        return format_quotation_response(quote, client, items, await load_tax_lines(session, QUOTATION_DOCUMENT, [quote.id]))
 
     @staticmethod
     async def submit_quotation(
@@ -418,6 +405,14 @@ class QuotationService:
         if quote.status not in ("approved", "draft"):
             raise InvalidStateTransitionError(quote.status, "send")
 
+        # What the customer receives is taxed as of the day it is sent, then frozen.
+        client = await session.get(Client, quote.client_id)
+        stored = await session.execute(
+            select(QuotationItem).where(QuotationItem.quotation_id == quote.id).order_by(QuotationItem.line_no.asc())
+        )
+        quoted = await _stored_items_as_quoted(session, org_id, list(stored.scalars().all()))
+        await _store_calculation(session, org_id, quote, quoted, await _calculate(session, org_id, client, quoted, quote))
+
         quote.status = "sent"
         quote.completed_at = datetime.now(timezone.utc)
         quote.version += 1
@@ -460,6 +455,12 @@ class QuotationService:
             discount_total=curr_quote.discount_total,
             tax_total=curr_quote.tax_total,
             grand_total=curr_quote.grand_total,
+            tax_registration_id=curr_quote.tax_registration_id,
+            supply_type=curr_quote.supply_type,
+            config_revision=curr_quote.config_revision,
+            round_off=curr_quote.round_off,
+            tax_notes=curr_quote.tax_notes,
+            withholding=curr_quote.withholding,
             status="draft",
             completed_at=curr_quote.completed_at,
             version=1,
@@ -482,22 +483,14 @@ class QuotationService:
                 net_price=it.net_price,
                 billing_model=it.billing_model,
                 line_total=it.line_total,
+                tax_category_code=it.tax_category_code,
             )
             session.add(new_item)
             persisted_items.append(new_item)
 
         await session.flush()
-
-        totals = QuotationTotals(
-            subtotal=Money(amount=float(new_rev.subtotal), currency=new_rev.currency),
-            discount_total=Money(amount=float(new_rev.discount_total), currency=new_rev.currency),
-            taxable_total=Money(amount=float(new_rev.subtotal - new_rev.discount_total), currency=new_rev.currency),
-            cgst=Money(amount=float(new_rev.tax_total / 2), currency=new_rev.currency),
-            sgst=Money(amount=float(new_rev.tax_total / 2), currency=new_rev.currency),
-            igst=Money(amount=0.0, currency=new_rev.currency),
-            grand_total=Money(amount=float(new_rev.grand_total), currency=new_rev.currency),
-        )
-        return format_quotation_response(new_rev, client, persisted_items, totals)
+        tax_lines = await copy_tax_lines(session, org_id, QUOTATION_DOCUMENT, curr_quote.id, new_rev.id)
+        return format_quotation_response(new_rev, client, persisted_items, tax_lines)
 
     @staticmethod
     async def list_for_opportunity(

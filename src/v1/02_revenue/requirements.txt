@@ -7,6 +7,9 @@ pydantic>=2.8.0
 pydantic-settings>=2.4.0
 python-dotenv>=1.0.1
 
+# Tax packs (finance/packs/*.yaml)
+pyyaml>=6.0.1
+
 # HTTP Client (for inter-service calls)
 httpx>=0.27.0
 

@@ -69,6 +69,13 @@ PERMISSION_CATALOG: list[tuple[str, str, str]] = [
     ("revenue.client.write", "revenue", "Add and edit customers and their contacts"),
     ("revenue.client_service.read", "revenue", "View the outside services clients use"),
     ("revenue.client_service.write", "revenue", "Add, edit and delete client services, providers and categories"),
+    ("revenue.tax.read", "revenue", "View tax setup: registrations, rates and rules, packs, numbering, billing settings and tax reports"),
+    ("revenue.tax.manage", "revenue", "Change tax setup: registrations, rates and rules, packs, numbering and billing settings"),
+    ("revenue.billing_schedule.read", "revenue", "View contract billing schedules and what is ready to bill"),
+    ("revenue.billing_schedule.write", "revenue", "Mark milestones reached and invoice billing schedule lines"),
+    ("revenue.invoice.write_off", "revenue", "Write off invoice balances customers will not pay"),
+    ("revenue.tds_receivable.read", "revenue", "View TDS customers withheld from their payments"),
+    ("revenue.tds_receivable.write", "revenue", "Track TDS certificates and reconcile TDS against Form 26AS"),
     # Delivery: projects (work units), tasks, time, handovers and workflows
     ("delivery.work_unit.read", "delivery", "View projects with their milestones, team, risks and change requests (own records only: the projects you manage, are on or have tasks in)"),
     ("delivery.work_unit.write", "delivery", "Create and update projects, milestones, team, risks and change requests"),

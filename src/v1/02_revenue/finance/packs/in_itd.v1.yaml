@@ -1,0 +1,172 @@
+# India income-tax withholding (TDS). The Income-tax Act 2025 replaced the 1961 Act from
+# 1 April 2026: each nature of payment keeps one stable code here, with one entry per Act, so a
+# document dated before the change shows the old section and one dated after shows the new
+# section and payment code. Old section numbers stay searchable as aliases.
+#
+# Rates and thresholds come from secondary sources (see docs/tax-and-finance-research.md §3)
+# and MUST be confirmed by a chartered accountant before they are relied on.
+pack: in_itd
+version: 1
+title: India TDS (income-tax withholding)
+description: TDS sections for professional and technical fees, contractors, commission, rent and director fees, under the 1961 Act until 31 Mar 2026 and the 2025 Act from 1 Apr 2026.
+
+entries:
+  regime:
+    - code: IN-ITD
+      effective_from: 2025-04-01
+      name: India income-tax withholding
+      country: IN
+      kind: withholding
+      fiscal_year_start: "04-01"
+      deductee_types: [individual, huf, company, firm, others]
+
+  withholding_section:
+    # Professional fees
+    - code: PROFESSIONAL_FEES
+      effective_from: 2025-04-01
+      effective_to: 2026-04-01
+      regime: IN-ITD
+      nature: Fees for professional services
+      statute_ref: "Income-tax Act 1961, s.194J(b)"
+      aliases: ["194J", "194J(b)"]
+      rates: {default: 10}
+      no_pan_percent: 20
+      thresholds: [{amount: 50000, basis: annual}]
+    - code: PROFESSIONAL_FEES
+      effective_from: 2026-04-01
+      regime: IN-ITD
+      nature: Fees for professional services
+      statute_ref: "Income-tax Act 2025, s.393(1)"
+      aliases: ["194J", "194J(b)"]
+      rates: {default: 10}
+      payment_codes: {default: "1027"}
+      no_pan_percent: 20
+      thresholds: [{amount: 50000, basis: annual}]
+
+    # Technical services, call centres
+    - code: TECHNICAL_FEES
+      effective_from: 2025-04-01
+      effective_to: 2026-04-01
+      regime: IN-ITD
+      nature: Fees for technical services
+      statute_ref: "Income-tax Act 1961, s.194J(a)"
+      aliases: ["194J(a)"]
+      rates: {default: 2}
+      no_pan_percent: 20
+      thresholds: [{amount: 50000, basis: annual}]
+    - code: TECHNICAL_FEES
+      effective_from: 2026-04-01
+      regime: IN-ITD
+      nature: Fees for technical services
+      statute_ref: "Income-tax Act 2025, s.393(1)"
+      aliases: ["194J(a)"]
+      rates: {default: 2}
+      payment_codes: {default: "1026"}
+      no_pan_percent: 20
+      thresholds: [{amount: 50000, basis: annual}]
+
+    # Contractors and sub-contractors
+    - code: CONTRACTOR
+      effective_from: 2025-04-01
+      effective_to: 2026-04-01
+      regime: IN-ITD
+      nature: Payment to contractors
+      statute_ref: "Income-tax Act 1961, s.194C"
+      aliases: ["194C"]
+      rates: {individual: 1, huf: 1, default: 2}
+      no_pan_percent: 20
+      thresholds: [{amount: 30000, basis: per_payment}, {amount: 100000, basis: annual}]
+    - code: CONTRACTOR
+      effective_from: 2026-04-01
+      regime: IN-ITD
+      nature: Payment to contractors
+      statute_ref: "Income-tax Act 2025, s.393(1)"
+      aliases: ["194C"]
+      rates: {individual: 1, huf: 1, default: 2}
+      payment_codes: {individual: "1023", huf: "1023", default: "1024"}
+      no_pan_percent: 20
+      thresholds: [{amount: 30000, basis: per_payment}, {amount: 100000, basis: annual}]
+
+    # Commission and brokerage
+    - code: COMMISSION
+      effective_from: 2025-04-01
+      effective_to: 2026-04-01
+      regime: IN-ITD
+      nature: Commission or brokerage
+      statute_ref: "Income-tax Act 1961, s.194H"
+      aliases: ["194H"]
+      rates: {default: 2}
+      no_pan_percent: 20
+      thresholds: [{amount: 20000, basis: annual}]
+    - code: COMMISSION
+      effective_from: 2026-04-01
+      regime: IN-ITD
+      nature: Commission or brokerage
+      statute_ref: "Income-tax Act 2025, s.393(1)"
+      aliases: ["194H"]
+      rates: {default: 2}
+      payment_codes: {default: "1006"}
+      no_pan_percent: 20
+      thresholds: [{amount: 20000, basis: annual}]
+
+    # Rent
+    - code: RENT_PLANT_MACHINERY
+      effective_from: 2025-04-01
+      effective_to: 2026-04-01
+      regime: IN-ITD
+      nature: Rent of plant, machinery or equipment
+      statute_ref: "Income-tax Act 1961, s.194I(a)"
+      aliases: ["194I(a)"]
+      rates: {default: 2}
+      no_pan_percent: 20
+      thresholds: [{amount: 50000, basis: monthly}]
+    - code: RENT_PLANT_MACHINERY
+      effective_from: 2026-04-01
+      regime: IN-ITD
+      nature: Rent of plant, machinery or equipment
+      statute_ref: "Income-tax Act 2025, s.393(1)"
+      aliases: ["194I(a)"]
+      rates: {default: 2}
+      payment_codes: {default: "1008"}
+      no_pan_percent: 20
+      thresholds: [{amount: 50000, basis: monthly}]
+    - code: RENT_LAND_BUILDING
+      effective_from: 2025-04-01
+      effective_to: 2026-04-01
+      regime: IN-ITD
+      nature: Rent of land, building or furniture
+      statute_ref: "Income-tax Act 1961, s.194I(b)"
+      aliases: ["194I", "194I(b)"]
+      rates: {default: 10}
+      no_pan_percent: 20
+      thresholds: [{amount: 50000, basis: monthly}]
+    - code: RENT_LAND_BUILDING
+      effective_from: 2026-04-01
+      regime: IN-ITD
+      nature: Rent of land, building or furniture
+      statute_ref: "Income-tax Act 2025, s.393(1)"
+      aliases: ["194I", "194I(b)"]
+      rates: {default: 10}
+      payment_codes: {default: "1009"}
+      no_pan_percent: 20
+      thresholds: [{amount: 50000, basis: monthly}]
+
+    # Director's fees (not salary)
+    - code: DIRECTOR_FEES
+      effective_from: 2025-04-01
+      effective_to: 2026-04-01
+      regime: IN-ITD
+      nature: Fees to a director (not salary)
+      statute_ref: "Income-tax Act 1961, s.194J(ba)"
+      aliases: ["194J(ba)"]
+      rates: {default: 10}
+      no_pan_percent: 20
+    - code: DIRECTOR_FEES
+      effective_from: 2026-04-01
+      regime: IN-ITD
+      nature: Fees to a director (not salary)
+      statute_ref: "Income-tax Act 2025, s.393(1)"
+      aliases: ["194J(ba)"]
+      rates: {default: 10}
+      payment_codes: {default: "1028"}
+      no_pan_percent: 20

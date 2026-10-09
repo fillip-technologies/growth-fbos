@@ -14,13 +14,25 @@ from fastapi import Header
 
 from database.session import get_db_session
 from dependencies import get_actor, get_documents_client
+from finance.tax.registrations import gstin_check_character
 from main import app
 from models import Base
+from models.tax_registration import OrgTaxRegistration
 from services.documents_client import SubjectRef
 from services.identity_client import Actor
 
 TEST_ORG_ID = uuid.UUID("0191f3a2-0011-7011-8077-0000001b2aa9")
 TEST_USER_ID = uuid.UUID("0191f3a2-0015-7015-8093-000000218f0d")
+
+
+def valid_gstin(state_code: str, pan: str = "AABCF9876L") -> str:
+    """A GSTIN with a correct check character, for a state."""
+    first_fourteen = f"{state_code}{pan}1Z"
+    return first_fourteen + gstin_check_character(first_fourteen)
+
+
+# The test organization is registered for GST in Karnataka (state code 29).
+TEST_SUPPLIER_GSTIN = valid_gstin("29")
 
 
 class FakeDocuments:
@@ -73,6 +85,11 @@ async def db_session(test_engine) -> AsyncGenerator[AsyncSession, None]:
         expire_on_commit=False,
     )
     async with session_factory() as session:
+        session.add(OrgTaxRegistration(
+            organization_id=TEST_ORG_ID, regime_code="IN-GST", registration_no=TEST_SUPPLIER_GSTIN,
+            legal_name="Fillip Test Pvt Ltd", jurisdiction_code="29", is_default=True,
+        ))
+        await session.commit()
         yield session
 
 

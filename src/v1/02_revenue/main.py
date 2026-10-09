@@ -2,11 +2,13 @@ import asyncio
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager, suppress
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
+from fastapi.responses import JSONResponse
 import httpx
 
 from config import settings
 from database.session import warm_pool
+from finance.errors import FinanceError
 from router import router
 from services.documents_client import DocumentsClient
 from services.identity_client import IdentityClient
@@ -59,6 +61,12 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 app = FastAPI(title="Revenue Service", version="1.0.0", lifespan=lifespan)
 app.include_router(router)
 app.add_middleware(ServerTimingMiddleware)
+
+
+@app.exception_handler(FinanceError)
+async def finance_error_handler(request: Request, error: FinanceError) -> JSONResponse:
+    """Tax and billing errors in the same body as every other revenue error."""
+    return JSONResponse(status_code=error.status_code, content={"detail": error.body()})
 
 
 @app.get("/health", tags=["health"])

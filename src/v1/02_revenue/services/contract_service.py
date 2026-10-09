@@ -25,6 +25,7 @@ from schemas.contract import (
     PaymentTermResponse,
 )
 from schemas.opportunity import ClientRef
+from services.billing_schedule_service import build_schedule
 from services.documents_client import DocumentsClient
 from services.quotation_service import get_quote_in_org
 
@@ -244,6 +245,8 @@ class ContractService:
         contract.status = "active"
         contract.version += 1
         await session.flush()
+        # Staged billing: the contract's money is invoiced line by line from its schedule.
+        await build_schedule(session, contract)
 
         return await ContractService.get_contract(session, contract_id, org_id)
 
