@@ -8,7 +8,7 @@ import permissions
 import services.tasks as service
 from services.views import task_view
 from dependencies import CurrentActor, DatabaseSession, OrgId, People, UserId, require_permission
-from schemas.common import PageResponse
+from schemas.common import PageMeta, PageResponse
 from schemas.tasks import (
     AssignmentResponse,
     BoardResponse,
@@ -34,6 +34,7 @@ from schemas.tasks import (
     TaskCreate,
     TaskHistoryItemResponse,
     TaskResponse,
+    TaskStepRequest,
     TaskSubmit,
     TaskTemplateCreate,
     TaskTemplateResponse,
@@ -43,6 +44,8 @@ from schemas.tasks import (
     TimeEntryResponse,
 )
 from services.tasks import TaskFilters
+import services.task_workflows as task_workflows
+from schemas.workflows import AvailableTransitionResponse
 
 router = APIRouter(tags=["tasks"])
 
@@ -252,6 +255,36 @@ async def start_task(
 ) -> TaskResponse:
     """Start working on a task."""
     task = await service.start_task(session, org_id, user_id, task_id, if_match)
+    await session.commit()
+    response.headers["ETag"] = f'"{task.version}"'
+    return task
+
+
+@router.get("/tasks/{task_id}/transitions", response_model=PageResponse[AvailableTransitionResponse], dependencies=[CAN_READ, IN_VIEW])
+async def list_task_steps(
+    task_id: uuid.UUID,
+    session: DatabaseSession,
+    org_id: OrgId,
+    actor: CurrentActor,
+) -> PageResponse[AvailableTransitionResponse]:
+    """The steps of the workflow the task follows, from its stage, and whether you may take each."""
+    steps = await task_workflows.task_steps(session, org_id, actor, task_id)
+    return PageResponse(data=steps, page=PageMeta(next_cursor=None, has_more=False, limit=len(steps)))
+
+
+@router.post("/tasks/{task_id}/transitions", response_model=TaskResponse, dependencies=[CAN_READ, IN_VIEW])
+async def take_task_step(
+    task_id: uuid.UUID,
+    payload: TaskStepRequest,
+    session: DatabaseSession,
+    org_id: OrgId,
+    actor: CurrentActor,
+    people: People,
+    response: Response,
+    if_match: Optional[str] = Header(None, alias="If-Match"),
+) -> TaskResponse:
+    """Move the task on by a step of its workflow (its assignee or a task manager; out of review, its reviewer)."""
+    task = await task_workflows.take_task_step(session, org_id, actor, people, task_id, payload, if_match)
     await session.commit()
     response.headers["ETag"] = f'"{task.version}"'
     return task

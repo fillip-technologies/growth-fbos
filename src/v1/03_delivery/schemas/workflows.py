@@ -44,6 +44,10 @@ class StageTaskDef(BaseModel):
     due_offset_minutes: Optional[int] = Field(None, ge=0, description="Due this long after the stage is entered.")
 
 
+# The task status a stage stands for, in a workflow a task type follows.
+StatusCategory = Literal["open", "in_progress", "in_review", "done", "cancelled"]
+
+
 class StageDef(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -56,6 +60,9 @@ class StageDef(BaseModel):
     exit_criteria: Optional[dict] = Field(None, description="JSON Logic evaluated against the instance context.")
     allow_parallel: Optional[bool] = False
     task_templates: list[StageTaskDef] = Field(default_factory=list)
+    status_category: Optional[StatusCategory] = Field(
+        None, description="For a workflow tasks follow: the task's status while it is in this stage."
+    )
 
 
 class TransitionDef(BaseModel):
@@ -70,6 +77,31 @@ class TransitionDef(BaseModel):
     approval_policy_code: Optional[str] = None
     allowed_permission: Optional[str] = None
     priority: Optional[int] = 0
+
+
+class WorkflowTemplateStage(BaseModel):
+    code: str
+    name: str
+    status_category: StatusCategory
+
+
+class WorkflowTemplateResponse(BaseModel):
+    """A ready-made task workflow a company can install (services/workflow_templates.py)."""
+
+    code: str
+    name: str
+    discipline: str
+    summary: str
+    stages: list[WorkflowTemplateStage]
+    # The steps' names, in order.
+    steps: list[str]
+
+
+class WorkflowTemplateInstall(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    code: Optional[str] = Field(None, pattern=r"^[a-z0-9\-]+$", description="The workflow's code in the company; default: the template's")
+    name: Optional[str] = Field(None, min_length=1, max_length=255, description="Default: the template's name")
 
 
 class WorkflowVersionContent(BaseModel):
@@ -90,6 +122,14 @@ class WorkflowVersionResponse(BaseModel):
     checksum: Optional[str] = None
     published_at: Optional[datetime] = None
     content: WorkflowVersionContent
+
+
+class WorkflowVersionSummary(BaseModel):
+    version_no: int
+    status: Literal["draft", "published", "retired"]
+    published_at: Optional[datetime] = None
+    # The version new instances start on.
+    current: bool = False
 
 
 class ValidationIssue(BaseModel):

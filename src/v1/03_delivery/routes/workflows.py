@@ -5,8 +5,9 @@ from fastapi import APIRouter, Depends, Header, Query, Response, status
 
 import permissions
 import services.workflow_instances as instances
+import services.workflow_templates as templates
 import services.workflows as service
-from dependencies import CurrentActor, DatabaseSession, OrgId, UserId, require_permission
+from dependencies import CurrentActor, DatabaseSession, OrgId, People, UserId, require_permission
 from schemas.common import PageResponse
 from schemas.workflows import (
     ApprovalDecision,
@@ -21,8 +22,11 @@ from schemas.workflows import (
     WorkflowDefinitionResponse,
     WorkflowInstanceResponse,
     WorkflowInstanceStart,
+    WorkflowTemplateInstall,
+    WorkflowTemplateResponse,
     WorkflowVersionContent,
     WorkflowVersionResponse,
+    WorkflowVersionSummary,
 )
 
 router = APIRouter(prefix="/workflow", tags=["workflow"])
@@ -31,6 +35,35 @@ CAN_READ = Depends(require_permission(permissions.WORKFLOW_READ))
 CAN_DESIGN = Depends(require_permission(permissions.WORKFLOW_MANAGE))
 CAN_OPERATE = Depends(require_permission(permissions.WORKFLOW_OPERATE))
 CAN_APPROVE = Depends(require_permission(permissions.WORKFLOW_APPROVE))
+
+
+# --- Ready-made task workflows ---------------------------------------------------
+
+
+@router.get("/templates", response_model=list[WorkflowTemplateResponse], dependencies=[CAN_READ])
+async def list_workflow_templates(
+    discipline: Optional[str] = Query(None, description="general, software, creative, operations"),
+) -> list[WorkflowTemplateResponse]:
+    """Ready-made workflows for tasks, each ready for a task type to follow once installed."""
+    return templates.list_templates(discipline)
+
+
+@router.post(
+    "/templates/{template_code}/install",
+    response_model=WorkflowDefinitionResponse,
+    status_code=status.HTTP_201_CREATED,
+    dependencies=[CAN_DESIGN],
+)
+async def install_workflow_template(
+    template_code: str,
+    payload: WorkflowTemplateInstall,
+    session: DatabaseSession,
+    org_id: OrgId,
+) -> WorkflowDefinitionResponse:
+    """Make the template the company's own task workflow, published as version 1."""
+    definition = await templates.install_template(session, org_id, template_code, payload)
+    await session.commit()
+    return definition
 
 
 # --- Workflow definitions & versions ----------------------------------------
@@ -63,6 +96,22 @@ async def create_workflow_definition(
     definition = await service.create_workflow_definition(session, org_id, payload)
     await session.commit()
     return definition
+
+
+@router.get("/definitions/{definition_code}/versions", response_model=list[WorkflowVersionSummary], dependencies=[CAN_READ])
+async def list_workflow_versions(definition_code: str, session: DatabaseSession, org_id: OrgId) -> list[WorkflowVersionSummary]:
+    """A workflow's versions, newest first, and which one new instances start on."""
+    return await service.list_workflow_versions(session, org_id, definition_code)
+
+
+@router.get(
+    "/definitions/{definition_code}/versions/{version_no}", response_model=WorkflowVersionResponse, dependencies=[CAN_READ]
+)
+async def get_workflow_version(
+    definition_code: str, version_no: int, session: DatabaseSession, org_id: OrgId
+) -> WorkflowVersionResponse:
+    """One version with its stages and steps."""
+    return await service.get_workflow_version(session, org_id, definition_code, version_no)
 
 
 @router.post(
@@ -209,10 +258,11 @@ async def perform_transition(
     session: DatabaseSession,
     org_id: OrgId,
     actor: CurrentActor,
+    people: People,
     if_match: Optional[str] = Header(None, alias="If-Match"),
 ) -> TransitionResult:
     """Perform a transition (plus the transition's own permission, when it names one)."""
-    result = await instances.perform_transition(session, org_id, actor, instance_id, payload, if_match)
+    result = await instances.perform_transition(session, org_id, actor, instance_id, payload, if_match, people)
     await session.commit()
     return result
 
@@ -250,10 +300,11 @@ async def cancel_instance(
     payload: HoldRequest,
     session: DatabaseSession,
     org_id: OrgId,
+    user_id: UserId,
     if_match: Optional[str] = Header(None, alias="If-Match"),
 ) -> WorkflowInstanceResponse:
-    """Cancel an instance."""
-    instance = await instances.cancel_instance(session, org_id, instance_id, payload, if_match)
+    """Cancel an instance (and the task it governs, if it governs one)."""
+    instance = await instances.cancel_instance(session, org_id, instance_id, payload, if_match, user_id)
     await session.commit()
     return instance
 
@@ -280,10 +331,11 @@ async def approve_step(
     session: DatabaseSession,
     org_id: OrgId,
     user_id: UserId,
+    people: People,
     if_match: Optional[str] = Header(None, alias="If-Match"),
 ) -> WorkflowInstanceResponse:
     """Approve the step the instance is waiting for; the transition is taken."""
-    instance = await instances.approve_step(session, org_id, user_id, instance_id, payload.note, if_match)
+    instance = await instances.approve_step(session, org_id, user_id, instance_id, payload.note, if_match, people)
     await session.commit()
     return instance
 

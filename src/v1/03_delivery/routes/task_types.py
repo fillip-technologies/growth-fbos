@@ -5,9 +5,10 @@ from fastapi import APIRouter, Depends, Header, Query, status
 
 import permissions
 import services.task_types as service
-from dependencies import DatabaseSession, OrgId, require_permission
+import services.task_workflows as task_workflows
+from dependencies import DatabaseSession, OrgId, UserId, require_permission
 from schemas.common import PageResponse
-from schemas.task_types import TaskTypeCreate, TaskTypeResponse, TaskTypeUpdate
+from schemas.task_types import TaskTypeCreate, TaskTypeResponse, TaskTypeUpdate, TaskTypeWorkflowUpdate
 
 router = APIRouter(tags=["task types"])
 
@@ -54,5 +55,19 @@ async def update_task_type(
 ) -> TaskTypeResponse:
     """Change one of the organization's own task types (built-in ones are read-only)."""
     task_type = await service.update_task_type(session, org_id, task_type_id, payload)
+    await session.commit()
+    return task_type
+
+
+@router.put("/task-types/{task_type_id}/workflow", response_model=TaskTypeResponse, dependencies=[CAN_MANAGE])
+async def set_task_type_workflow(
+    task_type_id: uuid.UUID,
+    payload: TaskTypeWorkflowUpdate,
+    session: DatabaseSession,
+    org_id: OrgId,
+    user_id: UserId,
+) -> TaskTypeResponse:
+    """Choose the workflow the company's new tasks of this type follow (null: none). Tasks already made keep theirs."""
+    task_type = await task_workflows.set_type_workflow(session, org_id, user_id, task_type_id, payload)
     await session.commit()
     return task_type

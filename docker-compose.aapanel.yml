@@ -27,6 +27,7 @@ services:
     # it sends task notifications from the outbox to communication every 30 s.
     environment:
       COMMUNICATION_SERVICE_URL: http://communication:8000
+      REVENUE_SERVICE_URL: http://revenue:8000
       WORKER_INTERVAL_SECONDS: "30"
   control:       { restart: always, ports: !reset [], depends_on: !reset {} }
   documents:     { restart: always, ports: !reset [], depends_on: !reset {} }

@@ -24,6 +24,9 @@ class OutboxEvent(Base):
     id: Mapped[uuid.UUID] = mapped_column(UUIDType, primary_key=True, default=uuid.uuid4)
     organization_id: Mapped[uuid.UUID] = mapped_column(UUIDType, nullable=False)
     event_type: Mapped[str] = mapped_column(String(100), nullable=False)
+    # Where the worker sends it: communication (a notification) or revenue (an activity for a
+    # lead's timeline). Added by the migration `f1b6d4a8c2e7`.
+    destination: Mapped[str] = mapped_column(String(20), nullable=False, default="communication")
     # What communication's /internal/notifications takes besides the ids and the event type:
     # recipient_user_ids, title, body, action_url, subject, urgency.
     payload: Mapped[dict] = mapped_column(JSON, nullable=False)
