@@ -26,6 +26,7 @@ from schemas.workflows import (
     WorkflowTemplateResponse,
     WorkflowVersionContent,
     WorkflowVersionResponse,
+    WorkflowVersionSummary,
 )
 
 router = APIRouter(prefix="/workflow", tags=["workflow"])
@@ -95,6 +96,22 @@ async def create_workflow_definition(
     definition = await service.create_workflow_definition(session, org_id, payload)
     await session.commit()
     return definition
+
+
+@router.get("/definitions/{definition_code}/versions", response_model=list[WorkflowVersionSummary], dependencies=[CAN_READ])
+async def list_workflow_versions(definition_code: str, session: DatabaseSession, org_id: OrgId) -> list[WorkflowVersionSummary]:
+    """A workflow's versions, newest first, and which one new instances start on."""
+    return await service.list_workflow_versions(session, org_id, definition_code)
+
+
+@router.get(
+    "/definitions/{definition_code}/versions/{version_no}", response_model=WorkflowVersionResponse, dependencies=[CAN_READ]
+)
+async def get_workflow_version(
+    definition_code: str, version_no: int, session: DatabaseSession, org_id: OrgId
+) -> WorkflowVersionResponse:
+    """One version with its stages and steps."""
+    return await service.get_workflow_version(session, org_id, definition_code, version_no)
 
 
 @router.post(

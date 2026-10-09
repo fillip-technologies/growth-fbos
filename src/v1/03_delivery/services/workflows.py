@@ -36,6 +36,7 @@ from schemas.workflows import (
     WorkflowDefinitionResponse,
     WorkflowVersionContent,
     WorkflowVersionResponse,
+    WorkflowVersionSummary,
 )
 from services.json_logic import unknown_operators
 from services.pagination import paginate
@@ -293,6 +294,28 @@ async def _write_content(session: AsyncSession, version: WorkflowVersion, conten
         )
 
     await session.flush()
+
+
+async def list_workflow_versions(session: AsyncSession, org_id: uuid.UUID, definition_code: str) -> list[WorkflowVersionSummary]:
+    """A workflow's versions, newest first."""
+    definition = await get_definition_by_code(session, org_id, definition_code)
+    versions = await session.execute(
+        select(WorkflowVersion).where(WorkflowVersion.definition_id == definition.id).order_by(WorkflowVersion.version_no.desc())
+    )
+    return [
+        WorkflowVersionSummary(
+            version_no=v.version_no, status=v.status, published_at=v.published_at, current=v.id == definition.current_version_id
+        )
+        for v in versions.scalars().all()
+    ]
+
+
+async def get_workflow_version(
+    session: AsyncSession, org_id: uuid.UUID, definition_code: str, version_no: int
+) -> WorkflowVersionResponse:
+    """One version with its stages and steps: what a builder edits into the next version."""
+    definition = await get_definition_by_code(session, org_id, definition_code)
+    return await _to_version_response(session, await _get_version(session, definition, version_no), definition.code)
 
 
 async def create_workflow_version(
