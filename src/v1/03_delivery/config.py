@@ -43,6 +43,9 @@ class Settings(BaseSettings):
     # sent by the background worker (services/outbox_worker.py) from the outbox.
     communication_service_url: str = ""
     notification_timeout_seconds: float = 5.0
+    # Finished sales tasks go to revenue's /internal/activities (the `revenue_activities`
+    # setting), sent by the same worker. Empty: they wait in the outbox.
+    revenue_service_url: str = ""
     # Seconds between the worker's runs; 0 = off. Every environment shares the database, so
     # only the live server turns it on (docker-compose.aapanel.yml): one worker sends each event.
     worker_interval_seconds: int = 0

@@ -141,6 +141,18 @@ class LeadNotFoundError(RevenueServiceError):
         super().__init__(status.HTTP_404_NOT_FOUND, "LEAD_NOT_FOUND", message)
 
 
+class SubjectTypeUnsupportedError(RevenueServiceError):
+    """422: Activities are logged on leads, opportunities and contracts only."""
+
+    def __init__(self, subject_type: str) -> None:
+        super().__init__(
+            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            "SUBJECT_TYPE_UNSUPPORTED",
+            f"Activities can't be logged on '{subject_type}'.",
+            meta={"subject_type": subject_type},
+        )
+
+
 class OpportunityNotFoundError(RevenueServiceError):
     """404: Opportunity not found."""
 

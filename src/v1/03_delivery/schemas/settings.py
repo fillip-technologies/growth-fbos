@@ -14,6 +14,7 @@ class DeliverySettingsResponse(BaseModel):
     team_visibility: bool
     team_alerts: bool
     working_hours: bool
+    revenue_activities: bool
     # 0 while every setting is still at its default; send it back as If-Match to change them.
     version: int
     updated_at: Optional[datetime] = None
@@ -27,6 +28,7 @@ class DeliverySettingsUpdate(BaseModel):
     team_visibility: Optional[bool] = None
     team_alerts: Optional[bool] = None
     working_hours: Optional[bool] = None
+    revenue_activities: Optional[bool] = None
 
 
 class AssignablePerson(BaseModel):

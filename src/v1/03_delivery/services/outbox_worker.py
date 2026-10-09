@@ -1,6 +1,7 @@
 """
-The background worker: sends the outbox (models/outbox.py) to the communication service's
-/internal/notifications, every `worker_interval_seconds`.
+The background worker: sends the outbox (models/outbox.py) every `worker_interval_seconds`:
+notifications to the communication service's /internal/notifications, and activities for revenue's
+timelines (services/revenue_activities.py) to revenue's /internal/activities.
 
 Every environment shares one database, so only the live server runs it (the interval is 0
 elsewhere): a worker on each developer's machine would send everyone's notifications several
@@ -16,6 +17,10 @@ the outcomes in a new one, so no database transaction waits on the network.
   telling people about something long past;
 - nobody left to tell (a team without a head, or only the person who acted): skipped.
 Sent, failed and skipped events are deleted after two weeks.
+
+An activity is a record, not an alert: it is never dropped for being old, it is tried for longer,
+and a 404 without an error code (a revenue that doesn't know the route yet, mid-deploy) is tried
+again rather than given up. Without a revenue client the activities wait.
 
 An event may name a unit instead of people (`unit_heads`): its head (or the n-th head up the
 chain) is asked of identity just before sending, outside any transaction; identity being down
@@ -45,9 +50,13 @@ from services.sla_alerts import check_time_limits
 logger = logging.getLogger("delivery.outbox")
 
 NOTIFICATIONS_PATH = "/internal/notifications"
+ACTIVITIES_PATH = "/api/revenue/v1/internal/activities"
 PENDING, SENT, FAILED, SKIPPED = "pending", "sent", "failed", "skipped"
+COMMUNICATION, REVENUE = "communication", "revenue"
 BATCH_SIZE = 50
 MAX_ATTEMPTS = 8
+# About a day of tries, at most an hour apart.
+ACTIVITY_MAX_ATTEMPTS = 30
 FIRST_RETRY = timedelta(seconds=30)
 LONGEST_WAIT = timedelta(hours=1)
 STALE_AFTER = timedelta(hours=24)
@@ -113,12 +122,40 @@ async def _deliver(http: httpx.AsyncClient, internal_token: str, heads: UnitHead
     return Outcome(FAILED, error)
 
 
+def _detail_code(response: httpx.Response) -> Optional[str]:
+    """The error code of a `{detail: {code}}` answer (revenue's), if it carries one."""
+    try:
+        body = response.json()
+    except ValueError:
+        return None
+    detail = body.get("detail") if isinstance(body, dict) else None
+    code = detail.get("code") if isinstance(detail, dict) else None
+    return code if isinstance(code, str) else None
+
+
+async def _deliver_activity(revenue: httpx.AsyncClient, internal_token: str, event: OutboxEvent) -> Outcome:
+    payload = {**event.payload, "organization_id": str(event.organization_id), "source_event_id": str(event.id)}
+    headers = {"X-FBOS-Internal-Token": internal_token} if internal_token else {}
+    try:
+        response = await revenue.post(ACTIVITIES_PATH, json=payload, headers=headers)
+    except httpx.HTTPError as exc:
+        return Outcome(PENDING, f"{type(exc).__name__}: {exc}"[:500])
+    if response.status_code < 300:
+        return Outcome(SENT)
+    error = f"{response.status_code}: {response.text[:400]}"
+    if response.status_code == 429 or response.status_code >= 500:
+        return Outcome(PENDING, error)
+    if response.status_code == 404 and _detail_code(response) is None:
+        return Outcome(PENDING, error)
+    return Outcome(FAILED, error)
+
+
 async def _record(session: AsyncSession, event: OutboxEvent, outcome: Outcome, now: datetime) -> None:
     values: dict = {"last_error": outcome.error}
     if outcome.status == PENDING:
         attempts = event.attempts + 1
         values["attempts"] = attempts
-        if attempts >= MAX_ATTEMPTS:
+        if attempts >= (ACTIVITY_MAX_ATTEMPTS if event.destination == REVENUE else MAX_ATTEMPTS):
             values.update(status=FAILED, finished_at=now)
         else:
             values["next_attempt_at"] = now + retry_wait(attempts)
@@ -138,25 +175,24 @@ async def send_pending(
     internal_token: str,
     heads: UnitHeads,
     now: Optional[datetime] = None,
+    revenue: Optional[httpx.AsyncClient] = None,
 ) -> int:
     """One run: sends the events that are due, records how each went, and clears out old ones. Returns how many were sent."""
     now = now or datetime.now(timezone.utc)
+    due_query = select(OutboxEvent).where(OutboxEvent.status == PENDING, OutboxEvent.next_attempt_at <= now)
+    if revenue is None:
+        due_query = due_query.where(OutboxEvent.destination != REVENUE)  # they wait for a revenue client
     async with session_factory() as session:
         due = list(
-            (
-                await session.execute(
-                    select(OutboxEvent)
-                    .where(OutboxEvent.status == PENDING, OutboxEvent.next_attempt_at <= now)
-                    .order_by(OutboxEvent.created_at, OutboxEvent.id)
-                    .limit(BATCH_SIZE)
-                )
-            ).scalars().all()
+            (await session.execute(due_query.order_by(OutboxEvent.created_at, OutboxEvent.id).limit(BATCH_SIZE))).scalars().all()
         )
         session.expunge_all()
 
     outcomes: list[tuple[OutboxEvent, Outcome]] = []
     for event in due:
-        if now - _created(event) > STALE_AFTER:
+        if event.destination == REVENUE:
+            outcomes.append((event, await _deliver_activity(revenue, internal_token, event)))
+        elif now - _created(event) > STALE_AFTER:
             outcomes.append((event, Outcome(FAILED, "Stale: not sent within a day")))
         else:
             outcomes.append((event, await _deliver(http, internal_token, heads, event)))
@@ -172,7 +208,7 @@ async def send_pending(
     sent = sum(1 for _, outcome in outcomes if outcome.status == SENT)
     failed = [(event.id, outcome.error) for event, outcome in outcomes if outcome.status == FAILED]
     if failed:
-        logger.warning("Notifications given up: %s", failed)
+        logger.warning("Outbox events given up: %s", failed)
     return sent
 
 
@@ -183,6 +219,7 @@ async def run_worker(
     heads: UnitHeads,
     people: PeopleDirectory,
     interval_seconds: int,
+    revenue: Optional[httpx.AsyncClient] = None,
 ) -> None:
     logger.info(
         "Delivery worker on: recurring tasks and notifications every %d s, time limits every %d s",
@@ -195,7 +232,7 @@ async def run_worker(
                 last_check = time.monotonic()
                 await check_time_limits(session_factory)
             await run_due_rules(session_factory, people)
-            await send_pending(session_factory, http, internal_token, heads)
+            await send_pending(session_factory, http, internal_token, heads, revenue=revenue)
         except SQLAlchemyError as exc:
             # The database was unreachable this time: the work waits for the next run.
             logger.warning("Delivery worker run skipped: %s", exc)
@@ -214,9 +251,10 @@ def start_worker(
     heads: UnitHeads,
     people: PeopleDirectory,
     interval_seconds: int,
+    revenue: Optional[httpx.AsyncClient] = None,
 ) -> asyncio.Task:
     task = asyncio.get_running_loop().create_task(
-        run_worker(session_factory, http, internal_token, heads, people, interval_seconds)
+        run_worker(session_factory, http, internal_token, heads, people, interval_seconds, revenue)
     )
     task.add_done_callback(_report_stopped)
     return task

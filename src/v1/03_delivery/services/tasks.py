@@ -121,6 +121,7 @@ from services.rrules import series
 from services.settings import team_alerts, working_hours
 from services.work_calendar import WorkCalendar
 import services.notifications as notify
+from services.revenue_activities import log_finished_task
 from services.identity_client import Actor
 from services.codes import next_task_code
 from services.pagination import paginate
@@ -1169,6 +1170,18 @@ def _finished(task: Task, at: datetime) -> None:
     task.progress_pct = 100
 
 
+async def _complete(session: AsyncSession, task: Task, at: datetime, user_id: Optional[uuid.UUID], note: Optional[str]) -> None:
+    """
+    The task is done, by whichever path (submitted without review, passed review, a workflow's
+    done stage): finished, its watchers told, and a sales task logged on the revenue record it
+    was about when the company asks for that.
+    """
+    task.status = "done"
+    _finished(task, at)
+    await notify.done(session, task, user_id)
+    await log_finished_task(session, task, user_id, note)
+
+
 # --- Tasks a workflow governs ----------------------------------------------------
 # A task whose type follows a workflow (services/task_workflows.py) takes its status from the
 # stage it is in: the stage's status category, and whether someone has the task.
@@ -1245,8 +1258,7 @@ async def _follow_stage(
     elif to_status == "in_review":
         notify.review_requested(session, task, user_id)
     elif to_status == "done":
-        _finished(task, now)
-        await notify.done(session, task, user_id)
+        await _complete(session, task, now, user_id, note)
     elif to_status == "cancelled":
         await notify.cancelled(session, task, user_id, reason)
     await _record_status_history(session, task, from_status, to_status, user_id, reason)
@@ -1485,9 +1497,7 @@ async def submit_task(
         task.status = "submitted"
         notify.review_requested(session, task, user_id)
     else:
-        task.status = "done"
-        _finished(task, now)
-        await notify.done(session, task, user_id)
+        await _complete(session, task, now, user_id, data.note)
 
     await _record_status_history(session, task, from_status, task.status, user_id, data.note)
 
@@ -1601,9 +1611,7 @@ async def review_task(session: AsyncSession, org_id: uuid.UUID, actor: Actor, ta
         task.review_round += 1
         notify.sent_back(session, task, user_id, data.feedback or "")
     else:
-        task.status = "done"
-        _finished(task, reviewed_at)
-        await notify.done(session, task, user_id)
+        await _complete(session, task, reviewed_at, user_id, data.feedback)
 
     review = TaskReview(
         task_id=task.id,
