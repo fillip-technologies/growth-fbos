@@ -5,6 +5,7 @@ from fastapi import APIRouter, Depends, Header, Query, Response, status
 
 import permissions
 import services.workflow_instances as instances
+import services.workflow_templates as templates
 import services.workflows as service
 from dependencies import CurrentActor, DatabaseSession, OrgId, People, UserId, require_permission
 from schemas.common import PageResponse
@@ -21,6 +22,8 @@ from schemas.workflows import (
     WorkflowDefinitionResponse,
     WorkflowInstanceResponse,
     WorkflowInstanceStart,
+    WorkflowTemplateInstall,
+    WorkflowTemplateResponse,
     WorkflowVersionContent,
     WorkflowVersionResponse,
 )
@@ -31,6 +34,35 @@ CAN_READ = Depends(require_permission(permissions.WORKFLOW_READ))
 CAN_DESIGN = Depends(require_permission(permissions.WORKFLOW_MANAGE))
 CAN_OPERATE = Depends(require_permission(permissions.WORKFLOW_OPERATE))
 CAN_APPROVE = Depends(require_permission(permissions.WORKFLOW_APPROVE))
+
+
+# --- Ready-made task workflows ---------------------------------------------------
+
+
+@router.get("/templates", response_model=list[WorkflowTemplateResponse], dependencies=[CAN_READ])
+async def list_workflow_templates(
+    discipline: Optional[str] = Query(None, description="general, software, creative, operations"),
+) -> list[WorkflowTemplateResponse]:
+    """Ready-made workflows for tasks, each ready for a task type to follow once installed."""
+    return templates.list_templates(discipline)
+
+
+@router.post(
+    "/templates/{template_code}/install",
+    response_model=WorkflowDefinitionResponse,
+    status_code=status.HTTP_201_CREATED,
+    dependencies=[CAN_DESIGN],
+)
+async def install_workflow_template(
+    template_code: str,
+    payload: WorkflowTemplateInstall,
+    session: DatabaseSession,
+    org_id: OrgId,
+) -> WorkflowDefinitionResponse:
+    """Make the template the company's own task workflow, published as version 1."""
+    definition = await templates.install_template(session, org_id, template_code, payload)
+    await session.commit()
+    return definition
 
 
 # --- Workflow definitions & versions ----------------------------------------
