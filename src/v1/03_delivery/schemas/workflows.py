@@ -124,6 +124,14 @@ class WorkflowVersionResponse(BaseModel):
     content: WorkflowVersionContent
 
 
+class WorkflowVersionSummary(BaseModel):
+    version_no: int
+    status: Literal["draft", "published", "retired"]
+    published_at: Optional[datetime] = None
+    # The version new instances start on.
+    current: bool = False
+
+
 class ValidationIssue(BaseModel):
     code: str
     message: str
