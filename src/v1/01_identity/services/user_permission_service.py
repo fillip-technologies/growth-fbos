@@ -81,6 +81,15 @@ def _merge(existing: ResolvedGrant, incoming: ResolvedGrant) -> ResolvedGrant:
     )
 
 
+def _same_preset(assignment: RoleAssignment, preset: ResolvedPreset) -> bool:
+    return (
+        assignment.role_id == preset.role.id
+        and assignment.scope_unit_id == preset.scope_unit_id
+        and assignment.self_only == preset.self_only
+        and _as_utc(assignment.valid_to) == _as_utc(preset.valid_to)
+    )
+
+
 class UserPermissionService:
     async def _scope_paths(
         self,
@@ -154,6 +163,7 @@ class UserPermissionService:
                 ))
 
         resolved_presets: list[ResolvedPreset] = []
+        covering: dict[tuple[str, Optional[uuid.UUID]], list[uuid.UUID]] = {}
         for index, item in enumerate(presets):
             field = f"role_assignments[{index}]"
             scope_ok = check_scope_and_expiry(field, item.scope_unit_id, item.valid_to)
@@ -163,11 +173,22 @@ class UserPermissionService:
                 continue
             if not scope_ok:
                 continue
-            resolved_presets.append(ResolvedPreset(
-                role, item.scope_unit_id, scope_paths.get(item.scope_unit_id) if item.scope_unit_id else None,
-                item.self_only, item.valid_to,
-            ))
+            same = next(
+                (p for p in resolved_presets if p.role.id == role.id and p.scope_unit_id == item.scope_unit_id), None
+            )
+            if same:
+                # The same role twice in one scope is one preset, at the broader level.
+                same.self_only = same.self_only and item.self_only
+                same.valid_to = None if same.valid_to is None or item.valid_to is None else max(
+                    _as_utc(same.valid_to), _as_utc(item.valid_to)
+                )
+            else:
+                resolved_presets.append(ResolvedPreset(
+                    role, item.scope_unit_id, scope_paths.get(item.scope_unit_id) if item.scope_unit_id else None,
+                    item.self_only, item.valid_to,
+                ))
             for role_permission in role.role_permissions:
+                covering.setdefault((role_permission.permission_code, item.scope_unit_id), []).append(role.id)
                 add(ResolvedGrant(
                     code=role_permission.permission_code,
                     scope_unit_id=item.scope_unit_id,
@@ -179,6 +200,12 @@ class UserPermissionService:
 
         if errors:
             raise ValidationFailedError(errors)
+        # A permission one of the presets grants is credited to one of those roles, never to
+        # a role that isn't applied here.
+        for key, grant in resolved.items():
+            roles_here = covering.get(key)
+            if roles_here and grant.source_role_id not in roles_here:
+                grant.source_role_id = roles_here[0]
         return list(resolved.values()), resolved_presets
 
     async def _source_roles(
@@ -319,24 +346,34 @@ class UserPermissionService:
             row.valid_to = grant.valid_to
             row.granted_by_id = actor.user_id
             row.granted_at = datetime.now(timezone.utc)
+        # Which role a kept permission is credited to can move (e.g. to the role that stays
+        # when another one granting it is removed); that changes no access.
+        for key, grant in wanted.items():
+            if key in current and current[key].source_role_id != grant.source_role_id:
+                current[key].source_role_id = grant.source_role_id
 
-        # With `replace_presets` the request's presets are the complete set, so a preset can
-        # be removed even while another role still covers its permissions. Otherwise a preset
-        # record stays only while the user still holds all of that role's permissions in its
-        # scope, so it never misreports where access came from.
+        # With `replace_presets` the request's presets are the complete set: records that
+        # match one are kept as they are, the others removed, so a preset can be removed (or
+        # moved to another scope) even while another role still covers its permissions.
+        # Otherwise a record stays only while the user still holds all of that role's
+        # permissions in its scope, so it never misreports where access came from.
         existing_presets = (
             await session.execute(select(RoleAssignment).where(RoleAssignment.user_id == user.id))
         ).unique().scalars().all()
+        new_presets = list(presets)
         for assignment in existing_presets:
+            if replace_presets:
+                match = next((p for p in new_presets if _same_preset(assignment, p)), None)
+                if match:
+                    new_presets.remove(match)
+                    continue
+                await session.delete(assignment)
+                continue
             role_codes = {rp.permission_code for rp in assignment.role.role_permissions} if assignment.role else set()
-            if (
-                replace_presets
-                or not role_codes
-                or any((code, assignment.scope_unit_id) not in wanted for code in role_codes)
-            ):
+            if not role_codes or any((code, assignment.scope_unit_id) not in wanted for code in role_codes):
                 await session.delete(assignment)
         await session.flush()
-        self.add_to_user(session, actor, user, added, presets, reason)
+        self.add_to_user(session, actor, user, added, new_presets, reason)
         return sorted({g.code for g in added + changed}), sorted({r.permission_code for r in removed_rows})
 
     async def list_for_user(self, session: AsyncSession, user: User) -> UserPermissionsResponse:
