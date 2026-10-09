@@ -1,0 +1,35 @@
+# Document numbering defaults every organization starts with. Each organization can change the
+# prefix and format (or add a template for a new document type) in its own configuration; a
+# series already in use keeps the format it started with until it resets.
+pack: core
+version: 1
+title: Document numbering
+description: Default number formats for invoices, credit and debit notes, payment receipts and quotations.
+
+entries:
+  series_template:
+    - code: tax_invoice
+      effective_from: 2017-07-01
+      prefix: INV
+      format: "{prefix}/{fy_short}/{seq:06d}"
+      reset: fiscal_year
+    - code: credit_note
+      effective_from: 2017-07-01
+      prefix: CN
+      format: "{prefix}/{fy_short}/{seq:06d}"
+      reset: fiscal_year
+    - code: debit_note
+      effective_from: 2017-07-01
+      prefix: DN
+      format: "{prefix}/{fy_short}/{seq:06d}"
+      reset: fiscal_year
+    - code: payment_receipt
+      effective_from: 2017-07-01
+      prefix: RC
+      format: "{prefix}-{year}-{seq:04d}"
+      reset: calendar_year
+    - code: quotation
+      effective_from: 2017-07-01
+      prefix: QT
+      format: "{prefix}-{year}-{seq:04d}"
+      reset: calendar_year

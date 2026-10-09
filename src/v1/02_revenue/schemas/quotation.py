@@ -5,6 +5,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from schemas.common import Money, PastDate
 from schemas.opportunity import ClientRef
+from schemas.tax import LineTax, TaxAmount, WithholdingPreview
 
 
 class QuotationItemInput(BaseModel):
@@ -17,7 +18,9 @@ class QuotationItemInput(BaseModel):
 
 class QuotationCreate(BaseModel):
     valid_until: date
+    # A jurisdiction code (GST state code); defaults to the customer's.
     place_of_supply: Optional[str] = None
+    tax_registration_id: Optional[uuid.UUID] = None
     items: List[QuotationItemInput] = Field(..., min_length=1)
     terms: Optional[str] = None
     # Back-dating support: when omitted, the quotation is dated today.
@@ -46,16 +49,22 @@ class QuotationItemResponse(BaseModel):
     gst_rate: float
     sac_code: Optional[str] = None
     line_total: Money
+    tax_category_code: Optional[str] = None
+    taxes: List[LineTax] = []
 
 
 class QuotationTotals(BaseModel):
     subtotal: Money
     discount_total: Money
     taxable_total: Money
+    # cgst/sgst/igst: kept for older clients; `taxes` lists every component.
     cgst: Money
     sgst: Money
     igst: Money
     grand_total: Money
+    taxes: List[TaxAmount] = []
+    tax_total: Optional[Money] = None
+    round_off: Optional[Money] = None
 
 
 class QuotationResponse(BaseModel):
@@ -79,3 +88,8 @@ class QuotationResponse(BaseModel):
     sent_at: Optional[datetime] = None
     accepted_at: Optional[datetime] = None
     version: int
+    supply_type: Optional[str] = None
+    tax_notes: List[str] = []
+    # TDS the customer may deduct, and what they would then pay.
+    withholding: List[WithholdingPreview] = []
+    net_receivable: Optional[Money] = None

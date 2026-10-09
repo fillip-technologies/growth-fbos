@@ -1,6 +1,13 @@
+from datetime import date
 import uuid
-import pytest
+
 import httpx
+import pytest
+
+from finance.fiscal import fiscal_year_of
+
+# The India GST pack's fiscal year runs April to March.
+FY = fiscal_year_of(date.today(), "04-01").short_label
 
 pytestmark = pytest.mark.asyncio
 
@@ -84,7 +91,8 @@ async def test_invoice_lifecycle_and_credit_note(async_client: httpx.AsyncClient
     assert issue_res.status_code == 200
     issued_inv = issue_res.json()
     assert issued_inv["status"] == "issued"
-    assert issued_inv["invoice_no"].startswith("FTB/26-27/")
+    # Numbered from the organization's series template (core pack: INV/<fiscal year>/<6 digits>).
+    assert issued_inv["invoice_no"] == f"INV/{FY}/000001"
     assert issued_inv["client_snapshot"]["legal_name"] == "Infosys BPM Limited"
     assert issued_inv["client_snapshot"]["gstin"] == "29AAACI4321A1Z8"
 
@@ -102,14 +110,15 @@ async def test_invoice_lifecycle_and_credit_note(async_client: httpx.AsyncClient
     assert cn_res.status_code == 201
     cn_data = cn_res.json()
     assert cn_data["doc_type"] == "credit_note"
-    assert cn_data["invoice_no"].startswith("CN/26-27/")
+    assert cn_data["invoice_no"] == f"CN/{FY}/000001"
     assert cn_data["original_invoice_id"] == invoice_id
     assert cn_data["totals"]["grand_total"]["amount"] == "118000.00"
 
-    # Original invoice balance should now be settled
+    # A full credit note cancels the invoice: nothing is owed, but it was never paid.
     orig_inv = await async_client.get(f"/api/revenue/v1/invoices/{invoice_id}")
     assert orig_inv.json()["balance_due"]["amount"] == "0.00"
-    assert orig_inv.json()["status"] == "paid"
+    assert orig_inv.json()["credited_amount"]["amount"] == "118000.00"
+    assert orig_inv.json()["status"] == "cancelled"
 
 
 async def test_payment_and_allocation(async_client: httpx.AsyncClient):

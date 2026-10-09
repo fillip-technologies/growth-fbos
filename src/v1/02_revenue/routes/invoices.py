@@ -5,13 +5,16 @@ from typing import Optional
 from fastapi import APIRouter, Depends, Header, Query, Response, status
 
 from dependencies import DatabaseSession, OrgId, UserId, require_idempotency_key, require_permission
+import permissions
 from schemas.common import PageResponse
 from schemas.invoice import (
     CreditNoteCreate,
+    DebitNoteCreate,
     DownloadUrl,
     InvoiceDraftCreate,
     InvoiceIssue,
     InvoiceResponse,
+    WriteOffCreate,
 )
 from services.invoice_service import InvoiceService
 
@@ -19,6 +22,7 @@ router = APIRouter(prefix="/invoices", tags=["invoices"])
 
 CAN_READ = Depends(require_permission("revenue.invoice.read"))
 CAN_WRITE = Depends(require_permission("revenue.invoice.write"))
+CAN_WRITE_OFF = Depends(require_permission(permissions.INVOICE_WRITE_OFF))
 
 
 @router.get(
@@ -152,6 +156,56 @@ async def issue_credit_note(
     response.headers["ETag"] = f'"{credit_note.version}"'
     response.headers["Location"] = f"/api/revenue/v1/invoices/{credit_note.id}"
     return credit_note
+
+
+@router.post(
+    "/{invoice_id}/debit-notes", response_model=InvoiceResponse, status_code=status.HTTP_201_CREATED,
+    dependencies=[CAN_WRITE],
+)
+async def issue_debit_note(
+    invoice_id: uuid.UUID,
+    payload: DebitNoteCreate,
+    session: DatabaseSession,
+    org_id: OrgId,
+    user_id: UserId,
+    response: Response,
+    idempotency_key: Optional[str] = Header(None, alias="Idempotency-Key"),
+) -> InvoiceResponse:
+    """Raise the amount owed on an issued invoice (undercharged, extra charges), taxed as the original was."""
+    require_idempotency_key(idempotency_key)
+
+    debit_note = await InvoiceService.issue_debit_note(
+        session=session, invoice_id=invoice_id, org_id=org_id, user_id=user_id, payload=payload
+    )
+    await session.commit()
+    response.headers["ETag"] = f'"{debit_note.version}"'
+    response.headers["Location"] = f"/api/revenue/v1/invoices/{debit_note.id}"
+    return debit_note
+
+
+@router.post(
+    "/{invoice_id}/write-offs", response_model=InvoiceResponse, status_code=status.HTTP_201_CREATED,
+    dependencies=[CAN_WRITE_OFF],
+)
+async def write_off_balance(
+    invoice_id: uuid.UUID,
+    payload: WriteOffCreate,
+    session: DatabaseSession,
+    org_id: OrgId,
+    user_id: UserId,
+    response: Response,
+    if_match: Optional[str] = Header(None, alias="If-Match"),
+    idempotency_key: Optional[str] = Header(None, alias="Idempotency-Key"),
+) -> InvoiceResponse:
+    """Stop expecting part of an invoice's balance. Accounting only: the GST already due is unchanged."""
+    require_idempotency_key(idempotency_key)
+
+    invoice = await InvoiceService.write_off(
+        session=session, invoice_id=invoice_id, org_id=org_id, user_id=user_id, payload=payload, if_match=if_match
+    )
+    await session.commit()
+    response.headers["ETag"] = f'"{invoice.version}"'
+    return invoice
 
 
 @router.get(

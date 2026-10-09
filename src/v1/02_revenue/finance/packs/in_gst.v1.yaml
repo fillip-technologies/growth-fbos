@@ -1,0 +1,221 @@
+# India GST. Rates, rules and dates follow the research in docs/tax-and-finance-research.md and
+# MUST be confirmed by the organization's chartered accountant before they charge anyone.
+# Every rate names the notification it comes from so a reviewer can check it.
+#
+# Rules decide which components apply; a rate is defined once and split by the rule
+# (split: 0.5 turns one 18% rate into CGST 9% + SGST 9%), so a slab change edits one row.
+pack: in_gst
+version: 1
+title: India GST
+description: CGST/SGST/UTGST/IGST, GST 2.0 slabs (22 Sep 2025), place of supply by state, exports and SEZ under LUT, reverse charge, credit-note limits.
+
+entries:
+  regime:
+    - code: IN-GST
+      effective_from: 2017-07-01
+      name: India GST
+      country: IN
+      kind: indirect
+      rounding_mode: half_up
+      rounding_level: line
+      fiscal_year_start: "04-01"
+      registration_validator: gstin
+      registration_jurisdiction: {start: 0, length: 2}
+      document_number: {max_length: 16, pattern: "^[A-Za-z0-9/-]+$"}
+      party_registration_types: [registered, unregistered, composition, sez_unit, sez_developer, overseas, government, un_body]
+      default_category: SVC_18
+
+  component:
+    - {code: CGST, effective_from: 2017-07-01, regime: IN-GST, label: Central GST, sequence: 10, ledger_account: output_cgst, return_box: cgst}
+    - {code: SGST, effective_from: 2017-07-01, regime: IN-GST, label: State GST, sequence: 10, ledger_account: output_sgst, return_box: sgst}
+    - {code: UTGST, effective_from: 2017-07-01, regime: IN-GST, label: Union Territory GST, sequence: 10, ledger_account: output_utgst, return_box: sgst}
+    - {code: IGST, effective_from: 2017-07-01, regime: IN-GST, label: Integrated GST, sequence: 10, ledger_account: output_igst, return_box: igst}
+    - {code: CESS, effective_from: 2017-07-01, regime: IN-GST, label: Compensation Cess, sequence: 20, ledger_account: output_cess, return_box: cess}
+
+  rate:
+    - {code: GST_0, effective_from: 2017-07-01, percent: 0, notification: "Notification 1/2017-Central Tax (Rate) / 12/2017"}
+    - {code: GST_3, effective_from: 2017-07-01, percent: 3, notification: "Notification 1/2017-Central Tax (Rate)"}
+    - {code: GST_5, effective_from: 2017-07-01, percent: 5, notification: "Notification 1/2017-Central Tax (Rate) / 11/2017"}
+    - {code: GST_12, effective_from: 2017-07-01, effective_to: 2025-09-22, percent: 12, notification: "Withdrawn by GST 2.0 (56th GST Council, 3 Sep 2025)"}
+    - {code: GST_18, effective_from: 2017-07-01, percent: 18, notification: "Notification 1/2017-Central Tax (Rate) / 11/2017"}
+    - {code: GST_28, effective_from: 2017-07-01, effective_to: 2025-09-22, percent: 28, notification: "Withdrawn by GST 2.0 (56th GST Council, 3 Sep 2025)"}
+    - {code: GST_40, effective_from: 2025-09-22, percent: 40, notification: "GST 2.0 (56th GST Council, 3 Sep 2025)"}
+
+  category:
+    - {code: SVC_18, effective_from: 2017-07-01, regime: IN-GST, name: "Services — 18%", treatment: taxable, supply_kind: service, rate: GST_18, classification: "9983"}
+    - {code: SVC_5, effective_from: 2017-07-01, regime: IN-GST, name: "Services — 5%", treatment: taxable, supply_kind: service, rate: GST_5}
+    - {code: SVC_12, effective_from: 2017-07-01, effective_to: 2025-09-22, regime: IN-GST, name: "Services — 12% (before GST 2.0)", treatment: taxable, supply_kind: service, rate: GST_12}
+    - {code: GOODS_3, effective_from: 2017-07-01, regime: IN-GST, name: "Goods — 3%", treatment: taxable, supply_kind: goods, rate: GST_3}
+    - {code: GOODS_5, effective_from: 2017-07-01, regime: IN-GST, name: "Goods — 5%", treatment: taxable, supply_kind: goods, rate: GST_5}
+    - {code: GOODS_12, effective_from: 2017-07-01, effective_to: 2025-09-22, regime: IN-GST, name: "Goods — 12% (before GST 2.0)", treatment: taxable, supply_kind: goods, rate: GST_12}
+    - {code: GOODS_18, effective_from: 2017-07-01, regime: IN-GST, name: "Goods — 18%", treatment: taxable, supply_kind: goods, rate: GST_18}
+    - {code: GOODS_28, effective_from: 2017-07-01, effective_to: 2025-09-22, regime: IN-GST, name: "Goods — 28% (before GST 2.0)", treatment: taxable, supply_kind: goods, rate: GST_28}
+    - {code: GOODS_40, effective_from: 2025-09-22, regime: IN-GST, name: "Goods — 40% (luxury and sin goods)", treatment: taxable, supply_kind: goods, rate: GST_40}
+    - {code: EXEMPT, effective_from: 2017-07-01, regime: IN-GST, name: Exempt supply, treatment: exempt}
+    - {code: NIL_RATED, effective_from: 2017-07-01, regime: IN-GST, name: Nil-rated supply, treatment: nil_rated}
+    - {code: NON_GST, effective_from: 2017-07-01, regime: IN-GST, name: Non-GST supply, treatment: non_taxable}
+    - {code: LEGAL_RCM, effective_from: 2017-07-01, regime: IN-GST, name: "Legal services to a business (reverse charge)", treatment: taxable, supply_kind: service, rate: GST_18, classification: "9982", reverse_charge: true}
+
+  rule:
+    - code: EXEMPT_SUPPLY
+      effective_from: 2017-07-01
+      regime: IN-GST
+      priority: 100
+      when: {category_treatment: [exempt]}
+      then: []
+      note: Exempt supply — no GST charged
+    - code: NIL_RATED_SUPPLY
+      effective_from: 2017-07-01
+      regime: IN-GST
+      priority: 100
+      when: {category_treatment: [nil_rated]}
+      then: []
+      note: Nil-rated supply
+    - code: NON_GST_SUPPLY
+      effective_from: 2017-07-01
+      regime: IN-GST
+      priority: 100
+      when: {category_treatment: [non_taxable]}
+      then: []
+      note: Non-GST supply
+    - code: REVERSE_CHARGE_INTRA
+      effective_from: 2017-07-01
+      regime: IN-GST
+      priority: 90
+      when: {reverse_charge: true, supply_type: [intra_state]}
+      then:
+        - {component: CGST, rate_from_category: true, split: 0.5, behaviour: reverse_charge}
+        - {component: SGST, rate_from_category: true, split: 0.5, behaviour: reverse_charge}
+      note: Tax payable on reverse charge by the recipient
+    - code: REVERSE_CHARGE_INTER
+      effective_from: 2017-07-01
+      regime: IN-GST
+      priority: 90
+      when: {reverse_charge: true, supply_type: [inter_state]}
+      then:
+        - {component: IGST, rate_from_category: true, behaviour: reverse_charge}
+      note: Tax payable on reverse charge by the recipient
+    - code: EXPORT_UNDER_LUT
+      effective_from: 2017-07-01
+      regime: IN-GST
+      priority: 80
+      when: {supply_type: [export], lut_valid: true}
+      then:
+        - {component: IGST, percent: 0}
+      note: Supply meant for export under LUT without payment of IGST
+    - code: SEZ_UNDER_LUT
+      effective_from: 2017-07-01
+      regime: IN-GST
+      priority: 80
+      when: {customer_registration_type: [sez_unit, sez_developer], lut_valid: true}
+      then:
+        - {component: IGST, percent: 0}
+      note: Supply to SEZ unit/developer under LUT without payment of IGST
+    - code: SEZ_WITH_PAYMENT
+      effective_from: 2017-07-01
+      regime: IN-GST
+      priority: 75
+      when: {customer_registration_type: [sez_unit, sez_developer]}
+      then:
+        - {component: IGST, rate_from_category: true}
+      note: Supply to SEZ unit/developer with payment of IGST
+    - code: EXPORT_WITH_PAYMENT
+      effective_from: 2017-07-01
+      regime: IN-GST
+      priority: 70
+      when: {supply_type: [export]}
+      then:
+        - {component: IGST, rate_from_category: true}
+      note: Supply meant for export with payment of IGST
+    - code: INTRA_STATE_UT
+      effective_from: 2017-07-01
+      regime: IN-GST
+      priority: 50
+      when: {supply_type: [intra_state], jurisdiction_kind: [ut_without_legislature]}
+      then:
+        - {component: CGST, rate_from_category: true, split: 0.5}
+        - {component: UTGST, rate_from_category: true, split: 0.5}
+    - code: INTRA_STATE
+      effective_from: 2017-07-01
+      regime: IN-GST
+      priority: 40
+      when: {supply_type: [intra_state]}
+      then:
+        - {component: CGST, rate_from_category: true, split: 0.5}
+        - {component: SGST, rate_from_category: true, split: 0.5}
+    - code: INTER_STATE
+      effective_from: 2017-07-01
+      regime: IN-GST
+      priority: 40
+      when: {supply_type: [inter_state]}
+      then:
+        - {component: IGST, rate_from_category: true}
+
+  # GST state codes (the first two characters of a GSTIN). UTGST replaces SGST only in union
+  # territories without a legislature.
+  jurisdiction:
+    - {code: "01", effective_from: 2017-07-01, effective_to: 2019-10-31, regime: IN-GST, name: Jammu and Kashmir, kind: state}
+    - {code: "01", effective_from: 2019-10-31, regime: IN-GST, name: Jammu and Kashmir, kind: ut_with_legislature}
+    - {code: "02", effective_from: 2017-07-01, regime: IN-GST, name: Himachal Pradesh, kind: state}
+    - {code: "03", effective_from: 2017-07-01, regime: IN-GST, name: Punjab, kind: state}
+    - {code: "04", effective_from: 2017-07-01, regime: IN-GST, name: Chandigarh, kind: ut_without_legislature}
+    - {code: "05", effective_from: 2017-07-01, regime: IN-GST, name: Uttarakhand, kind: state}
+    - {code: "06", effective_from: 2017-07-01, regime: IN-GST, name: Haryana, kind: state}
+    - {code: "07", effective_from: 2017-07-01, regime: IN-GST, name: Delhi, kind: ut_with_legislature}
+    - {code: "08", effective_from: 2017-07-01, regime: IN-GST, name: Rajasthan, kind: state}
+    - {code: "09", effective_from: 2017-07-01, regime: IN-GST, name: Uttar Pradesh, kind: state}
+    - {code: "10", effective_from: 2017-07-01, regime: IN-GST, name: Bihar, kind: state}
+    - {code: "11", effective_from: 2017-07-01, regime: IN-GST, name: Sikkim, kind: state}
+    - {code: "12", effective_from: 2017-07-01, regime: IN-GST, name: Arunachal Pradesh, kind: state}
+    - {code: "13", effective_from: 2017-07-01, regime: IN-GST, name: Nagaland, kind: state}
+    - {code: "14", effective_from: 2017-07-01, regime: IN-GST, name: Manipur, kind: state}
+    - {code: "15", effective_from: 2017-07-01, regime: IN-GST, name: Mizoram, kind: state}
+    - {code: "16", effective_from: 2017-07-01, regime: IN-GST, name: Tripura, kind: state}
+    - {code: "17", effective_from: 2017-07-01, regime: IN-GST, name: Meghalaya, kind: state}
+    - {code: "18", effective_from: 2017-07-01, regime: IN-GST, name: Assam, kind: state}
+    - {code: "19", effective_from: 2017-07-01, regime: IN-GST, name: West Bengal, kind: state}
+    - {code: "20", effective_from: 2017-07-01, regime: IN-GST, name: Jharkhand, kind: state}
+    - {code: "21", effective_from: 2017-07-01, regime: IN-GST, name: Odisha, kind: state}
+    - {code: "22", effective_from: 2017-07-01, regime: IN-GST, name: Chhattisgarh, kind: state}
+    - {code: "23", effective_from: 2017-07-01, regime: IN-GST, name: Madhya Pradesh, kind: state}
+    - {code: "24", effective_from: 2017-07-01, regime: IN-GST, name: Gujarat, kind: state}
+    - {code: "25", effective_from: 2017-07-01, effective_to: 2020-01-26, regime: IN-GST, name: Daman and Diu, kind: ut_without_legislature}
+    - {code: "26", effective_from: 2017-07-01, effective_to: 2020-01-26, regime: IN-GST, name: Dadra and Nagar Haveli, kind: ut_without_legislature}
+    - {code: "26", effective_from: 2020-01-26, regime: IN-GST, name: Dadra and Nagar Haveli and Daman and Diu, kind: ut_without_legislature}
+    - {code: "27", effective_from: 2017-07-01, regime: IN-GST, name: Maharashtra, kind: state}
+    - {code: "29", effective_from: 2017-07-01, regime: IN-GST, name: Karnataka, kind: state}
+    - {code: "30", effective_from: 2017-07-01, regime: IN-GST, name: Goa, kind: state}
+    - {code: "31", effective_from: 2017-07-01, regime: IN-GST, name: Lakshadweep, kind: ut_without_legislature}
+    - {code: "32", effective_from: 2017-07-01, regime: IN-GST, name: Kerala, kind: state}
+    - {code: "33", effective_from: 2017-07-01, regime: IN-GST, name: Tamil Nadu, kind: state}
+    - {code: "34", effective_from: 2017-07-01, regime: IN-GST, name: Puducherry, kind: ut_with_legislature}
+    - {code: "35", effective_from: 2017-07-01, regime: IN-GST, name: Andaman and Nicobar Islands, kind: ut_without_legislature}
+    - {code: "36", effective_from: 2017-07-01, regime: IN-GST, name: Telangana, kind: state}
+    - {code: "37", effective_from: 2017-07-01, regime: IN-GST, name: Andhra Pradesh, kind: state}
+    - {code: "38", effective_from: 2019-10-31, regime: IN-GST, name: Ladakh, kind: ut_without_legislature}
+    # "Other Territory" (offshore areas). Its treatment needs CA confirmation; it gets CGST+SGST/IGST like a state.
+    - {code: "97", effective_from: 2017-07-01, regime: IN-GST, name: Other Territory, kind: other_territory}
+
+  deadline:
+    - code: GST_CREDIT_NOTE_LIMIT
+      effective_from: 2017-07-01
+      effective_to: 2022-10-01
+      regime: IN-GST
+      description: Credit notes against an invoice must be issued by 30 September after its fiscal year
+      applies_to: [credit_note]
+      rule: {type: after_fy_end, month: 9, day: 30}
+      severity: block
+    - code: GST_CREDIT_NOTE_LIMIT
+      effective_from: 2022-10-01
+      regime: IN-GST
+      description: Credit notes against an invoice must be issued by 30 November after its fiscal year
+      applies_to: [credit_note]
+      rule: {type: after_fy_end, month: 11, day: 30}
+      severity: block
+    - code: CUSTOMER_ITC_REVERSAL
+      effective_from: 2017-07-01
+      regime: IN-GST
+      description: The customer must reverse its input tax credit (with interest) if this invoice is unpaid by this date
+      applies_to: [tax_invoice, debit_note]
+      rule: {type: days_after, field: issue_date, days: 180}
+      severity: warn

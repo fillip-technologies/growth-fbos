@@ -1,17 +1,21 @@
 import uuid
 from collections import defaultdict
 from datetime import date, datetime
+from decimal import Decimal
 from typing import List, Optional
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from exceptions import (
     CollectionCaseNotFoundError,
 )
+from finance import policies
+from finance.money import ZERO, to_decimal
 from models.client import Client
 from models.collection import CollectionCase, CollectionCaseInvoice, CollectionFollowup
 from models.invoice import Invoice
+from models.payment import PaymentAllocation
 from schemas.collection import (
     CollectionCaseResponse,
     CollectionFollowUpCreate,
@@ -52,6 +56,30 @@ def format_collection_case(
         promised_date=case.promised_date,
         promised_amount=promised_money,
     )
+
+
+async def _amount_to_chase(session: AsyncSession, invoices: list[Invoice], net_of_tds: bool) -> Decimal:
+    """
+    What the customer genuinely still owes in cash. Net of TDS: the balance less the TDS they are
+    expected to withhold and haven't yet (they keep it by law, so chasing it only annoys them).
+    """
+    owed = sum((to_decimal(invoice.balance_due) for invoice in invoices), ZERO)
+    if not net_of_tds:
+        return owed
+    withheld = await session.execute(
+        select(PaymentAllocation.invoice_id, func.sum(PaymentAllocation.tds_amount))
+        .where(PaymentAllocation.invoice_id.in_([invoice.id for invoice in invoices]))
+        .group_by(PaymentAllocation.invoice_id)
+    )
+    already_withheld = {invoice_id: to_decimal(total) for invoice_id, total in withheld.all()}
+    still_expected = sum(
+        (
+            min(max(to_decimal(invoice.expected_withholding) - already_withheld.get(invoice.id, ZERO), ZERO), to_decimal(invoice.balance_due))
+            for invoice in invoices
+        ),
+        ZERO,
+    )
+    return owed - still_expected
 
 
 class CollectionService:
@@ -132,7 +160,7 @@ class CollectionService:
         late = await session.execute(
             select(Invoice).where(
                 Invoice.organization_id == org_id,
-                Invoice.doc_type == "tax_invoice",
+                Invoice.doc_type.in_(("tax_invoice", "debit_note")),
                 Invoice.status.in_(("issued", "partially_paid")),
                 Invoice.due_date < today,
                 Invoice.balance_due > 0,
@@ -186,12 +214,13 @@ class CollectionService:
                 if inv.id not in tracked:
                     session.add(CollectionCaseInvoice(case_id=case.id, invoice_id=inv.id))
 
+        settings = await policies.load_settings(session, org_id)
         for case in live_cases.values():
             tracked = await _case_invoice_ids(session, case.id)
             if not tracked:
                 continue
-            owed = await session.execute(select(Invoice.balance_due).where(Invoice.id.in_(tracked)))
-            case.total_overdue = sum(float(b) for b in owed.scalars().all())
+            tracked_invoices = (await session.execute(select(Invoice).where(Invoice.id.in_(tracked)))).scalars().all()
+            case.total_overdue = await _amount_to_chase(session, list(tracked_invoices), settings.collections_on_net)
             if case.total_overdue == 0:
                 case.status = "resolved"
                 resolved += 1

@@ -31,6 +31,9 @@ class Payment(Base):
     gateway_payment_id: Mapped[Optional[str]] = mapped_column(String(255), nullable=True, index=True)
     bank_reference: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     charges: Mapped[float] = mapped_column(Numeric(15, 2), nullable=False, default=0)
+    # Legacy: TDS reported for the whole payment rather than per invoice (allocations carry
+    # their own). It is added to the money the payment can allocate, as before.
+    tds_amount: Mapped[float] = mapped_column(Numeric(15, 2), nullable=False, default=0)
     unapplied_amount: Mapped[float] = mapped_column(Numeric(15, 2), nullable=False, default=0)
     status: Mapped[str] = mapped_column(String(50), nullable=False, default="pending", index=True)
     recorded_by: Mapped[uuid.UUID] = mapped_column(UUIDType, nullable=False)
@@ -53,7 +56,12 @@ class PaymentAllocation(Base):
     invoice_id: Mapped[uuid.UUID] = mapped_column(
         UUIDType, ForeignKey("invoices.id", ondelete="RESTRICT"), nullable=False, index=True
     )
+    # Cash from the payment applied to the invoice.
     amount: Mapped[float] = mapped_column(Numeric(15, 2), nullable=False)
+    # What the customer withheld for this invoice; it settles the invoice too, but no cash moved.
+    tds_amount: Mapped[float] = mapped_column(Numeric(15, 2), nullable=False, default=0)
+    tds_section_code: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    gst_tds_amount: Mapped[float] = mapped_column(Numeric(15, 2), nullable=False, default=0)
     allocated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, server_default=func.now(), nullable=False)
 
 

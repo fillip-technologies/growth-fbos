@@ -1,8 +1,9 @@
 import uuid
 from datetime import datetime
+from decimal import Decimal
 from typing import Optional
 
-from sqlalchemy import DateTime, ForeignKey, Integer, Numeric, String, Text, func
+from sqlalchemy import JSON, DateTime, ForeignKey, Integer, Numeric, String, Text, func
 from sqlalchemy.orm import Mapped, mapped_column
 
 from database.base import Base
@@ -34,6 +35,13 @@ class Quotation(Base):
     grand_total: Mapped[float] = mapped_column(Numeric(15, 2), nullable=False, default=0)
     status: Mapped[str] = mapped_column(String(50), nullable=False, default="draft", index=True)
     approved_request_id: Mapped[Optional[uuid.UUID]] = mapped_column(UUIDType, nullable=True)
+    # --- Tax engine (finance/tax): taxes per line live in DocumentTaxLine (document_type "quotation").
+    tax_registration_id: Mapped[Optional[uuid.UUID]] = mapped_column(UUIDType, nullable=True)
+    supply_type: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)
+    config_revision: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    round_off: Mapped[Decimal] = mapped_column(Numeric(15, 2), nullable=False, default=0)
+    tax_notes: Mapped[Optional[list]] = mapped_column(JSON, nullable=True)
+    withholding: Mapped[Optional[list]] = mapped_column(JSON, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), nullable=False)
     completed_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
     version: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
@@ -59,6 +67,7 @@ class QuotationItem(Base):
     net_price: Mapped[float] = mapped_column(Numeric(15, 2), nullable=False)
     billing_model: Mapped[str] = mapped_column(String(50), nullable=False)
     line_total: Mapped[float] = mapped_column(Numeric(15, 2), nullable=False)
+    tax_category_code: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
 
 
 class NegotiationNote(Base):

@@ -63,6 +63,14 @@ class Settings(BaseSettings):
     website_leads_import_interval_seconds: int = 0
     website_leads_timeout_seconds: float = 15.0
 
+    # Tax packs (finance/packs) an organization's tax configuration starts from, applied the
+    # first time it uses billing. Later pack versions are reviewed and applied by its admins.
+    default_tax_packs: str = "core,in_gst,in_itd"
+
+    @property
+    def default_tax_pack_codes(self) -> list[str]:
+        return [code.strip() for code in self.default_tax_packs.split(",") if code.strip()]
+
     @field_validator("website_leads_organization_id", "website_leads_owner_user_id", mode="before")
     @classmethod
     def _blank_id_is_unset(cls, value: object) -> object:
