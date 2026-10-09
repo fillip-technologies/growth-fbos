@@ -19,7 +19,8 @@ Sent, failed and skipped events are deleted after two weeks.
 
 An event may name a unit instead of people (`unit_heads`): its head (or the n-th head up the
 chain) is asked of identity just before sending, outside any transaction; identity being down
-leaves the event for the next run. Every few minutes the worker also checks time limits
+leaves the event for the next run. Each run first makes the tasks recurring rules are due for
+(services/recurring.py), and every few minutes the worker also checks time limits
 (services/sla_alerts.py).
 """
 import asyncio
@@ -37,6 +38,8 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from exceptions import TeamMembersUnavailableError
 from models.outbox import OutboxEvent
+from services.assignees import PeopleDirectory
+from services.recurring import run_due_rules
 from services.sla_alerts import check_time_limits
 
 logger = logging.getLogger("delivery.outbox")
@@ -178,10 +181,11 @@ async def run_worker(
     http: httpx.AsyncClient,
     internal_token: str,
     heads: UnitHeads,
+    people: PeopleDirectory,
     interval_seconds: int,
 ) -> None:
     logger.info(
-        "Delivery worker on: sending notifications every %d s, checking time limits every %d s",
+        "Delivery worker on: recurring tasks and notifications every %d s, time limits every %d s",
         interval_seconds, TIME_LIMIT_CHECK_SECONDS,
     )
     last_check: Optional[float] = None
@@ -190,6 +194,7 @@ async def run_worker(
             if last_check is None or time.monotonic() - last_check >= TIME_LIMIT_CHECK_SECONDS:
                 last_check = time.monotonic()
                 await check_time_limits(session_factory)
+            await run_due_rules(session_factory, people)
             await send_pending(session_factory, http, internal_token, heads)
         except SQLAlchemyError as exc:
             # The database was unreachable this time: the work waits for the next run.
@@ -207,8 +212,11 @@ def start_worker(
     http: httpx.AsyncClient,
     internal_token: str,
     heads: UnitHeads,
+    people: PeopleDirectory,
     interval_seconds: int,
 ) -> asyncio.Task:
-    task = asyncio.get_running_loop().create_task(run_worker(session_factory, http, internal_token, heads, interval_seconds))
+    task = asyncio.get_running_loop().create_task(
+        run_worker(session_factory, http, internal_token, heads, people, interval_seconds)
+    )
     task.add_done_callback(_report_stopped)
     return task

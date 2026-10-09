@@ -11,12 +11,10 @@ Simplification notes:
   * ``TIME_ENTRY_LOCKED`` (a timesheet week approved and locked) has no
     backing "timesheet week" model in this service, so it is defined in
     exceptions.py but never raised.
-  * Recurring rule ``rrule`` validation is a structural check (recognized
-    RFC 5545 keys and a known FREQ value), not a full RFC 5545 parser -- this
-    service has no RRULE-evaluation dependency available. ``next_run_at`` is
-    seeded from ``starts_at``; actually advancing it on each occurrence would
-    be the job of the scanner the spec mentions, which has no endpoint of
-    its own and is out of scope.
+  * Recurring rules are read as RFC 5545 RRULEs in the rule's time zone
+    (``services/rrules.py``): ``next_run_at`` starts at the first occurrence
+    from ``starts_at``, and the worker makes each occurrence's task from the
+    rule's template (``services/recurring.py``, ``create_recurring_task``).
   * A task's type decides its fields, outcomes and SLA clocks
     (``services/task_profiles.py``). Submitting with an outcome that names a
     follow-up schedules the next touch as a new task (``source='followup'``),
@@ -113,6 +111,7 @@ import permissions
 from services.assignees import PeopleDirectory, ensure_assignable, keep_if_assignable
 from services.assignment_policies import pick_assignee
 from services.calendars import working_calendars
+from services.rrules import series
 from services.settings import team_alerts, working_hours
 from services.work_calendar import WorkCalendar
 import services.notifications as notify
@@ -144,8 +143,6 @@ _WAITING_FOR_REVIEW = {"submitted", "in_review"}
 WORK_UNIT_SUBJECT = "work.work_unit"
 TASK_SUBJECT = "task.task"
 _TERMINAL_TASK_STATUSES = {"done", "cancelled"}
-_RRULE_KEY_RE = re.compile(r"^[A-Z]+=[^;]+$")
-_RRULE_VALID_FREQ = {"SECONDLY", "MINUTELY", "HOURLY", "DAILY", "WEEKLY", "MONTHLY", "YEARLY"}
 # What can be worked next from a queue: not waiting on someone else (blocked, in review).
 _ACTIONABLE_TASK_STATUSES = ["open", "assigned", "in_progress", "rework"]
 _FOLLOW_UP_PREFIX = "Follow up: "
@@ -1868,21 +1865,6 @@ async def cancel_handover(
 # --- Recurring task rules ------------------------------------------------
 
 
-def _validate_rrule(rrule: str) -> None:
-    parts = [p for p in rrule.split(";") if p]
-    if not parts:
-        raise RRuleInvalidError()
-    freq = None
-    for part in parts:
-        if not _RRULE_KEY_RE.match(part):
-            raise RRuleInvalidError()
-        key, _, value = part.partition("=")
-        if key == "FREQ":
-            freq = value
-    if freq not in _RRULE_VALID_FREQ:
-        raise RRuleInvalidError()
-
-
 def _to_recurring_rule_response(rule: RecurringTaskRule, template_code: str) -> RecurringRuleResponse:
     return RecurringRuleResponse(
         id=rule.id,
@@ -1894,6 +1876,7 @@ def _to_recurring_rule_response(rule: RecurringTaskRule, template_code: str) -> 
         next_run_at=rule.next_run_at,
         ends_at=rule.ends_at,
         status=rule.status,
+        last_run_at=rule.last_run_at,
     )
 
 
@@ -1915,7 +1898,13 @@ async def list_recurring_rules(session: AsyncSession, org_id: uuid.UUID, subject
 
 
 async def create_recurring_rule(session: AsyncSession, org_id: uuid.UUID, data: RecurringRuleCreate) -> RecurringRuleResponse:
-    _validate_rrule(data.rrule)
+    try:
+        occurrences = series(data.rrule, data.starts_at, data.timezone or "UTC")
+    except ValueError as exc:
+        raise RRuleInvalidError() from exc
+    first = occurrences.first_from(data.starts_at)
+    if first is None or (data.ends_at is not None and first > as_utc(data.ends_at)):
+        raise RRuleInvalidError()
 
     template_res = await session.execute(
         select(TaskTemplate).where(TaskTemplate.organization_id == org_id, TaskTemplate.code == data.template_code)
@@ -1932,13 +1921,67 @@ async def create_recurring_rule(session: AsyncSession, org_id: uuid.UUID, data: 
         owning_unit_id=data.owning_unit_id,
         rrule=data.rrule,
         timezone=data.timezone or "UTC",
-        next_run_at=data.starts_at,
+        series_start=data.starts_at,
+        next_run_at=first,
         ends_at=data.ends_at,
         status="active",
     )
     session.add(rule)
     await session.flush()
     return _to_recurring_rule_response(rule, template.code)
+
+
+async def create_recurring_task(
+    session: AsyncSession,
+    people: PeopleDirectory,
+    rule: RecurringTaskRule,
+    occurrence: datetime,
+    local_day: date,
+    now: datetime,
+) -> Optional[Task]:
+    """
+    The task a recurring rule makes at one occurrence, from its template, for the rule's team and
+    subject: titled with the day (in place of `{date}` in the template's title, else after it),
+    and given out by the team's assignment policy. Nobody created it. None when the template or
+    its type can't make tasks any more.
+    """
+    template = await session.get(TaskTemplate, rule.template_id)
+    if template is None:
+        return None
+    task_type = await session.get(TaskType, template.task_type_id)
+    profile = await load_profile(session, template.task_type_id)
+    if task_type is None or profile.archived:
+        return None
+    day = local_day.isoformat()
+    title = template.title_template.replace("{date}", day) if "{date}" in template.title_template else f"{template.title_template} · {day}"
+    task = await _insert_task(
+        session,
+        rule.organization_id,
+        None,
+        task_type=task_type,
+        profile=profile,
+        subject_type=rule.subject_type,
+        subject_id=rule.subject_id,
+        work_unit_id=rule.subject_id if rule.subject_type == WORK_UNIT_SUBJECT else None,
+        title=title[:255],
+        description=template.description,
+        owning_unit_id=rule.owning_unit_id,
+        assignee_user_id=None,
+        reviewer_user_id=None,
+        priority=template.default_priority,
+        start_at=occurrence,
+        due_at=None,
+        estimate_minutes=template.estimate_minutes,
+        parent_task_id=None,
+        attributes={"labels": []},
+        source="recurring",
+        created_at=now,
+        checklist=[(item["text"], item.get("mandatory", True)) for item in template.checklist or []],
+    )
+    task.template_id = template.id
+    await _give_out_by_team_policy(session, people, rule.organization_id, task)
+    await session.flush()
+    return task
 
 
 # --- Tasks Summary for Home/Gateway ------------------------------------------

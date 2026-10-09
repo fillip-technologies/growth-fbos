@@ -39,7 +39,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         worker = None
         if settings.worker_enabled:
             worker = start_worker(
-                async_session_factory, communication_http, settings.internal_service_token, identity,
+                async_session_factory, communication_http, settings.internal_service_token, identity, identity,
                 settings.worker_interval_seconds,
             )
         yield

@@ -453,3 +453,5 @@ class RecurringRuleResponse(BaseModel):
     next_run_at: Optional[datetime] = None
     ends_at: Optional[datetime] = None
     status: Literal["active", "paused", "ended"]
+    # When the worker last made a task from the rule.
+    last_run_at: Optional[datetime] = None
