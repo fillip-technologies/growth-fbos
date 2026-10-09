@@ -161,7 +161,5 @@ async def take_task_step(
         TransitionRequest(transition_code=data.transition_code, reason=data.reason),
         f'"{instance.version}"', people,
     )
-    task.version += 1
-    task.updated_at = datetime.now(timezone.utc)
     await session.flush()
     return await get_task(session, org_id, task.id)
