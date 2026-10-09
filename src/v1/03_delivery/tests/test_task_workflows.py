@@ -202,3 +202,44 @@ async def test_requests_follow_the_workflow_and_hand_started_ones_leave_the_stat
     ))
     after = await ok(await admin.get(f"{BASE}/tasks/{plain['id']}"))
     assert (after["status"], after["governing_workflow"], after["owning_unit"]["id"]) == ("assigned", None, str(TRIAGE))
+
+
+async def test_a_move_from_anywhere_changes_the_tasks_version(act_as):
+    """Moved from the workflow panel, the task's copy read before can't take a step from the new stage."""
+    admin = act_as(ADMIN)
+    await setup_bug_flow(admin)
+    seen = await followed_task(admin, assignee_user_id=str(TEST_USER_ID))
+    instance = await ok(await admin.get(f"{BASE}/workflow/instances/{seen['governing_workflow']['instance_id']}"))
+    await ok(await admin.post(
+        f"{BASE}/workflow/instances/{instance['id']}/transitions", json={"transition_code": "accept"}, headers=if_match(instance),
+    ))
+    moved = await ok(await admin.get(f"{BASE}/tasks/{seen['id']}"))
+    assert (moved["governing_workflow"]["stage"]["code"], moved["owning_unit"]["id"]) == ("fix", str(DEV))
+    assert moved["version"] > seen["version"]
+    stale = await step(admin, seen, "submit", 412)
+    assert error_code(stale) == "VERSION_CONFLICT"
+
+
+async def test_work_sent_back_from_review_tells_the_assignee(act_as, db_session):
+    from sqlalchemy import select
+
+    from models.outbox import OutboxEvent
+
+    admin = act_as(ADMIN)
+    await setup_bug_flow(admin)
+    task = await followed_task(admin, assignee_user_id=str(WORKER), reviewer_user_id=str(REVIEWER))
+    task = await step(act_as(person(WORKER)), task, "accept")
+    task = await ok(await act_as(ADMIN).post(f"{BASE}/tasks/{task['id']}/assign", json={"assignee_user_id": str(DEVELOPER)}, headers=if_match(task)))
+    task = await step(act_as(person(DEVELOPER)), task, "submit")
+
+    reviewer = act_as(person(REVIEWER))
+    response = await reviewer.post(
+        f"{BASE}/tasks/{task['id']}/transitions", json={"transition_code": "send_back", "reason": "Breaks on Safari"},
+        headers=if_match(task),
+    )
+    task = await ok(response)
+    assert (task["status"], task["assignee"]["id"], task["review_round"]) == ("in_progress", str(DEVELOPER), 1)
+    sent_back = (await db_session.execute(
+        select(OutboxEvent).where(OutboxEvent.event_type == "delivery.task.sent_back.v1")
+    )).scalar_one()
+    assert (sent_back.payload["recipient_user_ids"], sent_back.payload["body"]) == ([str(DEVELOPER)], "Breaks on Safari")

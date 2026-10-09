@@ -1217,9 +1217,19 @@ async def _refuse_if_governed(session: AsyncSession, task: Task) -> None:
 
 
 async def _follow_stage(
-    session: AsyncSession, task: Task, category: Optional[str], user_id: Optional[uuid.UUID], reason: str, now: datetime
+    session: AsyncSession,
+    task: Task,
+    category: Optional[str],
+    user_id: Optional[uuid.UUID],
+    reason: str,
+    now: datetime,
+    note: Optional[str] = None,
 ) -> None:
-    """Sets the status the stage stands for, with what that status brings (as the task's own actions do)."""
+    """
+    Sets the status the stage stands for, with what that status brings (as the task's own
+    actions do). Work going back from review starts a new review round and tells the assignee,
+    with the step's note.
+    """
     if category is None:
         return
     to_status = status_in_stage(category, task.assignee_user_id)
@@ -1227,6 +1237,9 @@ async def _follow_stage(
         return
     from_status = task.status
     task.status = to_status
+    if from_status == "in_review" and to_status in ("open", "assigned", "in_progress"):
+        task.review_round += 1
+        notify.sent_back(session, task, user_id, note or "")
     if to_status == "in_progress":
         _picked_up(task, now)
     elif to_status == "in_review":
@@ -1249,13 +1262,20 @@ async def _restate_governed(session: AsyncSession, task: Task, user_id: Optional
 
 
 async def enter_task_stage(
-    session: AsyncSession, people: Optional[PeopleDirectory], task: Task, stage: Stage, user_id: Optional[uuid.UUID]
+    session: AsyncSession,
+    people: Optional[PeopleDirectory],
+    task: Task,
+    stage: Stage,
+    user_id: Optional[uuid.UUID],
+    note: Optional[str] = None,
 ) -> None:
     """
     The workflow governing `task` entered `stage`. A stage owned by another team moves the task
     there as an accepted handover does: off its assignee into that team's queue, given out by the
     team's policy, and its head told when the company has alerts on. Then the task takes the
-    status the stage stands for.
+    status the stage stands for. The task's version moves on too, however the workflow was moved
+    (its own step, the workflow panel, an approval), so a copy read before can't take a step
+    from the new stage unseen.
     """
     now = datetime.now(timezone.utc)
     reason = f"Workflow: {stage.name}"
@@ -1266,7 +1286,7 @@ async def enter_task_stage(
         await _end_assignments(session, task.id, "assignee", reason)
         task.owning_unit_id = unit_id
         task.assignee_user_id = None
-    await _follow_stage(session, task, stage.status_category, user_id, reason, now)
+    await _follow_stage(session, task, stage.status_category, user_id, reason, now, note)
     if moved:
         if people is not None:
             await _give_out_by_team_policy(session, people, task.organization_id, task)
@@ -1274,7 +1294,16 @@ async def enter_task_stage(
         if task.assignee_user_id is None and await team_alerts(session, task.organization_id):
             notify.request_for_team(session, task, user_id)
     task.updated_at = now
+    task.version += 1
     await session.flush()
+
+
+async def workflow_step_waits(session: AsyncSession, task_id: uuid.UUID) -> None:
+    """A step of the task's workflow started or stopped waiting for approval: the task as people see it changed."""
+    task = await session.get(Task, task_id)
+    if task is not None:
+        task.version += 1
+        task.updated_at = datetime.now(timezone.utc)
 
 
 async def _end_governing_workflow(session: AsyncSession, task: Task) -> None:

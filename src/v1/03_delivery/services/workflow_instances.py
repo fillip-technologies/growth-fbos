@@ -73,6 +73,7 @@ from services.tasks import (
     governing_stage,
     open_required_stage_tasks,
     stage_entry_issues,
+    workflow_step_waits,
 )
 from services.workflows import get_definition_by_code
 
@@ -203,6 +204,7 @@ async def _enter_stage(
     via_transition_id: Optional[uuid.UUID],
     people: Optional[PeopleDirectory] = None,
     user_id: Optional[uuid.UUID] = None,
+    note: Optional[str] = None,
 ) -> StageRun:
     stage_run = StageRun(
         instance_id=instance.id,
@@ -217,7 +219,7 @@ async def _enter_stage(
     if instance.governs_status and instance.subject_type == TASK_SUBJECT:
         task = await session.get(Task, instance.subject_id)
         if task is not None:
-            await enter_task_stage(session, people, task, stage, user_id)
+            await enter_task_stage(session, people, task, stage, user_id, note)
 
     if stage.stage_type == "end":
         instance.status = "completed"
@@ -494,7 +496,7 @@ async def _move(
     from_run.status = "completed"
     to_stage = await session.get(Stage, transition.to_stage_id)
     to_run = await _enter_stage(
-        session, instance, to_stage, via_transition_id=transition.id, people=people, user_id=performed_by
+        session, instance, to_stage, via_transition_id=transition.id, people=people, user_id=performed_by, note=reason
     )
     session.add(
         TransitionLog(
@@ -557,6 +559,8 @@ async def perform_transition(
         session.add(signal)
         instance.status = "waiting_approval"
         instance.version += 1
+        if instance.governs_status and instance.subject_type == TASK_SUBJECT:
+            await workflow_step_waits(session, instance.subject_id)
         await session.flush()
         return TransitionResult(outcome="approval_pending", instance=await _instance_response(session, instance), approval_request_id=signal.id)
 
@@ -618,6 +622,8 @@ async def reject_step(
     _resolve(signal, "rejected", user_id, reason)
     instance.status = "running"
     instance.version += 1
+    if instance.governs_status and instance.subject_type == TASK_SUBJECT:
+        await workflow_step_waits(session, instance.subject_id)
     await session.flush()
     return await _instance_response(session, instance)
 
