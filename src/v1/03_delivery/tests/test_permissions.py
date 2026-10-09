@@ -129,6 +129,10 @@ async def test_every_route_is_guarded_unless_meant_to_be_open():
         ("post", "/requests", permissions.TASK_REQUEST),
         ("get", "/assignment-policies", permissions.TASK_READ),
         ("put", f"/assignment-policies/{uuid.uuid4()}", permissions.TEMPLATE_MANAGE),
+        ("get", "/workflow/templates", permissions.WORKFLOW_READ),
+        ("post", "/workflow/templates/bug-fix/install", permissions.WORKFLOW_MANAGE),
+        ("put", f"/task-types/{uuid.uuid4()}/workflow", permissions.TEMPLATE_MANAGE),
+        ("get", f"/tasks/{uuid.uuid4()}/transitions", permissions.TASK_READ),
     ],
 )
 async def test_missing_permission_is_refused(client_as, method, path, required_permission):

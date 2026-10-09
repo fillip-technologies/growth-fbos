@@ -79,6 +79,31 @@ class TransitionDef(BaseModel):
     priority: Optional[int] = 0
 
 
+class WorkflowTemplateStage(BaseModel):
+    code: str
+    name: str
+    status_category: StatusCategory
+
+
+class WorkflowTemplateResponse(BaseModel):
+    """A ready-made task workflow a company can install (services/workflow_templates.py)."""
+
+    code: str
+    name: str
+    discipline: str
+    summary: str
+    stages: list[WorkflowTemplateStage]
+    # The steps' names, in order.
+    steps: list[str]
+
+
+class WorkflowTemplateInstall(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    code: Optional[str] = Field(None, pattern=r"^[a-z0-9\-]+$", description="The workflow's code in the company; default: the template's")
+    name: Optional[str] = Field(None, min_length=1, max_length=255, description="Default: the template's name")
+
+
 class WorkflowVersionContent(BaseModel):
     model_config = ConfigDict(extra="forbid")
 

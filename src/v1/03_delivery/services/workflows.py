@@ -119,6 +119,10 @@ async def create_workflow_definition(
     return (await _definition_responses(session, [definition]))[0]
 
 
+async def definition_response(session: AsyncSession, definition: WorkflowDefinition) -> WorkflowDefinitionResponse:
+    return (await _definition_responses(session, [definition]))[0]
+
+
 async def get_definition_by_code(session: AsyncSession, org_id: uuid.UUID, definition_code: str) -> WorkflowDefinition:
     res = await session.execute(
         select(WorkflowDefinition).where(

@@ -201,6 +201,11 @@ class WorkflowGovernsStatusError(DeliveryServiceError):
         )
 
 
+class WorkflowTemplateNotFoundError(DeliveryServiceError):
+    def __init__(self, template_code: str) -> None:
+        super().__init__(status.HTTP_404_NOT_FOUND, "WORKFLOW_TEMPLATE_NOT_FOUND", f"No workflow template '{template_code}'.")
+
+
 class TaskHasNoWorkflowError(DeliveryServiceError):
     """409: No workflow governs the task, so it has no workflow steps."""
 
