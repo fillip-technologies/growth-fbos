@@ -203,7 +203,14 @@ class UserPermissionsReplace(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     permissions: list[PermissionGrantInput] = Field(default_factory=list, max_length=500)
-    role_assignments: list[RolePresetInput] = Field(default_factory=list, max_length=20)
+    role_assignments: Optional[list[RolePresetInput]] = Field(
+        None,
+        max_length=20,
+        description=(
+            "The user's complete set of role presets. Omit it to keep the current presets for as long "
+            "as the user still holds all of their permissions."
+        ),
+    )
     reason: str = Field(..., min_length=1, max_length=500, description="Recorded in the audit trail.")
 
 

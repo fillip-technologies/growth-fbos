@@ -274,6 +274,7 @@ class UserPermissionService:
         grants: list[ResolvedGrant],
         presets: list[ResolvedPreset],
         reason: str,
+        replace_presets: bool = False,
     ) -> tuple[list[str], list[str]]:
         """
         Make `grants` the user's complete permission set. Every row that is added,
@@ -319,14 +320,21 @@ class UserPermissionService:
             row.granted_by_id = actor.user_id
             row.granted_at = datetime.now(timezone.utc)
 
-        # The request's presets are the complete set of role presets: drop the existing
-        # records and record the ones sent, so a preset can be removed even while another
-        # role still covers its permissions.
+        # With `replace_presets` the request's presets are the complete set, so a preset can
+        # be removed even while another role still covers its permissions. Otherwise a preset
+        # record stays only while the user still holds all of that role's permissions in its
+        # scope, so it never misreports where access came from.
         existing_presets = (
             await session.execute(select(RoleAssignment).where(RoleAssignment.user_id == user.id))
         ).unique().scalars().all()
         for assignment in existing_presets:
-            await session.delete(assignment)
+            role_codes = {rp.permission_code for rp in assignment.role.role_permissions} if assignment.role else set()
+            if (
+                replace_presets
+                or not role_codes
+                or any((code, assignment.scope_unit_id) not in wanted for code in role_codes)
+            ):
+                await session.delete(assignment)
         await session.flush()
         self.add_to_user(session, actor, user, added, presets, reason)
         return sorted({g.code for g in added + changed}), sorted({r.permission_code for r in removed_rows})
