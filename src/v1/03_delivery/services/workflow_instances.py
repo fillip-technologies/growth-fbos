@@ -12,6 +12,12 @@ published workflow version.
   owning team is the stage's `owner_unit_selector.unit_id`, else the project's team; the
   assignee is `assignee_selector.user_id`, else nobody (the team's queue); the due date is
   `due_offset_minutes` after the stage is entered.
+- An instance that governs its task (started because the task's type follows the workflow,
+  services/task_workflows.py) moves the task with it: each stage sets the task's status by its
+  category, and a stage of another team moves the task there (services/tasks.py,
+  `enter_task_stage`). A task has at most one such workflow, and nothing else runs beside it.
+  Steps into a stage the task isn't ready for (blocked, waiting on other tasks, fields or
+  checklist missing for review) are blocked, and cancelling either ends the other.
 """
 
 import uuid
@@ -57,7 +63,17 @@ from services.identity_client import Actor
 from services.json_logic import evaluate, truthy
 from services.pagination import paginate
 from services.refs import unit_ref
-from services.tasks import TASK_SUBJECT, WORK_UNIT_SUBJECT, create_stage_task, open_required_stage_tasks
+from services.assignees import PeopleDirectory
+from services.tasks import (
+    TASK_SUBJECT,
+    WORK_UNIT_SUBJECT,
+    cancel_task_with_workflow,
+    create_stage_task,
+    enter_task_stage,
+    governing_stage,
+    open_required_stage_tasks,
+    stage_entry_issues,
+)
 from services.workflows import get_definition_by_code
 
 TERMINAL_STATUSES = {"completed", "cancelled", "failed"}
@@ -115,6 +131,9 @@ async def start_workflow_instance(
     )
     if running_res.first():
         raise InstanceAlreadyRunningError()
+    # A task its type's workflow governs follows that one only.
+    if data.subject.type == TASK_SUBJECT and await governing_stage(session, data.subject.id) is not None:
+        raise InstanceAlreadyRunningError()
 
     if definition.current_version_id is None:
         raise WorkflowVersionNotFoundError()
@@ -143,8 +162,47 @@ async def start_workflow_instance(
     return await _instance_response(session, instance)
 
 
+async def start_governing_workflow(
+    session: AsyncSession,
+    people: Optional[PeopleDirectory],
+    task: Task,
+    definition: WorkflowDefinition,
+    user_id: Optional[uuid.UUID],
+) -> Optional[WorkflowInstance]:
+    """Starts the workflow a new task's type follows, on its current version, and puts the task in its first stage."""
+    if definition.current_version_id is None:
+        return None
+    start_stage = (
+        await session.execute(
+            select(Stage).where(Stage.version_id == definition.current_version_id, Stage.stage_type == "start")
+        )
+    ).scalars().first()
+    if start_stage is None:
+        return None
+    instance = WorkflowInstance(
+        version_id=definition.current_version_id,
+        organization_id=task.organization_id,
+        subject_type=TASK_SUBJECT,
+        subject_id=task.id,
+        status="running",
+        context={},
+        started_by=user_id,
+        version=1,
+        governs_status=True,
+    )
+    session.add(instance)
+    await session.flush()
+    await _enter_stage(session, instance, start_stage, via_transition_id=None, people=people, user_id=user_id)
+    return instance
+
+
 async def _enter_stage(
-    session: AsyncSession, instance: WorkflowInstance, stage: Stage, via_transition_id: Optional[uuid.UUID]
+    session: AsyncSession,
+    instance: WorkflowInstance,
+    stage: Stage,
+    via_transition_id: Optional[uuid.UUID],
+    people: Optional[PeopleDirectory] = None,
+    user_id: Optional[uuid.UUID] = None,
 ) -> StageRun:
     stage_run = StageRun(
         instance_id=instance.id,
@@ -155,6 +213,11 @@ async def _enter_stage(
     )
     session.add(stage_run)
     await session.flush()
+
+    if instance.governs_status and instance.subject_type == TASK_SUBJECT:
+        task = await session.get(Task, instance.subject_id)
+        if task is not None:
+            await enter_task_stage(session, people, task, stage, user_id)
 
     if stage.stage_type == "end":
         instance.status = "completed"
@@ -351,10 +414,20 @@ async def _open_stage_runs(session: AsyncSession, instance: WorkflowInstance) ->
 
 
 async def _blocked_reasons(
-    session: AsyncSession, actor: Actor, transition: Transition, from_run: StageRun, context: dict
+    session: AsyncSession,
+    actor: Actor,
+    transition: Transition,
+    from_run: StageRun,
+    context: dict,
+    instance: Optional[WorkflowInstance] = None,
 ) -> list[str]:
     """Why `actor` can't take `transition` now; empty when they can."""
     reasons = []
+    if instance is not None and instance.governs_status and instance.subject_type == TASK_SUBJECT:
+        task = await session.get(Task, instance.subject_id)
+        to_stage = await session.get(Stage, transition.to_stage_id)
+        if task is not None and to_stage is not None:
+            reasons.extend(await stage_entry_issues(session, task, to_stage.status_category))
     if transition.allowed_permission and not actor.has(transition.allowed_permission):
         reasons.append(f"Needs the '{transition.allowed_permission}' permission")
     if transition.condition and not truthy(evaluate(transition.condition, context)):
@@ -389,7 +462,9 @@ async def list_available_transitions(
         )
     data = []
     for transition in page_rows:
-        reasons = await _blocked_reasons(session, actor, transition, open_runs[transition.from_stage_id], instance.context or {})
+        reasons = await _blocked_reasons(
+            session, actor, transition, open_runs[transition.from_stage_id], instance.context or {}, instance
+        )
         data.append(
             AvailableTransitionResponse(
                 code=transition.code,
@@ -411,13 +486,16 @@ async def _move(
     performed_by: uuid.UUID,
     reason: Optional[str],
     approval_signal_id: Optional[uuid.UUID] = None,
+    people: Optional[PeopleDirectory] = None,
 ) -> None:
     """Leave the transition's stage and enter the next one (finishing at an end stage)."""
     from_run.exited_at = datetime.now(timezone.utc)
     from_run.exited_via_transition_id = transition.id
     from_run.status = "completed"
     to_stage = await session.get(Stage, transition.to_stage_id)
-    to_run = await _enter_stage(session, instance, to_stage, via_transition_id=transition.id)
+    to_run = await _enter_stage(
+        session, instance, to_stage, via_transition_id=transition.id, people=people, user_id=performed_by
+    )
     session.add(
         TransitionLog(
             instance_id=instance.id,
@@ -436,7 +514,13 @@ async def _move(
 
 
 async def perform_transition(
-    session: AsyncSession, org_id: uuid.UUID, actor: Actor, instance_id: uuid.UUID, data: TransitionRequest, if_match: Optional[str]
+    session: AsyncSession,
+    org_id: uuid.UUID,
+    actor: Actor,
+    instance_id: uuid.UUID,
+    data: TransitionRequest,
+    if_match: Optional[str],
+    people: Optional[PeopleDirectory] = None,
 ) -> TransitionResult:
     instance = await _get_instance(session, org_id, instance_id, for_update=True)
     _check_if_match(if_match, instance.version)
@@ -457,7 +541,7 @@ async def perform_transition(
     # The patch counts for the conditions (and stays only if the transition is taken).
     context = {**(instance.context or {}), **(data.context_patch or {})}
     from_run = open_runs[transition.from_stage_id]
-    reasons = await _blocked_reasons(session, actor, transition, from_run, context)
+    reasons = await _blocked_reasons(session, actor, transition, from_run, context, instance)
     if reasons:
         raise TransitionConditionFailedError(transition.code, "; ".join(reasons) + ".")
     instance.context = context
@@ -476,7 +560,7 @@ async def perform_transition(
         await session.flush()
         return TransitionResult(outcome="approval_pending", instance=await _instance_response(session, instance), approval_request_id=signal.id)
 
-    await _move(session, instance, transition, from_run, actor.user_id, data.reason)
+    await _move(session, instance, transition, from_run, actor.user_id, data.reason, people=people)
     return TransitionResult(outcome="transitioned", instance=await _instance_response(session, instance))
 
 
@@ -503,7 +587,13 @@ def _resolve(signal: PendingSignal, decision: str, user_id: uuid.UUID, note: Opt
 
 
 async def approve_step(
-    session: AsyncSession, org_id: uuid.UUID, user_id: uuid.UUID, instance_id: uuid.UUID, note: Optional[str], if_match: Optional[str]
+    session: AsyncSession,
+    org_id: uuid.UUID,
+    user_id: uuid.UUID,
+    instance_id: uuid.UUID,
+    note: Optional[str],
+    if_match: Optional[str],
+    people: Optional[PeopleDirectory] = None,
 ) -> WorkflowInstanceResponse:
     """Approve the step the instance waits for: the transition is taken now."""
     instance = await _get_instance(session, org_id, instance_id, for_update=True)
@@ -514,7 +604,7 @@ async def approve_step(
 
     _resolve(signal, "approved", user_id, note)
     instance.status = "running"
-    await _move(session, instance, transition, from_run, user_id, note, approval_signal_id=signal.id)
+    await _move(session, instance, transition, from_run, user_id, note, approval_signal_id=signal.id, people=people)
     return await _instance_response(session, instance)
 
 
@@ -559,7 +649,12 @@ async def resume_instance(
 
 
 async def cancel_instance(
-    session: AsyncSession, org_id: uuid.UUID, instance_id: uuid.UUID, data: HoldRequest, if_match: Optional[str]
+    session: AsyncSession,
+    org_id: uuid.UUID,
+    instance_id: uuid.UUID,
+    data: HoldRequest,
+    if_match: Optional[str],
+    user_id: Optional[uuid.UUID] = None,
 ) -> WorkflowInstanceResponse:
     instance = await _get_instance(session, org_id, instance_id, for_update=True)
     _check_if_match(if_match, instance.version)
@@ -570,6 +665,10 @@ async def cancel_instance(
     )
     for signal in waiting.scalars().all():
         signal.status = "cancelled"
+    if instance.governs_status and instance.subject_type == TASK_SUBJECT:
+        task = await session.get(Task, instance.subject_id)
+        if task is not None:
+            await cancel_task_with_workflow(session, task, user_id, data.reason or "Its workflow was cancelled")
     instance.status = "cancelled"
     instance.completed_at = datetime.now(timezone.utc)
     instance.version += 1

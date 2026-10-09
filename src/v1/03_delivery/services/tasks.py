@@ -29,7 +29,7 @@ from dataclasses import dataclass, replace
 from datetime import date, datetime, timedelta, timezone
 from typing import Optional
 
-from sqlalchemy import ColumnElement, and_, func, or_, select
+from sqlalchemy import ColumnElement, and_, func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from exceptions import (
@@ -62,6 +62,7 @@ from exceptions import (
     TimeEntryNotOwnError,
     ValidationFailedError,
     VersionConflictError,
+    WorkflowGovernsStatusError,
 )
 from models.task import ChecklistItem, Task, TaskDependency
 from models.task_assignment import Handover, TaskAssignment
@@ -69,6 +70,9 @@ from models.task_template import RecurringTaskRule, TaskTemplate, TaskType
 from models.task_tracking import TaskComment, TaskReview, TaskStatusHistory, TimeEntry
 from models.task_type_profile import TaskTypeProfile
 from models.work_unit import WorkUnit
+from models.workflow_definition import WorkflowDefinition, WorkflowVersion
+from models.workflow_instance import StageRun, WorkflowInstance
+from models.workflow_stage import Stage
 from schemas.common import PageResponse
 from schemas.tasks import (
     AssignmentResponse,
@@ -79,6 +83,8 @@ from schemas.tasks import (
     CommentCreate,
     CustomFieldScope,
     CommentResponse,
+    GoverningStage,
+    GoverningWorkflow,
     DependencyCreate,
     DependencyResponse,
     HandoverAccept,
@@ -231,14 +237,64 @@ async def _task_responses(session: AsyncSession, tasks: list[Task]) -> list[Task
         checklists[item.task_id].append(_checklist_item_response(item))
     project_verticals = await _project_verticals(session, {t.work_unit_id for t in tasks if t.work_unit_id})
     calendars = await _page_calendars(session, tasks)
+    governing = await _governing_workflows(session, [t.id for t in tasks])
     now = datetime.now(timezone.utc)
     return [
         _task_response(
             task, task_types[task.task_type_id], profiles[task.task_type_id], checklists[task.id], now,
-            _custom_field_scope(task, project_verticals), calendars.get(task.owning_unit_id),
+            _custom_field_scope(task, project_verticals), calendars.get(task.owning_unit_id), governing.get(task.id),
         )
         for task in tasks
     ]
+
+
+async def _governing_workflows(session: AsyncSession, task_ids: list[uuid.UUID]) -> dict[uuid.UUID, GoverningWorkflow]:
+    """The workflow each task of a page follows and the stage it is in (one query when none do)."""
+    instances = list(
+        (
+            await session.execute(
+                select(WorkflowInstance).where(
+                    WorkflowInstance.subject_type == TASK_SUBJECT,
+                    WorkflowInstance.subject_id.in_(task_ids),
+                    WorkflowInstance.governs_status.is_(True),
+                    WorkflowInstance.status.notin_(_ENDED_INSTANCE),
+                )
+            )
+        ).scalars().all()
+    )
+    if not instances:
+        return {}
+    stages = {
+        instance_id: (code, name, category)
+        for instance_id, code, name, category in (
+            await session.execute(
+                select(StageRun.instance_id, Stage.code, Stage.name, Stage.status_category)
+                .join(Stage, Stage.id == StageRun.stage_id)
+                .where(StageRun.instance_id.in_([i.id for i in instances]), StageRun.exited_at.is_(None))
+            )
+        ).all()
+    }
+    definitions = dict(
+        (
+            await session.execute(
+                select(WorkflowVersion.id, WorkflowDefinition.code)
+                .join(WorkflowDefinition, WorkflowDefinition.id == WorkflowVersion.definition_id)
+                .where(WorkflowVersion.id.in_({i.version_id for i in instances}))
+            )
+        ).all()
+    )
+    governing = {}
+    for instance in instances:
+        if instance.id not in stages:
+            continue
+        code, name, category = stages[instance.id]
+        governing[instance.subject_id] = GoverningWorkflow(
+            instance_id=instance.id,
+            definition_code=definitions.get(instance.version_id, ""),
+            stage=GoverningStage(code=code, name=name, status_category=category),
+            waiting_approval=instance.status == "waiting_approval",
+        )
+    return governing
 
 
 async def _calendar_for(session: AsyncSession, org_id: uuid.UUID, unit_id: Optional[uuid.UUID]) -> Optional[WorkCalendar]:
@@ -282,6 +338,7 @@ def _task_response(
     now: datetime,
     custom_field_scope: CustomFieldScope,
     calendar: Optional[WorkCalendar] = None,
+    governing_workflow: Optional[GoverningWorkflow] = None,
 ) -> TaskResponse:
     attributes = task.attributes or {}
     resolution = resolution_sla(task, profile, now, calendar)
@@ -327,6 +384,7 @@ def _task_response(
         cadence_step=attributes.get("cadence_step"),
         attributes={k: v for k, v in attributes.items() if k != "labels"},
         custom_field_scope=custom_field_scope,
+        governing_workflow=governing_workflow,
         version=task.version,
         created_by=user_ref(task.created_by),
         created_at=task.created_at,
@@ -730,7 +788,16 @@ async def create_task(
     if task.assignee_user_id is not None:
         notify.assigned(session, task, user_id)
     await _give_out_by_team_policy(session, people, org_id, task)
+    await _start_type_workflow(session, people, task, user_id)
     return await _build_task_response(session, task)
+
+
+async def _start_type_workflow(session: AsyncSession, people: Optional[PeopleDirectory], task: Task, user_id: Optional[uuid.UUID]) -> None:
+    """A new task follows its type's workflow, if the organization gave the type one (services/task_workflows.py)."""
+    # Imported here: task_workflows builds on this module and on the workflow engine, which does too.
+    from services.task_workflows import follow_type_workflow
+
+    await follow_type_workflow(session, people, task, user_id)
 
 
 async def _give_out_by_team_policy(session: AsyncSession, people: PeopleDirectory, org_id: uuid.UUID, task: Task) -> None:
@@ -1007,6 +1074,7 @@ async def assign_task(
 
     if task.status != from_status:
         await _record_status_history(session, task, from_status, task.status, user_id, data.note)
+    await _restate_governed(session, task, user_id)
     if newly_assigned:
         notify.assigned(session, task, user_id)
 
@@ -1045,11 +1113,218 @@ async def claim_task(
     task.status = "assigned"
     session.add(TaskAssignment(task_id=task.id, unit_id=task.owning_unit_id, user_id=user_id, assigned_by=user_id))
     await _record_status_history(session, task, from_status, task.status, user_id, "Taken from the team's queue")
+    await _restate_governed(session, task, user_id)
 
     task.updated_at = datetime.now(timezone.utc)
     task.version += 1
     await session.flush()
     return await _build_task_response(session, task)
+
+
+# --- What moving a task's status brings with it ------------------------------------
+# Shared by the task's own actions (start, submit, review) and by a workflow moving the task
+# through its stages (services/workflow_instances.py), so both check and record the same things.
+
+
+async def _waits_for_open_tasks(session: AsyncSession, task: Task) -> bool:
+    """Whether a task it must wait for (finish-to-start) is still unfinished."""
+    dependencies = await session.execute(
+        select(TaskDependency).where(TaskDependency.task_id == task.id, TaskDependency.dependency_type == "FS")
+    )
+    for dependency in dependencies.scalars().all():
+        blocker = await session.get(Task, dependency.depends_on_task_id)
+        if blocker and blocker.status not in _TERMINAL_TASK_STATUSES:
+            return True
+    return False
+
+
+def _picked_up(task: Task, now: datetime) -> None:
+    """Work starts: its start time, and the first pick-up answers the response SLA."""
+    if task.start_at is None:
+        task.start_at = now
+    attrs = dict(task.attributes or {})
+    attrs.setdefault("responded_at", now.isoformat())
+    task.attributes = attrs
+
+
+async def _ensure_ready_to_hand_in(
+    session: AsyncSession, task: Task, profile: Profile, attrs: dict, more_issues: list[dict[str, str]]
+) -> None:
+    """Refuses to hand the work in while fields required on submit are empty or mandatory checklist items open."""
+    issues = missing_on_submit(profile.fields, attrs) + more_issues
+    if issues:
+        raise TaskAttributesInvalidError(issues)
+    pending = await session.execute(
+        select(ChecklistItem).where(
+            ChecklistItem.task_id == task.id, ChecklistItem.mandatory == True, ChecklistItem.done_at.is_(None)  # noqa: E712
+        )
+    )
+    open_items = pending.scalars().all()
+    if open_items:
+        raise TaskChecklistIncompleteError([str(i.id) for i in open_items])
+
+
+def _finished(task: Task, at: datetime) -> None:
+    task.completed_at = at
+    task.progress_pct = 100
+
+
+# --- Tasks a workflow governs ----------------------------------------------------
+# A task whose type follows a workflow (services/task_workflows.py) takes its status from the
+# stage it is in: the stage's status category, and whether someone has the task.
+
+_ENDED_INSTANCE = ("completed", "cancelled", "failed")
+
+
+def status_in_stage(category: str, assignee_user_id: Optional[uuid.UUID]) -> str:
+    """The task status a stage's category stands for: open and in-progress stages need someone to have the task."""
+    if category == "open":
+        return "assigned" if assignee_user_id else "open"
+    if category == "in_progress":
+        return "in_progress" if assignee_user_id else "open"
+    return category  # in_review, done, cancelled: task statuses as they are
+
+
+async def governing_stage(session: AsyncSession, task_id: uuid.UUID) -> Optional[tuple[WorkflowInstance, Stage]]:
+    """The workflow governing the task and the stage it is in; None when no workflow governs it."""
+    instance = (
+        await session.execute(
+            select(WorkflowInstance).where(
+                WorkflowInstance.subject_type == TASK_SUBJECT,
+                WorkflowInstance.subject_id == task_id,
+                WorkflowInstance.governs_status.is_(True),
+                WorkflowInstance.status.notin_(_ENDED_INSTANCE),
+            )
+        )
+    ).scalars().first()
+    if instance is None:
+        return None
+    run = (
+        await session.execute(
+            select(StageRun)
+            .where(StageRun.instance_id == instance.id, StageRun.exited_at.is_(None))
+            .order_by(StageRun.entered_at.desc())
+        )
+    ).scalars().first()
+    stage = await session.get(Stage, run.stage_id) if run else None
+    return (instance, stage) if stage else None
+
+
+async def _refuse_if_governed(session: AsyncSession, task: Task) -> None:
+    """Start, submit and review are the workflow's steps for a task it governs."""
+    if await governing_stage(session, task.id) is not None:
+        raise WorkflowGovernsStatusError()
+
+
+async def _follow_stage(
+    session: AsyncSession, task: Task, category: Optional[str], user_id: Optional[uuid.UUID], reason: str, now: datetime
+) -> None:
+    """Sets the status the stage stands for, with what that status brings (as the task's own actions do)."""
+    if category is None:
+        return
+    to_status = status_in_stage(category, task.assignee_user_id)
+    if to_status == task.status:
+        return
+    from_status = task.status
+    task.status = to_status
+    if to_status == "in_progress":
+        _picked_up(task, now)
+    elif to_status == "in_review":
+        notify.review_requested(session, task, user_id)
+    elif to_status == "done":
+        _finished(task, now)
+        await notify.done(session, task, user_id)
+    elif to_status == "cancelled":
+        await notify.cancelled(session, task, user_id, reason)
+    await _record_status_history(session, task, from_status, to_status, user_id, reason)
+
+
+async def _restate_governed(session: AsyncSession, task: Task, user_id: Optional[uuid.UUID]) -> None:
+    """After the task's assignee changes or it is unblocked: the status its stage stands for now."""
+    governed = await governing_stage(session, task.id)
+    if governed is None:
+        return
+    _, stage = governed
+    await _follow_stage(session, task, stage.status_category, user_id, f"Workflow: {stage.name}", datetime.now(timezone.utc))
+
+
+async def enter_task_stage(
+    session: AsyncSession, people: Optional[PeopleDirectory], task: Task, stage: Stage, user_id: Optional[uuid.UUID]
+) -> None:
+    """
+    The workflow governing `task` entered `stage`. A stage owned by another team moves the task
+    there as an accepted handover does: off its assignee into that team's queue, given out by the
+    team's policy, and its head told when the company has alerts on. Then the task takes the
+    status the stage stands for.
+    """
+    now = datetime.now(timezone.utc)
+    reason = f"Workflow: {stage.name}"
+    unit_value = (stage.owner_unit_selector or {}).get("unit_id")
+    unit_id = uuid.UUID(str(unit_value)) if unit_value else None
+    moved = unit_id is not None and unit_id != task.owning_unit_id
+    if moved:
+        await _end_assignments(session, task.id, "assignee", reason)
+        task.owning_unit_id = unit_id
+        task.assignee_user_id = None
+    await _follow_stage(session, task, stage.status_category, user_id, reason, now)
+    if moved:
+        if people is not None:
+            await _give_out_by_team_policy(session, people, task.organization_id, task)
+            await _follow_stage(session, task, stage.status_category, user_id, reason, now)
+        if task.assignee_user_id is None and await team_alerts(session, task.organization_id):
+            notify.request_for_team(session, task, user_id)
+    task.updated_at = now
+    await session.flush()
+
+
+async def _end_governing_workflow(session: AsyncSession, task: Task) -> None:
+    """A cancelled task's workflow is cancelled with it."""
+    governed = await governing_stage(session, task.id)
+    if governed is None:
+        return
+    instance, _ = governed
+    now = datetime.now(timezone.utc)
+    instance.status = "cancelled"
+    instance.completed_at = now
+    instance.version += 1
+    await session.execute(
+        update(StageRun).where(StageRun.instance_id == instance.id, StageRun.exited_at.is_(None)).values(exited_at=now, status="cancelled")
+    )
+
+
+async def cancel_task_with_workflow(session: AsyncSession, task: Task, user_id: Optional[uuid.UUID], reason: str) -> None:
+    """The workflow governing the task was cancelled: the task is cancelled with it."""
+    if task.status in _TERMINAL_TASK_STATUSES:
+        return
+    from_status = task.status
+    task.status = "cancelled"
+    await _record_status_history(session, task, from_status, task.status, user_id, reason)
+    await notify.cancelled(session, task, user_id, reason)
+    task.updated_at = datetime.now(timezone.utc)
+    task.version += 1
+
+
+async def stage_entry_issues(session: AsyncSession, task: Task, category: Optional[str]) -> list[str]:
+    """What keeps a governed task from entering a stage of this category: as start and submit would refuse."""
+    reasons = []
+    if task.status == "blocked":
+        reasons.append("The task is blocked: unblock it first")
+    if category == "in_progress" and await _waits_for_open_tasks(session, task):
+        reasons.append("It waits for tasks that aren't finished yet")
+    if category in ("in_review", "done"):
+        profile = await load_profile(session, task.task_type_id)
+        missing = missing_on_submit(profile.fields, task.attributes or {})
+        if missing:
+            reasons.append("Fill in first: " + ", ".join(issue["field"] for issue in missing))
+        open_items = await session.execute(
+            select(func.count()).select_from(ChecklistItem).where(
+                ChecklistItem.task_id == task.id, ChecklistItem.mandatory == True, ChecklistItem.done_at.is_(None)  # noqa: E712
+            )
+        )
+        count = open_items.scalar_one()
+        if count:
+            reasons.append(f"{count} required checklist item(s) still open")
+    return reasons
 
 
 async def start_task(session: AsyncSession, org_id: uuid.UUID, user_id: uuid.UUID, task_id: uuid.UUID, if_match: Optional[str]) -> TaskResponse:
@@ -1058,24 +1333,17 @@ async def start_task(session: AsyncSession, org_id: uuid.UUID, user_id: uuid.UUI
 
     if task.assignee_user_id != user_id:
         raise NotAssigneeError()
+    await _refuse_if_governed(session, task)
     if task.status not in ("assigned", "rework"):
         raise InvalidStateTransitionError(task.status, "in_progress")
 
-    deps_res = await session.execute(select(TaskDependency).where(TaskDependency.task_id == task.id, TaskDependency.dependency_type == "FS"))
-    for dependency in deps_res.scalars().all():
-        blocker = await session.get(Task, dependency.depends_on_task_id)
-        if blocker and blocker.status not in _TERMINAL_TASK_STATUSES:
-            raise DependenciesOpenError()
+    if await _waits_for_open_tasks(session, task):
+        raise DependenciesOpenError()
 
     now = datetime.now(timezone.utc)
     from_status = task.status
     task.status = "in_progress"
-    if task.start_at is None:
-        task.start_at = now
-    attrs = dict(task.attributes or {})
-    # The first pick-up answers the response SLA.
-    attrs.setdefault("responded_at", now.isoformat())
-    task.attributes = attrs
+    _picked_up(task, now)
     await _record_status_history(session, task, from_status, task.status, user_id)
 
     task.updated_at = now
@@ -1128,7 +1396,9 @@ async def unblock_task(session: AsyncSession, org_id: uuid.UUID, actor: Actor, t
     attrs.pop("blocked_reason", None)
     attrs.pop("blocked_by_task_id", None)
     task.attributes = attrs
-    task.status = "in_progress"
+    governed = await governing_stage(session, task.id)
+    category = governed[1].status_category if governed else None
+    task.status = status_in_stage(category, task.assignee_user_id) if category else "in_progress"
     await _record_status_history(session, task, "blocked", task.status, actor.user_id)
 
     task.updated_at = now
@@ -1167,20 +1437,14 @@ async def submit_task(
 
     if task.assignee_user_id != user_id:
         raise NotAssigneeError()
+    await _refuse_if_governed(session, task)
     if task.status not in ("in_progress", "rework"):
         raise InvalidStateTransitionError(task.status, "submitted")
 
     task_type = await session.get(TaskType, task.task_type_id)
     profile = await load_profile(session, task.task_type_id)
     attrs = merge_attributes(dict(task.attributes or {}), data.attributes or {}, profile.fields)
-    issues = missing_on_submit(profile.fields, attrs) + _outcome_issues(profile, data.outcome)
-    if issues:
-        raise TaskAttributesInvalidError(issues)
-
-    checklist_res = await session.execute(select(ChecklistItem).where(ChecklistItem.task_id == task.id, ChecklistItem.mandatory == True, ChecklistItem.done_at.is_(None)))  # noqa: E712
-    pending = checklist_res.scalars().all()
-    if pending:
-        raise TaskChecklistIncompleteError([str(i.id) for i in pending])
+    await _ensure_ready_to_hand_in(session, task, profile, attrs, _outcome_issues(profile, data.outcome))
 
     now = datetime.now(timezone.utc)
     if data.outcome:
@@ -1193,8 +1457,7 @@ async def submit_task(
         notify.review_requested(session, task, user_id)
     else:
         task.status = "done"
-        task.completed_at = now
-        task.progress_pct = 100
+        _finished(task, now)
         await notify.done(session, task, user_id)
 
     await _record_status_history(session, task, from_status, task.status, user_id, data.note)
@@ -1290,6 +1553,7 @@ async def review_task(session: AsyncSession, org_id: uuid.UUID, actor: Actor, ta
 
     if not _may_review(actor, task):
         raise NotReviewerError()
+    await _refuse_if_governed(session, task)
     if task.status not in ("submitted", "in_review"):
         raise InvalidStateTransitionError(task.status, "reviewed")
     if data.result == "fail" and not data.feedback:
@@ -1309,8 +1573,7 @@ async def review_task(session: AsyncSession, org_id: uuid.UUID, actor: Actor, ta
         notify.sent_back(session, task, user_id, data.feedback or "")
     else:
         task.status = "done"
-        task.completed_at = reviewed_at
-        task.progress_pct = 100
+        _finished(task, reviewed_at)
         await notify.done(session, task, user_id)
 
     review = TaskReview(
@@ -1343,6 +1606,7 @@ async def cancel_task(session: AsyncSession, org_id: uuid.UUID, user_id: uuid.UU
     task.status = "cancelled"
     await _record_status_history(session, task, from_status, task.status, user_id, data.reason)
     await notify.cancelled(session, task, user_id, data.reason)
+    await _end_governing_workflow(session, task)
 
     task.updated_at = datetime.now(timezone.utc)
     task.version += 1
@@ -1980,6 +2244,7 @@ async def create_recurring_task(
     )
     task.template_id = template.id
     await _give_out_by_team_policy(session, people, rule.organization_id, task)
+    await _start_type_workflow(session, people, task, None)
     await session.flush()
     return task
 

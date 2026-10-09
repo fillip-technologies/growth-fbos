@@ -44,6 +44,10 @@ class StageTaskDef(BaseModel):
     due_offset_minutes: Optional[int] = Field(None, ge=0, description="Due this long after the stage is entered.")
 
 
+# The task status a stage stands for, in a workflow a task type follows.
+StatusCategory = Literal["open", "in_progress", "in_review", "done", "cancelled"]
+
+
 class StageDef(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -56,6 +60,9 @@ class StageDef(BaseModel):
     exit_criteria: Optional[dict] = Field(None, description="JSON Logic evaluated against the instance context.")
     allow_parallel: Optional[bool] = False
     task_templates: list[StageTaskDef] = Field(default_factory=list)
+    status_category: Optional[StatusCategory] = Field(
+        None, description="For a workflow tasks follow: the task's status while it is in this stage."
+    )
 
 
 class TransitionDef(BaseModel):

@@ -146,6 +146,21 @@ class TaskTypeUpdate(BaseModel):
         return self
 
 
+class TaskTypeWorkflowRef(BaseModel):
+    """A workflow tasks of a type follow."""
+
+    code: str
+    name: str
+
+
+class TaskTypeWorkflowUpdate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    definition_code: Optional[str] = Field(
+        None, description="The company's task workflow the type's new tasks follow; null: none (tasks move by their own actions)"
+    )
+
+
 class TaskTypeResponse(BaseModel):
     id: uuid.UUID
     code: str
@@ -162,3 +177,5 @@ class TaskTypeResponse(BaseModel):
     resolution_sla_minutes: Optional[SlaMinutes] = None
     review_rounds_included: Optional[int] = None
     archived: bool = False
+    # The workflow this company's tasks of the type follow (services/task_workflows.py), if any.
+    workflow: Optional[TaskTypeWorkflowRef] = None

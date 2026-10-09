@@ -11,6 +11,7 @@ from models.task import ChecklistItem, Task, TaskDependency, TaskWatcher
 from models.task_assignment import Handover, TaskAssignment
 from models.task_template import RecurringTaskRule, TaskTemplate, TaskType
 from models.task_type_profile import TaskTypeProfile
+from models.task_type_workflow import TaskTypeWorkflow
 from models.task_tracking import TaskComment, TaskReview, TaskStatusHistory, TimeEntry
 from models.workflow_definition import WorkflowDefinition, WorkflowVersion
 from models.workflow_execution import ActionExecution, TransitionLog
@@ -63,6 +64,7 @@ __all__ = [
     # Tasks
     "TaskType",
     "TaskTypeProfile",
+    "TaskTypeWorkflow",
     "TaskTemplate",
     "RecurringTaskRule",
     "Task",

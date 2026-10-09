@@ -6,7 +6,7 @@ from fastapi import APIRouter, Depends, Header, Query, Response, status
 import permissions
 import services.workflow_instances as instances
 import services.workflows as service
-from dependencies import CurrentActor, DatabaseSession, OrgId, UserId, require_permission
+from dependencies import CurrentActor, DatabaseSession, OrgId, People, UserId, require_permission
 from schemas.common import PageResponse
 from schemas.workflows import (
     ApprovalDecision,
@@ -209,10 +209,11 @@ async def perform_transition(
     session: DatabaseSession,
     org_id: OrgId,
     actor: CurrentActor,
+    people: People,
     if_match: Optional[str] = Header(None, alias="If-Match"),
 ) -> TransitionResult:
     """Perform a transition (plus the transition's own permission, when it names one)."""
-    result = await instances.perform_transition(session, org_id, actor, instance_id, payload, if_match)
+    result = await instances.perform_transition(session, org_id, actor, instance_id, payload, if_match, people)
     await session.commit()
     return result
 
@@ -250,10 +251,11 @@ async def cancel_instance(
     payload: HoldRequest,
     session: DatabaseSession,
     org_id: OrgId,
+    user_id: UserId,
     if_match: Optional[str] = Header(None, alias="If-Match"),
 ) -> WorkflowInstanceResponse:
-    """Cancel an instance."""
-    instance = await instances.cancel_instance(session, org_id, instance_id, payload, if_match)
+    """Cancel an instance (and the task it governs, if it governs one)."""
+    instance = await instances.cancel_instance(session, org_id, instance_id, payload, if_match, user_id)
     await session.commit()
     return instance
 
@@ -280,10 +282,11 @@ async def approve_step(
     session: DatabaseSession,
     org_id: OrgId,
     user_id: UserId,
+    people: People,
     if_match: Optional[str] = Header(None, alias="If-Match"),
 ) -> WorkflowInstanceResponse:
     """Approve the step the instance is waiting for; the transition is taken."""
-    instance = await instances.approve_step(session, org_id, user_id, instance_id, payload.note, if_match)
+    instance = await instances.approve_step(session, org_id, user_id, instance_id, payload.note, if_match, people)
     await session.commit()
     return instance
 

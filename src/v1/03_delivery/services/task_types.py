@@ -6,11 +6,13 @@ from typing import Optional
 from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from exceptions import BuiltInReadOnlyError, DuplicateCodeError, TaskTypeNotFoundError
+from exceptions import BuiltInReadOnlyError, DuplicateCodeError, TaskTypeHasOutcomesError, TaskTypeNotFoundError
 from models.task_template import TaskType
 from models.task_type_profile import TaskTypeProfile
+from models.task_type_workflow import TaskTypeWorkflow
+from models.workflow_definition import WorkflowDefinition
 from schemas.common import PageResponse
-from schemas.task_types import TaskTypeCreate, TaskTypeResponse, TaskTypeUpdate
+from schemas.task_types import TaskTypeCreate, TaskTypeResponse, TaskTypeUpdate, TaskTypeWorkflowRef
 from services.pagination import paginate
 from services.task_profiles import Profile, load_profiles
 
@@ -33,7 +35,19 @@ def _visible_to(org_id: uuid.UUID):
     return or_(TaskType.organization_id == org_id, TaskType.organization_id.is_(None))
 
 
-def _response(task_type: TaskType, profile: Profile) -> TaskTypeResponse:
+async def _workflows(session: AsyncSession, org_id: uuid.UUID, type_ids: set[uuid.UUID]) -> dict[uuid.UUID, TaskTypeWorkflowRef]:
+    """The workflow the organization's tasks of each type follow."""
+    if not type_ids:
+        return {}
+    rows = await session.execute(
+        select(TaskTypeWorkflow.task_type_id, WorkflowDefinition.code, WorkflowDefinition.name)
+        .join(WorkflowDefinition, WorkflowDefinition.id == TaskTypeWorkflow.definition_id)
+        .where(TaskTypeWorkflow.organization_id == org_id, TaskTypeWorkflow.task_type_id.in_(type_ids))
+    )
+    return {type_id: TaskTypeWorkflowRef(code=code, name=name) for type_id, code, name in rows.all()}
+
+
+def _response(task_type: TaskType, profile: Profile, workflow: Optional[TaskTypeWorkflowRef] = None) -> TaskTypeResponse:
     return TaskTypeResponse(
         id=task_type.id,
         code=task_type.code,
@@ -50,6 +64,7 @@ def _response(task_type: TaskType, profile: Profile) -> TaskTypeResponse:
         resolution_sla_minutes=profile.resolution_sla_minutes or None,
         review_rounds_included=profile.review_rounds_included,
         archived=profile.archived,
+        workflow=workflow,
     )
 
 
@@ -75,7 +90,8 @@ async def list_task_types(
         query = query.where(or_(TaskTypeProfile.archived.is_(False), TaskTypeProfile.task_type_id.is_(None)))
     rows, page = await paginate(session, query, TaskType, limit, cursor, order_by=TaskType.code)
     profiles = await load_profiles(session, {t.id for t in rows})
-    return PageResponse(data=[_response(t, profiles[t.id]) for t in rows], page=page)
+    workflows = await _workflows(session, org_id, {t.id for t in rows})
+    return PageResponse(data=[_response(t, profiles[t.id], workflows.get(t.id)) for t in rows], page=page)
 
 
 async def _get_visible(session: AsyncSession, org_id: uuid.UUID, task_type_id: uuid.UUID) -> TaskType:
@@ -90,7 +106,8 @@ async def _get_visible(session: AsyncSession, org_id: uuid.UUID, task_type_id: u
 async def get_task_type(session: AsyncSession, org_id: uuid.UUID, task_type_id: uuid.UUID) -> TaskTypeResponse:
     task_type = await _get_visible(session, org_id, task_type_id)
     profiles = await load_profiles(session, {task_type.id})
-    return _response(task_type, profiles[task_type.id])
+    workflows = await _workflows(session, org_id, {task_type.id})
+    return _response(task_type, profiles[task_type.id], workflows.get(task_type.id))
 
 
 async def create_task_type(session: AsyncSession, org_id: uuid.UUID, data: TaskTypeCreate) -> TaskTypeResponse:
@@ -116,6 +133,9 @@ async def update_task_type(
     if task_type.organization_id is None:
         raise BuiltInReadOnlyError(task_type.code)
 
+    # Outcomes schedule follow-ups on submit, which a workflow's steps don't ask for yet.
+    if data.outcomes and await session.get(TaskTypeWorkflow, (org_id, task_type.id)) is not None:
+        raise TaskTypeHasOutcomesError(task_type.code)
     changes = {k: v for k, v in data.model_dump(exclude_unset=True).items() if v is not None or k not in _NOT_CLEARABLE}
     for column in _TYPE_COLUMNS:
         if column in changes:

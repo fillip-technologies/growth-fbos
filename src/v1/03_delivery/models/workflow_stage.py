@@ -27,6 +27,9 @@ class Stage(Base):
     sla_policy_code: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
     exit_criteria: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
     allow_parallel: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    # In a workflow a task type follows: the task's status while it is here (open, in_progress,
+    # in_review, done or cancelled). Added by the migration `e7c2a5d8f3b1`.
+    status_category: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)
 
 
 class Transition(Base):
