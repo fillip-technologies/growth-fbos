@@ -198,6 +198,31 @@ class CustomFieldScope(BaseModel):
     vertical_id: Optional[uuid.UUID] = None
 
 
+class GoverningStage(BaseModel):
+    code: str
+    name: str
+    status_category: Optional[str] = None
+
+
+class GoverningWorkflow(BaseModel):
+    """The workflow the task follows (its type's): its status moves by the workflow's steps."""
+
+    instance_id: uuid.UUID
+    definition_code: str
+    stage: GoverningStage
+    # A step waits for its approval: the task stays where it is until it's decided.
+    waiting_approval: bool = False
+
+
+class TaskStepRequest(BaseModel):
+    """Take one of the workflow's steps on a task (POST /tasks/{id}/transitions)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    transition_code: str
+    reason: Optional[str] = None
+
+
 class TaskResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
@@ -232,6 +257,7 @@ class TaskResponse(BaseModel):
     cadence_step: Optional[int] = None
     attributes: dict = Field(default_factory=dict)
     custom_field_scope: CustomFieldScope = Field(default_factory=CustomFieldScope)
+    governing_workflow: Optional[GoverningWorkflow] = None
     version: int
     created_by: Optional[UserRef] = None
     created_at: datetime

@@ -22,6 +22,7 @@ from exceptions import (
     WorkflowVersionNotFoundError,
 )
 from models.task_template import TaskTemplate
+from models.task_type_workflow import TaskTypeWorkflow
 from models.workflow_definition import WorkflowDefinition, WorkflowVersion
 from models.workflow_stage import AutomationRule, Stage, StageTaskTemplate, Transition
 from schemas.common import PageResponse
@@ -181,6 +182,7 @@ async def _load_content(session: AsyncSession, version: WorkflowVersion) -> Work
                 exit_criteria=s.exit_criteria,
                 allow_parallel=s.allow_parallel,
                 task_templates=stage_tasks[s.id],
+                status_category=s.status_category,
             )
             for s in stages
         ],
@@ -241,6 +243,7 @@ async def _write_content(session: AsyncSession, version: WorkflowVersion, conten
             sla_policy_code=stage_def.sla_policy_code,
             exit_criteria=stage_def.exit_criteria,
             allow_parallel=stage_def.allow_parallel or False,
+            status_category=stage_def.status_category,
         )
         session.add(stage)
         await session.flush()
@@ -446,6 +449,24 @@ async def validate_workflow_version(
     return ValidationResult(valid=not issues, errors=issues)
 
 
+def task_readiness_issues(stages: list[tuple[str, str, Optional[str]]]) -> list[str]:
+    """
+    Why a version can't be one a task type follows, from its stages' (name, type, status
+    category): it needs a start stage, every stage a status category, and every end stage done
+    or cancelled (so the task finishes with it).
+    """
+    issues = []
+    if not any(stage_type == "start" for _, stage_type, _ in stages):
+        issues.append("it has no start stage")
+    uncategorized = [name for name, _, category in stages if not category]
+    if uncategorized:
+        issues.append("give these stages the task status they stand for: " + ", ".join(uncategorized))
+    open_ends = [name for name, stage_type, category in stages if stage_type == "end" and category not in ("done", "cancelled")]
+    if open_ends:
+        issues.append("an end stage must stand for done or cancelled: " + ", ".join(open_ends))
+    return issues
+
+
 async def publish_workflow_version(
     session: AsyncSession, org_id: uuid.UUID, definition_code: str, version_no: int, if_match: Optional[str]
 ) -> WorkflowVersionResponse:
@@ -458,6 +479,13 @@ async def publish_workflow_version(
 
     content = await _load_content(session, version)
     issues = await _publish_issues(session, org_id, content)
+    # Task types follow the workflow: a new version must still suit them.
+    followed = await session.execute(select(TaskTypeWorkflow.task_type_id).where(TaskTypeWorkflow.definition_id == definition.id))
+    if followed.first() is not None:
+        issues += [
+            ValidationIssue(code="NOT_READY_FOR_TASKS", message=message)
+            for message in task_readiness_issues([(s.name, s.stage_type, s.status_category) for s in content.stages])
+        ]
     if issues:
         raise WorkflowVersionInvalidError([i.model_dump() for i in issues])
 

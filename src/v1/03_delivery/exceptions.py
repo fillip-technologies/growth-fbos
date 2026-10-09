@@ -190,6 +190,48 @@ class TaskTypeNotFoundError(DeliveryServiceError):
         super().__init__(status.HTTP_404_NOT_FOUND, "TASK_TYPE_NOT_FOUND", message)
 
 
+class WorkflowGovernsStatusError(DeliveryServiceError):
+    """409: The task follows its type's workflow: its status moves by the workflow's steps."""
+
+    def __init__(self) -> None:
+        super().__init__(
+            status.HTTP_409_CONFLICT,
+            "WORKFLOW_GOVERNS_STATUS",
+            "This task follows its workflow: move it on with the workflow's steps.",
+        )
+
+
+class TaskHasNoWorkflowError(DeliveryServiceError):
+    """409: No workflow governs the task, so it has no workflow steps."""
+
+    def __init__(self) -> None:
+        super().__init__(status.HTTP_409_CONFLICT, "TASK_HAS_NO_WORKFLOW", "This task doesn't follow a workflow.")
+
+
+class WorkflowNotReadyForTasksError(DeliveryServiceError):
+    """422: The workflow can't be one a task type follows yet (see `details`)."""
+
+    def __init__(self, issues: list[str]) -> None:
+        super().__init__(
+            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            "WORKFLOW_NOT_READY_FOR_TASKS",
+            "This workflow can't be followed by a task type yet: " + "; ".join(issues),
+            details=[{"field": "definition_code", "issue": issue} for issue in issues],
+        )
+
+
+class TaskTypeHasOutcomesError(DeliveryServiceError):
+    """422: A type whose tasks record outcomes (and schedule follow-ups by them) can't follow a workflow."""
+
+    def __init__(self, task_type_code: str) -> None:
+        super().__init__(
+            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            "TASK_TYPE_HAS_OUTCOMES",
+            f"Tasks of '{task_type_code}' record outcomes when submitted, which a workflow doesn't ask for yet.",
+            meta={"task_type_code": task_type_code},
+        )
+
+
 class RoutingRuleNotFoundError(DeliveryServiceError):
     def __init__(self, rule_id: str) -> None:
         super().__init__(status.HTTP_404_NOT_FOUND, "ROUTING_RULE_NOT_FOUND", f"Routing rule {rule_id} not found")

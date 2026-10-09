@@ -2,7 +2,7 @@ import uuid
 from datetime import datetime, timezone
 from typing import Optional
 
-from sqlalchemy import DateTime, ForeignKey, Integer, JSON, String, Text, func
+from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, JSON, String, Text, func
 from sqlalchemy.orm import Mapped, mapped_column
 
 from database.base import Base
@@ -33,6 +33,10 @@ class WorkflowInstance(Base):
     )
     completed_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
     version: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    # Started because the task's type follows this workflow: its stages set the task's status
+    # (services/task_workflows.py). False for a workflow started by hand, which leaves it alone.
+    # Added by the migration `e7c2a5d8f3b1`.
+    governs_status: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
 
 
 class StageRun(Base):
