@@ -333,6 +333,17 @@ class FieldSchemaInvalidError(IdentityServiceError):
         )
 
 
+class RecordTypeNotFoundError(IdentityServiceError):
+    """404: No record type (object type) with this code is registered."""
+
+    def __init__(self, object_type: str) -> None:
+        super().__init__(
+            status_code=status.HTTP_404_NOT_FOUND,
+            code="NOT_FOUND",
+            message=f"No record type '{object_type}'.",
+        )
+
+
 class VerticalPackNotFoundError(IdentityServiceError):
     """404: Vertical pack not found."""
 

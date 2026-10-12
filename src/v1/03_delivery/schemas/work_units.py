@@ -56,6 +56,16 @@ class WorkTemplateCreate(BaseModel):
     vertical_id: Optional[uuid.UUID] = None
 
 
+class WorkTemplateUpdate(BaseModel):
+    """Rename a template, change its vertical (null: any), or retire it so no new project uses it."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    name: Optional[str] = Field(None, min_length=1, max_length=255)
+    vertical_id: Optional[uuid.UUID] = None
+    status: Optional[Literal["active", "retired"]] = None
+
+
 class WorkTemplateResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 

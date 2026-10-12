@@ -112,6 +112,7 @@ async def test_every_route_is_guarded_unless_meant_to_be_open():
         ("get", "/work-units", permissions.WORK_UNIT_READ),
         ("post", "/work-units", permissions.WORK_UNIT_WRITE),
         ("post", "/templates/STANDARD-PROJECT/versions", permissions.TEMPLATE_MANAGE),
+        ("patch", "/templates/STANDARD-PROJECT", permissions.TEMPLATE_MANAGE),
         ("get", "/handovers", permissions.HANDOVER_READ),
         ("post", "/handovers", permissions.HANDOVER_WRITE),
         ("get", "/workflow/definitions", permissions.WORKFLOW_READ),

@@ -538,6 +538,17 @@ class TemplateInvalidError(DeliveryServiceError):
         super().__init__(status.HTTP_422_UNPROCESSABLE_ENTITY, "TEMPLATE_INVALID", detail_msg)
 
 
+class TemplateRetiredError(DeliveryServiceError):
+    """409: The template is retired, so no new project may start from it."""
+
+    def __init__(self, template_code: str) -> None:
+        super().__init__(
+            status.HTTP_409_CONFLICT,
+            "TEMPLATE_RETIRED",
+            f"Template '{template_code}' is retired; make it active again to start projects from it.",
+        )
+
+
 class TemplateNotPublishedError(DeliveryServiceError):
     """422: The requested template (or version) is not published."""
 

@@ -30,6 +30,16 @@ from services.client_service import ClientService
 from services.opportunity_service import format_opportunity_detail
 
 
+def merge_attributes(stored: Optional[dict], changes: dict) -> dict:
+    """
+    `changes` over the stored attributes, as a new dict: the JSON column only notices a new
+    object, so a change made to the stored dict in place would silently not be saved. An empty
+    value (None, "", []) removes the key.
+    """
+    merged = {**(stored or {}), **changes}
+    return {key: value for key, value in merged.items() if value not in (None, "", [])}
+
+
 def format_lead_response(lead: Lead) -> LeadResponse:
     score = None
     if lead.attributes and isinstance(lead.attributes, dict):
@@ -189,14 +199,10 @@ class LeadService:
             lead.owner_user_id = payload.owner_user_id
 
         if payload.score is not None:
-            attrs = lead.attributes or {}
-            attrs["score"] = payload.score
-            lead.attributes = attrs
+            lead.attributes = merge_attributes(lead.attributes, {"score": payload.score})
 
         if payload.attributes is not None:
-            attrs = lead.attributes or {}
-            attrs.update(payload.attributes)
-            lead.attributes = attrs
+            lead.attributes = merge_attributes(lead.attributes, payload.attributes)
 
         lead.version += 1
         await session.flush()

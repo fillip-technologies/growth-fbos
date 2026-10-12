@@ -7,8 +7,9 @@ version". The spec types the template version's ``structure`` field as a
 bare JSON ``object`` with no published schema, so there is no fixed shape to
 copy from. This service accepts an optional, best-effort shape
 (``{"phases": [...], "milestones": [...], "packages": [...]}``, each item
-using the same field names as the corresponding response schema) and copies
-whatever is present; an organization free to shape ``structure`` however it
+using the same field names as the corresponding response schema, plus a
+milestone's ``offset_days`` from the project's start) and copies whatever is
+present; an organization free to shape ``structure`` however it
 likes would need a real template-authoring contract, which is out of scope
 here.
 
@@ -38,6 +39,7 @@ from exceptions import (
     RiskNotFoundError,
     TemplateNotFoundError,
     TemplateNotPublishedError,
+    TemplateRetiredError,
     TemplateVersionNotFoundError,
     ValidationFailedError,
     VersionConflictError,
@@ -73,6 +75,7 @@ from schemas.work_units import (
     RiskUpdate,
     WorkTemplateCreate,
     WorkTemplateResponse,
+    WorkTemplateUpdate,
     WorkTemplateVersionCreate,
     WorkTemplateVersionResponse,
     WorkUnitCreate,
@@ -197,6 +200,23 @@ async def create_template(session: AsyncSession, org_id: uuid.UUID, data: WorkTe
     return (await _template_responses(session, [template]))[0]
 
 
+async def update_template(
+    session: AsyncSession, org_id: uuid.UUID, template_code: str, data: WorkTemplateUpdate
+) -> WorkTemplateResponse:
+    """Rename a template, change its vertical, or retire it (or bring it back). Its code, its
+    kind of project and its versions don't change; projects already made from it keep theirs."""
+    template = await _get_template_by_code(session, org_id, template_code)
+    changes = data.model_dump(exclude_unset=True)
+    if changes.get("name") is not None:
+        template.name = changes["name"]
+    if "vertical_id" in changes:
+        template.vertical_id = changes["vertical_id"]
+    if changes.get("status") is not None:
+        template.status = changes["status"]
+    await session.flush()
+    return (await _template_responses(session, [template]))[0]
+
+
 async def list_template_versions(
     session: AsyncSession, org_id: uuid.UUID, template_code: str, limit: int, cursor: Optional[str]
 ) -> PageResponse[WorkTemplateVersionResponse]:
@@ -308,9 +328,9 @@ async def publish_template_version(
     if version.status != "draft":
         raise VersionNotDraftError(version_no)
 
+    # A retired template stays retired: bringing it back is a decision of its own (PATCH).
     version.status = "published"
     version.published_at = datetime.now(timezone.utc)
-    template.status = "active"
     await session.flush()
     return _to_template_version_response(version, template.code)
 
@@ -500,6 +520,8 @@ async def _type_and_template_version(
         return await _find_work_unit_type(session, org_id, data.work_unit_type_code), None, None
 
     template = await _get_template_by_code(session, org_id, data.template_code)
+    if template.status != "active":
+        raise TemplateRetiredError(template.code)
     version = await _published_version(session, template, data.template_version_no)
     unit_type = await session.get(WorkUnitType, template.work_unit_type_id)
     if data.work_unit_type_code and data.work_unit_type_code != unit_type.code:
@@ -564,8 +586,8 @@ async def _copy_template_structure(session: AsyncSession, work_unit: WorkUnit, s
             work_unit_id=work_unit.id,
             seq=item.get("seq", 0),
             name=item.get("name", "Phase"),
-            planned_start=item.get("planned_start"),
-            planned_end=item.get("planned_end"),
+            planned_start=_template_date(item.get("planned_start")),
+            planned_end=_template_date(item.get("planned_end")),
             status="pending",
         )
         session.add(phase)
@@ -581,7 +603,7 @@ async def _copy_template_structure(session: AsyncSession, work_unit: WorkUnit, s
                 name=item.get("name", "Milestone"),
                 seq=item.get("seq", 0),
                 weight=item.get("weight", 0),
-                planned_date=item.get("planned_date") or work_unit.planned_end,
+                planned_date=_templated_milestone_date(item, work_unit),
                 is_billing_milestone=item.get("is_billing_milestone", False),
                 requires_client_acceptance=item.get("requires_client_acceptance", False),
                 status="pending",
@@ -600,6 +622,30 @@ async def _copy_template_structure(session: AsyncSession, work_unit: WorkUnit, s
         )
 
     await session.flush()
+
+
+def _template_date(value) -> Optional[date]:
+    """A date written in a template's structure ("2026-10-12"), or None when there's none to use."""
+    if not isinstance(value, str):
+        return None
+    try:
+        return date.fromisoformat(value)
+    except ValueError:
+        return None
+
+
+def _templated_milestone_date(item: dict, work_unit: WorkUnit) -> date:
+    """When a templated milestone is planned: its own fixed date; else `offset_days` after the
+    project starts, never after it is due; else the project's due date. An offset that isn't a
+    whole number of days, zero or more, is ignored like any other unusable part of the structure."""
+    fixed = _template_date(item.get("planned_date"))
+    if fixed:
+        return fixed
+    offset = item.get("offset_days")
+    if isinstance(offset, int) and not isinstance(offset, bool) and offset >= 0:
+        # Capped before adding, so a huge offset can't overflow the date.
+        return work_unit.planned_start + timedelta(days=min(offset, (work_unit.planned_end - work_unit.planned_start).days))
+    return work_unit.planned_end
 
 
 def own_work_units(org_id: uuid.UUID, user_id: uuid.UUID) -> ColumnElement[bool]:

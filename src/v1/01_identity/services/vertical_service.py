@@ -3,7 +3,7 @@ import logging
 from typing import Any, Optional
 import uuid
 
-from sqlalchemy import Select, select
+from sqlalchemy import Select, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from exceptions import (
@@ -12,6 +12,7 @@ from exceptions import (
     FieldSchemaInvalidError,
     PackVersionConflictError,
     PreconditionFailedError,
+    RecordTypeNotFoundError,
     VerticalNotFoundError,
     VerticalPackInvalidError,
     VerticalPackNotFoundError,
@@ -31,6 +32,8 @@ from schemas.vertical import (
     CustomFieldsSection,
     FieldDefinitionCreate,
     FieldDefinitionResponse,
+    FormFieldsResponse,
+    FormFieldsUpdate,
     ObjectTypeResponse,
     PackContent,
     PackField,
@@ -46,6 +49,7 @@ from schemas.vertical import (
     VerticalUpdate,
 )
 from services.event_publisher import event_publisher
+from services.form_fields import form_revision, merge_lists, reserved_keys, stored_lists
 from utils.dates import iso_utc
 
 logger = logging.getLogger("identity.vertical_service")
@@ -61,6 +65,13 @@ DEFAULT_OBJECT_TYPES = [
     ("revenue.lead", "revenue", "Lead"),
     ("billing.invoice", "billing", "Invoice"),
     ("approval.request", "approval", "Approval request"),
+    ("revenue.client", "revenue", "Customer"),
+    ("revenue.client_service", "revenue", "Client service"),
+    ("revenue.opportunity", "revenue", "Opportunity"),
+    ("revenue.quotation", "revenue", "Quotation"),
+    ("billing.payment", "billing", "Payment"),
+    ("identity.org_unit", "identity", "Company unit"),
+    ("identity.user", "identity", "User"),
 ]
 
 
@@ -383,6 +394,111 @@ class VerticalService:
         )
 
         return self._build_field_definition_response(fd)
+
+    # -----------------------------------------------------------------------
+    # A form's custom fields as one list (see services/form_fields.py)
+    # -----------------------------------------------------------------------
+
+    async def _check_record_type(self, session: AsyncSession, object_type: str) -> None:
+        await self._ensure_object_types(session)
+        if not await session.get(ObjectType, object_type):
+            raise RecordTypeNotFoundError(object_type)
+
+    async def _form_definitions(
+        self, session: AsyncSession, organization_id: uuid.UUID, object_type: str, statuses: tuple[str, ...]
+    ) -> list[FieldDefinition]:
+        result = await session.execute(
+            select(FieldDefinition).where(
+                FieldDefinition.organization_id == organization_id,
+                FieldDefinition.object_type == object_type,
+                FieldDefinition.status.in_(statuses),
+            )
+        )
+        return list(result.scalars().all())
+
+    async def _vertical_names(self, session: AsyncSession, organization_id: uuid.UUID) -> dict[uuid.UUID, str]:
+        """Every vertical of the client, archived ones too: a field may still be limited to one."""
+        client_id = await self._client_id(session, organization_id)
+        result = await session.execute(select(Vertical.id, Vertical.name).where(Vertical.client_id == client_id))
+        return {vertical_id: name for vertical_id, name in result.all()}
+
+    async def _next_form_version(self, session: AsyncSession, organization_id: uuid.UUID, object_type: str) -> int:
+        """One above every list the form ever had, retired ones too, so versions never repeat."""
+        result = await session.execute(
+            select(func.max(FieldDefinition.version_no)).where(
+                FieldDefinition.organization_id == organization_id,
+                FieldDefinition.object_type == object_type,
+            )
+        )
+        return (result.scalar_one_or_none() or 0) + 1
+
+    async def get_form_fields(
+        self, session: AsyncSession, organization_id: uuid.UUID, object_type: str
+    ) -> FormFieldsResponse:
+        """Every live list of the form (hand-made or from a pack, any vertical) merged into one."""
+        await self._check_record_type(session, object_type)
+        live = await self._form_definitions(session, organization_id, object_type, ("published",))
+        fields, notes = merge_lists(live, await self._vertical_names(session, organization_id))
+        return FormFieldsResponse(object_type=object_type, revision=form_revision(live), fields=fields, notes=notes)
+
+    async def replace_form_fields(
+        self,
+        session: AsyncSession,
+        organization_id: uuid.UUID,
+        object_type: str,
+        data: FormFieldsUpdate,
+        if_match: Optional[str] = None,
+    ) -> FormFieldsResponse:
+        """
+        Make `data.fields` the form's live custom fields, in one transaction. Every list it had
+        (live or draft, any vertical, hand-made or from a pack) is retired, never deleted, so
+        values already entered on records are kept.
+        """
+        await self._check_record_type(session, object_type)
+        taken = reserved_keys(object_type, data.fields)
+        if taken:
+            raise FieldSchemaInvalidError(
+                f"The system already uses these keys on this form: {', '.join(taken)}. Choose other keys."
+            )
+        vertical_names = await self._vertical_names(session, organization_id)
+        unknown = sorted({str(v) for f in data.fields for v in f.vertical_ids if v not in vertical_names})
+        if unknown:
+            raise FieldSchemaInvalidError(f"Unknown vertical: {', '.join(unknown)}.")
+
+        previous = await self._form_definitions(session, organization_id, object_type, ("published", "draft"))
+        _check_if_match(if_match, form_revision([d for d in previous if d.status == "published"]))
+
+        version_no = await self._next_form_version(session, organization_id, object_type)
+        for definition in previous:
+            definition.status = "retired"
+        saved = [
+            FieldDefinition(
+                id=uuid.uuid4(),
+                organization_id=organization_id,
+                vertical_id=vertical_id,
+                object_type=object_type,
+                version_no=version_no,
+                json_schema=json_schema,
+                ui_schema=ui_schema,
+                status="published",
+            )
+            for vertical_id, (json_schema, ui_schema) in stored_lists(data.fields).items()
+        ]
+        session.add_all(saved)
+        await session.commit()
+
+        for definition in saved:
+            await event_publisher.publish(
+                "identity.field_definition.published.v1",
+                {
+                    "field_definition_id": str(definition.id),
+                    "organization_id": str(organization_id),
+                    "object_type": object_type,
+                    "version_no": version_no,
+                },
+            )
+        fields, notes = merge_lists(saved, vertical_names)
+        return FormFieldsResponse(object_type=object_type, revision=version_no, fields=fields, notes=notes)
 
     # -----------------------------------------------------------------------
     # Vertical packs: design (client-wide)
