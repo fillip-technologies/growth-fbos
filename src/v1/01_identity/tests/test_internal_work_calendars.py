@@ -8,7 +8,7 @@ import uuid
 import pytest
 
 from config import settings
-from models.calendar import Calendar, CalendarHoliday
+from models.calendar import Calendar, CalendarHoliday, CalendarWorkingDay
 from models.org_unit import OrgUnit
 from models.organization import Organization
 from tests.conftest import TEST_ORG_ID
@@ -35,6 +35,7 @@ async def test_each_unit_follows_its_own_calendar_else_the_nearest_above_else_th
     company = await add_calendar(db_session, "Head office")
     night_shift = await add_calendar(db_session, "Night shift", timezone="UTC")
     db_session.add(CalendarHoliday(id=uuid.uuid4(), calendar_id=night_shift.id, holiday_date=date(2026, 10, 20), name="Diwali", is_half_day=True))
+    db_session.add(CalendarWorkingDay(id=uuid.uuid4(), calendar_id=night_shift.id, work_date=date(2026, 10, 17), name="Make-up day", hours=[["10:00", "14:00"]]))
     (await db_session.get(Organization, TEST_ORG_ID)).calendar_id = company.id
     (await db_session.get(OrgUnit, uuid.UUID(sales))).calendar_id = night_shift.id
     await db_session.commit()
@@ -49,6 +50,8 @@ async def test_each_unit_follows_its_own_calendar_else_the_nearest_above_else_th
     assert set(calendars) == {str(company.id), str(night_shift.id)}
     assert calendars[str(night_shift.id)]["timezone"] == "UTC"
     assert calendars[str(night_shift.id)]["holidays"] == [{"date": "2026-10-20", "is_half_day": True}]
+    assert calendars[str(night_shift.id)]["working_days"] == [{"date": "2026-10-17", "hours": [["10:00", "14:00"]]}]
+    assert calendars[str(company.id)]["working_days"] == []
     assert calendars[str(company.id)]["weekly_hours"]["mon"] == [["09:00", "18:00"]]
 
 

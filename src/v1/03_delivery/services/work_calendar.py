@@ -4,10 +4,11 @@ many working minutes lie between two moments, and when a number of working minut
 
 `weekly_hours` is {"mon": [["09:00", "18:00"], ...], ...}: a missing or empty day is a day off,
 and several ranges leave the gaps between them (a lunch break) out. A holiday is a day off; a
-half-day holiday keeps the first half of that day's working time. A calendar without any working
-time can't run a clock, so it isn't used: time then runs around the clock.
+half-day holiday keeps the first half of that day's working time. An extra working day (a working
+Saturday) has its own ranges, which replace that weekday's. A calendar without any working time
+can't run a clock, so it isn't used: time then runs around the clock.
 """
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import date, datetime, time, timedelta, timezone
 from typing import Any, Optional
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
@@ -55,14 +56,19 @@ class WorkCalendar:
     zone: ZoneInfo
     weekly: tuple[Ranges, ...]  # Monday first
     holidays: dict[date, bool]  # day -> whether it is only a half day off
+    working_days: dict[date, Ranges] = field(default_factory=dict)  # day -> its own working ranges
 
-    def _open(self, day: date) -> list[tuple[datetime, datetime]]:
-        ranges = self.weekly[day.weekday()]
+    def _ranges(self, day: date) -> Ranges:
+        if day in self.working_days:
+            return self.working_days[day]
         half_day = self.holidays.get(day)
         if half_day is False:
-            return []
-        if half_day:
-            ranges = _first_half(ranges)
+            return ()
+        ranges = self.weekly[day.weekday()]
+        return _first_half(ranges) if half_day else ranges
+
+    def _open(self, day: date) -> list[tuple[datetime, datetime]]:
+        ranges = self._ranges(day)
         midnight = datetime.combine(day, time(0), tzinfo=self.zone)
         return [(midnight + timedelta(minutes=start), midnight + timedelta(minutes=end)) for start, end in ranges]
 
@@ -116,4 +122,10 @@ def calendar_from(data: dict) -> Optional[WorkCalendar]:
             holidays[date.fromisoformat(str(holiday["date"]))] = bool(holiday.get("is_half_day"))
         except (KeyError, ValueError):
             continue
-    return WorkCalendar(zone=zone, weekly=weekly, holidays=holidays)
+    working_days = {}
+    for working_day in data.get("working_days") or []:
+        try:
+            working_days[date.fromisoformat(str(working_day["date"]))] = _day(working_day.get("hours"))
+        except (KeyError, ValueError):
+            continue
+    return WorkCalendar(zone=zone, weekly=weekly, holidays=holidays, working_days=working_days)

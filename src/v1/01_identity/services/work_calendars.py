@@ -13,7 +13,7 @@ from exceptions import OrganizationNotFoundError
 from models.calendar import Calendar
 from models.org_unit import OrgUnit
 from models.organization import Organization
-from schemas.calendar import WorkCalendar, WorkCalendarHoliday, WorkCalendarsResponse
+from schemas.calendar import WorkCalendar, WorkCalendarHoliday, WorkCalendarsResponse, WorkCalendarWorkingDay
 
 
 async def work_calendars(session: AsyncSession, organization_id: uuid.UUID) -> WorkCalendarsResponse:
@@ -48,6 +48,7 @@ async def work_calendars(session: AsyncSession, organization_id: uuid.UUID) -> W
                 timezone=calendar.timezone,
                 weekly_hours=calendar.weekly_hours or {},
                 holidays=[WorkCalendarHoliday(date=h.holiday_date, is_half_day=h.is_half_day) for h in calendar.holidays],
+                working_days=[WorkCalendarWorkingDay(date=w.work_date, hours=w.hours) for w in calendar.working_days],
             )
             for calendar in calendars
         ],
