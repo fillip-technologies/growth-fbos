@@ -53,6 +53,92 @@ async def test_project_templates_and_their_versions(async_client):
     assert [v["version_no"] for v in versions["data"]] == [2, 1]
 
 
+async def test_a_template_is_renamed_retired_and_brought_back(async_client):
+    await ok(await async_client.post(f"{BASE}/templates", json={"code": "AUDIT", "name": "Audit", "work_unit_type_code": "internal"}), 201)
+    await ok(await async_client.post(f"{BASE}/templates/AUDIT/versions", json={"structure": {}}), 201)
+    await ok(await async_client.post(f"{BASE}/templates/AUDIT/versions/1/publish", headers={"If-Match": '"1"'}))
+    vertical_id = str(uuid.uuid4())
+
+    renamed = await ok(await async_client.patch(f"{BASE}/templates/AUDIT", json={"name": "Yearly audit", "vertical_id": vertical_id}))
+    assert (renamed["name"], renamed["vertical"]["id"], renamed["status"]) == ("Yearly audit", vertical_id, "active")
+    # Sending null clears the vertical; leaving a field out keeps it.
+    cleared = await ok(await async_client.patch(f"{BASE}/templates/AUDIT", json={"vertical_id": None}))
+    assert (cleared["name"], cleared["vertical"]) == ("Yearly audit", None)
+
+    retired = await ok(await async_client.patch(f"{BASE}/templates/AUDIT", json={"status": "retired"}))
+    assert retired["status"] == "retired"
+    refused = await async_client.post(
+        f"{BASE}/work-units",
+        json={
+            "template_code": "AUDIT", "name": "Audit 2026", "owning_unit_id": str(uuid.uuid4()),
+            "manager_user_id": str(TEST_USER_ID), "planned_start": date.today().isoformat(),
+            "planned_end": (date.today() + timedelta(days=10)).isoformat(),
+        },
+    )
+    assert (refused.status_code, error_code(refused)) == (409, "TEMPLATE_RETIRED")
+    listed = (await ok(await async_client.get(f"{BASE}/templates?status=active")))["data"]
+    assert "AUDIT" not in [t["code"] for t in listed]
+
+    # Publishing a new version doesn't bring it back: that is its own decision.
+    await ok(await async_client.post(f"{BASE}/templates/AUDIT/versions", json={"structure": {}}), 201)
+    published = await ok(await async_client.post(f"{BASE}/templates/AUDIT/versions/2/publish", headers={"If-Match": '"1"'}))
+    assert published["status"] == "published"
+    [still_retired] = [t for t in (await ok(await async_client.get(f"{BASE}/templates")))["data"] if t["code"] == "AUDIT"]
+    assert (still_retired["status"], still_retired["published_version_no"]) == ("retired", 2)
+
+    await ok(await async_client.patch(f"{BASE}/templates/AUDIT", json={"status": "active"}))
+    project = await create_project(async_client, work_unit_type_code=None, template_code="AUDIT")
+    assert project["template"]["name"] == "Yearly audit"
+
+    missing = await async_client.patch(f"{BASE}/templates/NOPE", json={"name": "x"})
+    assert (missing.status_code, error_code(missing)) == (404, "TEMPLATE_NOT_FOUND")
+    bad_status = await async_client.patch(f"{BASE}/templates/AUDIT", json={"status": "draft"})
+    assert bad_status.status_code == 422
+
+
+async def test_templated_milestones_are_planned_from_the_project_start(async_client):
+    await ok(await async_client.post(f"{BASE}/templates", json={"code": "SITE", "name": "Website", "work_unit_type_code": "internal"}), 201)
+    fixed = (date.today() + timedelta(days=3)).isoformat()
+    structure = {
+        "milestones": [
+            {"seq": 1, "code": "KICKOFF", "name": "Kick-off", "offset_days": 0},
+            {"seq": 2, "code": "DESIGN", "name": "Design signed off", "offset_days": 14},
+            {"seq": 3, "code": "LATE", "name": "Past the due date", "offset_days": 90},
+            {"seq": 4, "code": "FIXED", "name": "Fixed date wins", "offset_days": 14, "planned_date": fixed},
+            {"seq": 5, "code": "NONE", "name": "No date"},
+            {"seq": 6, "code": "BAD", "name": "Unusable offsets", "offset_days": "7"},
+            {"seq": 7, "code": "NEG", "name": "Negative", "offset_days": -2},
+            {"seq": 8, "code": "BOOL", "name": "Yes is not a number", "offset_days": True},
+            {"seq": 9, "code": "TYPO", "name": "Unreadable date", "planned_date": "next week", "offset_days": 5},
+            {"seq": 10, "code": "HUGE", "name": "Further than any calendar", "offset_days": 10**9},
+        ],
+        "phases": [{"seq": 1, "name": "Build", "planned_start": fixed, "planned_end": "soon"}],
+    }
+    await ok(await async_client.post(f"{BASE}/templates/SITE/versions", json={"structure": structure}), 201)
+    await ok(await async_client.post(f"{BASE}/templates/SITE/versions/1/publish", headers={"If-Match": '"1"'}))
+
+    start, due = date.today(), date.today() + timedelta(days=30)
+    project = await create_project(
+        async_client, work_unit_type_code=None, template_code="SITE", planned_start=start.isoformat(), planned_end=due.isoformat()
+    )
+    milestones = (await ok(await async_client.get(f"{BASE}/work-units/{project['id']}/milestones")))["data"]
+    planned = {m["code"]: m["planned_date"] for m in milestones}
+    assert planned == {
+        "KICKOFF": start.isoformat(),
+        "DESIGN": (start + timedelta(days=14)).isoformat(),
+        "LATE": due.isoformat(),
+        "FIXED": fixed,
+        "NONE": due.isoformat(),
+        "BAD": due.isoformat(),
+        "NEG": due.isoformat(),
+        "BOOL": due.isoformat(),
+        "TYPO": (start + timedelta(days=5)).isoformat(),
+        "HUGE": due.isoformat(),
+    }
+    [phase] = (await ok(await async_client.get(f"{BASE}/work-units/{project['id']}/summary")))["phases"]
+    assert (phase["planned_start"], phase["planned_end"]) == (fixed, None)
+
+
 async def test_task_templates(async_client):
     template = await ok(
         await async_client.post(

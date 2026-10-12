@@ -28,6 +28,7 @@ from schemas.work_units import (
     RiskUpdate,
     WorkTemplateCreate,
     WorkTemplateResponse,
+    WorkTemplateUpdate,
     WorkTemplateVersionCreate,
     WorkTemplateVersionResponse,
     WorkUnitCreate,
@@ -411,6 +412,16 @@ async def update_work_unit_type(
 async def create_template(payload: WorkTemplateCreate, session: DatabaseSession, org_id: OrgId) -> WorkTemplateResponse:
     """Add a project template; its content goes in versions."""
     template = await service.create_template(session, org_id, payload)
+    await session.commit()
+    return template
+
+
+@router.patch("/templates/{template_code}", response_model=WorkTemplateResponse, dependencies=[CAN_MANAGE_TEMPLATES])
+async def update_template(
+    template_code: str, payload: WorkTemplateUpdate, session: DatabaseSession, org_id: OrgId
+) -> WorkTemplateResponse:
+    """Rename a project template, change its vertical, or retire it so no new project starts from it."""
+    template = await service.update_template(session, org_id, template_code, payload)
     await session.commit()
     return template
 
