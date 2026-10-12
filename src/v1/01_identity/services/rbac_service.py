@@ -423,6 +423,19 @@ class RbacService:
             )],
         )
         user_permission_service.assert_can_grant(actor, grants)
+        already = (
+            await session.execute(
+                select(RoleAssignment.id).where(
+                    RoleAssignment.user_id == user.id,
+                    RoleAssignment.role_id == data.role_id,
+                    RoleAssignment.scope_unit_id.is_(None)
+                    if data.scope_unit_id is None
+                    else RoleAssignment.scope_unit_id == data.scope_unit_id,
+                )
+            )
+        ).scalars().first()
+        if already:
+            raise ValidationFailedError.for_field("role_id", "This role is already applied to the user in this scope")
 
         held = {
             (row.permission_code, row.scope_unit_id)
@@ -497,7 +510,26 @@ class RbacService:
                 )
             )
         ).unique().scalars().all()
-        for row in granted_rows:
+        # A permission another of the user's presets in this scope also grants stays, credited
+        # to that role; only what nothing else covers is removed.
+        others = (
+            await session.execute(
+                select(RoleAssignment).where(
+                    RoleAssignment.user_id == assignment.user_id,
+                    RoleAssignment.id != assignment.id,
+                    RoleAssignment.scope_unit_id.is_(None)
+                    if assignment.scope_unit_id is None
+                    else RoleAssignment.scope_unit_id == assignment.scope_unit_id,
+                )
+            )
+        ).unique().scalars().all()
+        still_granted_by: dict[str, uuid.UUID] = {}
+        for other in others:
+            for rp in other.role.role_permissions if other.role else []:
+                still_granted_by.setdefault(rp.permission_code, other.role_id)
+
+        revoked_rows = [row for row in granted_rows if row.permission_code not in still_granted_by]
+        for row in revoked_rows:
             grant = Grant(
                 row.permission_code, row.scope_unit_id,
                 row.scope_unit.path if row.scope_unit else None, row.self_only,
@@ -509,9 +541,12 @@ class RbacService:
                 )
 
         user_id, role_id = assignment.user_id, assignment.role_id
-        revoked_codes = sorted(row.permission_code for row in granted_rows)
+        revoked_codes = sorted(row.permission_code for row in revoked_rows)
         for row in granted_rows:
-            await session.delete(row)
+            if row.permission_code in still_granted_by:
+                row.source_role_id = still_granted_by[row.permission_code]
+            else:
+                await session.delete(row)
         await session.delete(assignment)
         await session.commit()
 

@@ -693,3 +693,98 @@ async def test_sent_presets_replace_the_users_presets_even_when_another_role_cov
     assert res.status_code == 200
     assert await presets() == []
     assert sorted(p["code"] for p in res.json()["permissions"]) == ["identity.org_unit.read", "identity.user.read"]
+
+
+async def _overlapping_roles(async_client, db_session) -> tuple[Role, Role, dict]:
+    """`broad` holds user.read + org_unit.read, `narrow` holds user.read; a user has both."""
+    broad = Role(id=uuid.uuid4(), organization_id=TEST_ORG_ID, code="broad", name="Broad", version=1)
+    narrow = Role(id=uuid.uuid4(), organization_id=TEST_ORG_ID, code="narrow", name="Narrow", version=1)
+    db_session.add_all([broad, narrow])
+    await db_session.commit()
+    await async_client.put(
+        f"{API}/roles/{broad.id}/permissions",
+        json={"permissions": ["identity.user.read", "identity.org_unit.read"]}, headers={"If-Match": '"1"'},
+    )
+    await async_client.put(
+        f"{API}/roles/{narrow.id}/permissions", json={"permissions": ["identity.user.read"]}, headers={"If-Match": '"1"'},
+    )
+    user = (await async_client.post(
+        f"{API}/users",
+        json={"name": "O", "email": "o@example.com", "role_assignments": [{"role_code": "broad"}, {"role_code": "narrow"}]},
+    )).json()
+    return broad, narrow, user
+
+
+async def _assignments(async_client, user_id) -> list[dict]:
+    res = await async_client.get(f"{API}/role-assignments", params={"user_id": user_id})
+    return sorted(res.json()["data"], key=lambda a: a["role"]["code"])
+
+
+async def _held(async_client, user_id) -> dict[str, str | None]:
+    res = await async_client.get(f"{API}/users/{user_id}/permissions")
+    return {p["code"]: p["source_role"] for p in res.json()["permissions"]}
+
+
+@pytest.mark.asyncio
+async def test_removing_a_role_keeps_what_a_remaining_role_grants(async_client, db_session):
+    _, _, user = await _overlapping_roles(async_client, db_session)
+    # Both rows came in through `broad`; the client only sends the presets it keeps.
+    res = await async_client.put(
+        f"{API}/users/{user['id']}/permissions",
+        json={"permissions": [], "role_assignments": [{"role_code": "narrow"}], "reason": "drop broad"},
+    )
+    assert res.status_code == 200
+    assert [a["role"]["code"] for a in await _assignments(async_client, user["id"])] == ["narrow"]
+    assert await _held(async_client, user["id"]) == {"identity.user.read": "narrow"}
+
+
+@pytest.mark.asyncio
+async def test_kept_presets_keep_their_record_and_a_preset_can_move_scope(async_client, db_session):
+    _, _, user = await _overlapping_roles(async_client, db_session)
+    before = {a["role"]["code"]: a["id"] for a in await _assignments(async_client, user["id"])}
+    branch = (await async_client.post(f"{API}/org-units", json={"code": "BRM", "name": "Branch", "unit_type": "branch"})).json()
+
+    res = await async_client.put(
+        f"{API}/users/{user['id']}/permissions",
+        json={
+            "permissions": [],
+            "role_assignments": [{"role_code": "broad"}, {"role_code": "narrow", "scope_unit_id": branch["id"]}],
+            "reason": "narrow only in the branch",
+        },
+    )
+    assert res.status_code == 200
+    after = {a["role"]["code"]: a for a in await _assignments(async_client, user["id"])}
+    assert after["broad"]["id"] == before["broad"]
+    assert after["narrow"]["id"] != before["narrow"]
+    assert after["narrow"]["scope_unit"]["id"] == branch["id"]
+    scopes = {(p["code"], (p["scope_unit"] or {}).get("id")) for p in res.json()["permissions"]}
+    assert scopes == {
+        ("identity.user.read", None), ("identity.org_unit.read", None), ("identity.user.read", branch["id"]),
+    }
+
+
+@pytest.mark.asyncio
+async def test_revoking_one_role_keeps_what_another_grants(async_client, db_session):
+    _, _, user = await _overlapping_roles(async_client, db_session)
+    broad_id = next(a["id"] for a in await _assignments(async_client, user["id"]) if a["role"]["code"] == "broad")
+
+    res = await async_client.delete(f"{API}/role-assignments/{broad_id}", params={"reason": "no longer lead"})
+    assert res.status_code == 204
+    assert [a["role"]["code"] for a in await _assignments(async_client, user["id"])] == ["narrow"]
+    assert await _held(async_client, user["id"]) == {"identity.user.read": "narrow"}
+
+
+@pytest.mark.asyncio
+async def test_the_same_role_cant_be_applied_twice_in_one_scope(async_client, db_session):
+    broad, _, user = await _overlapping_roles(async_client, db_session)
+    res = await async_client.post(
+        f"{API}/role-assignments", json={"user_id": user["id"], "role_id": str(broad.id), "reason": "again"},
+    )
+    assert res.status_code == 422
+
+    res = await async_client.put(
+        f"{API}/users/{user['id']}/permissions",
+        json={"permissions": [], "role_assignments": [{"role_code": "broad"}, {"role_code": "broad"}], "reason": "dup"},
+    )
+    assert res.status_code == 200
+    assert [a["role"]["code"] for a in await _assignments(async_client, user["id"])] == ["broad"]
