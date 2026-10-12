@@ -69,6 +69,112 @@ class FieldDefinitionResponse(BaseModel):
 
 
 # ---------------------------------------------------------------------------
+# A form's custom fields as one list: what the console's field editor reads and saves.
+# Stored, they stay field definitions (see services/form_fields.py).
+# ---------------------------------------------------------------------------
+
+FormFieldType = Literal[
+    "text", "long_text", "number", "integer", "boolean", "date", "datetime",
+    "choice", "multi_choice", "url", "email", "phone",
+]
+CHOICE_TYPES = ("choice", "multi_choice")
+
+
+class ShowWhen(BaseModel):
+    """Show the field only while another input of the form holds one of these values."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    input: str = Field(..., min_length=1, max_length=64, description="The form input to watch, e.g. 'source'")
+    values: list[str] = Field(..., min_length=1)
+
+    @field_validator("values")
+    @classmethod
+    def distinct_values(cls, values: list[str]) -> list[str]:
+        cleaned = list(dict.fromkeys(v.strip() for v in values if v.strip()))
+        if not cleaned:
+            raise ValueError("Pick at least one value")
+        return cleaned
+
+
+class FormField(BaseModel):
+    """One custom field of a form."""
+
+    key: str
+    label: str
+    type: FormFieldType = "text"
+    required: bool = False
+    options: list[str] = Field(default_factory=list, description="The choices, for choice and multi_choice only")
+    help: Optional[str] = None
+    vertical_ids: list[uuid.UUID] = Field(
+        default_factory=list, description="Only on records of these verticals; empty means every vertical"
+    )
+    show_when: Optional[ShowWhen] = None
+
+
+class FormFieldInput(FormField):
+    model_config = ConfigDict(extra="forbid")
+
+    key: str = Field(..., min_length=1, max_length=64, pattern=r"^[a-z][a-z0-9_]*$")
+    label: str = Field(..., min_length=1, max_length=120)
+    help: Optional[str] = Field(None, max_length=500)
+
+    @field_validator("label")
+    @classmethod
+    def strip_label(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("Enter a label")
+        return value.strip()
+
+    @field_validator("help")
+    @classmethod
+    def strip_help(cls, value: Optional[str]) -> Optional[str]:
+        return value.strip() or None if value else None
+
+    @model_validator(mode="after")
+    def check_rules(self) -> "FormFieldInput":
+        self.options = list(dict.fromkeys(o.strip() for o in self.options if o.strip()))
+        if self.type in CHOICE_TYPES and len(self.options) < 2:
+            raise ValueError(f"'{self.key}': a choice list needs at least two options")
+        if self.type not in CHOICE_TYPES and self.options:
+            raise ValueError(f"'{self.key}': only choice fields take options")
+        self.vertical_ids = list(dict.fromkeys(self.vertical_ids))
+        # One rule per field: a vertical rule is which stored list the field sits in, so it
+        # can't be combined with a show/hide rule on another input.
+        if self.vertical_ids and self.show_when:
+            raise ValueError(f"'{self.key}': a field takes one rule, either verticals or another input")
+        if self.show_when and self.show_when.input == self.key:
+            raise ValueError(f"'{self.key}': a field can't depend on itself")
+        return self
+
+
+class FormFieldsUpdate(BaseModel):
+    """The form's whole list of custom fields, in order; it replaces the live one."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    fields: list[FormFieldInput] = Field(default_factory=list, max_length=200)
+
+    @model_validator(mode="after")
+    def unique_keys(self) -> "FormFieldsUpdate":
+        keys = [f.key for f in self.fields]
+        duplicates = sorted({k for k in keys if keys.count(k) > 1})
+        if duplicates:
+            raise ValueError(f"Field keys used twice: {', '.join(duplicates)}")
+        return self
+
+
+class FormFieldsResponse(BaseModel):
+    object_type: str
+    revision: int = Field(..., description="Send it back in If-Match when saving; 0 before the first save")
+    fields: list[FormField]
+    notes: list[str] = Field(
+        default_factory=list,
+        description="Fields left out because another live list already has a field with the same key",
+    )
+
+
+# ---------------------------------------------------------------------------
 # Vertical pack content: a list of typed sections. Only "custom_fields" exists today;
 # new section types (workflows, work templates) join the `PackSection` union.
 # ---------------------------------------------------------------------------
