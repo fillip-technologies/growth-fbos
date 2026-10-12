@@ -50,6 +50,11 @@ class Settings(BaseSettings):
     # service's /internal/notifications. Empty turns them off.
     communication_service_url: str = ""
     notification_timeout_seconds: float = 3.0
+    # Emails to customers (a quotation and its files) are sent by communication too, but
+    # synchronously: the person sending waits for the mail server's answer.
+    mail_timeout_seconds: float = 60.0
+    # Files attached to one email, before encoding (mail servers cap a message near 25 MB).
+    email_attachments_max_bytes: int = 18 * 1024 * 1024
 
     # Enquiries from the company website become leads of one organization, and their status
     # changes go back to the website. The key alone turns on sending status changes back.

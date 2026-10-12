@@ -5,11 +5,14 @@ from fastapi import APIRouter, Depends, Header, Response, status
 
 from dependencies import Authorization, CurrentActor, DatabaseSession, Documents, OrgId, require_permission
 from schemas.quotation import (
+    QuotationEmailCreate,
+    QuotationEmailDraft,
+    QuotationEmailSent,
     QuotationItemsReplace,
     QuotationReject,
     QuotationResponse,
 )
-from services import notifications
+from services import notifications, quotation_email_service
 from services.documents_client import SubjectRef
 from services.quotation_service import QuotationService
 
@@ -218,3 +221,44 @@ async def reject_quotation(
     await session.commit()
     response.headers["ETag"] = f'"{quotation.version}"'
     return quotation
+
+
+@router.get(
+    "/{quotation_id}/email-draft", response_model=QuotationEmailDraft,
+    dependencies=[CAN_READ],
+)
+async def get_quotation_email_draft(
+    quotation_id: uuid.UUID,
+    session: DatabaseSession,
+    org_id: OrgId,
+    actor: CurrentActor,
+) -> QuotationEmailDraft:
+    """What the send-by-email form starts from: the sender, the customer's contacts, a subject and message."""
+    return await quotation_email_service.build_draft(session, org_id, actor, quotation_id)
+
+
+@router.post(
+    "/{quotation_id}/emails", response_model=QuotationEmailSent, status_code=status.HTTP_201_CREATED,
+    dependencies=[CAN_WRITE],
+)
+async def email_quotation(
+    quotation_id: uuid.UUID,
+    payload: QuotationEmailCreate,
+    session: DatabaseSession,
+    org_id: OrgId,
+    actor: CurrentActor,
+    authorization: Authorization,
+    documents: Documents,
+    response: Response,
+    if_match: Optional[str] = Header(None, alias="If-Match"),
+) -> QuotationEmailSent:
+    """
+    Email the quotation and the files chosen from it to the customer. A draft or approved
+    quotation is marked sent too (If-Match required); nothing changes unless the mail left.
+    """
+    result = await quotation_email_service.send(
+        session, org_id, actor, documents, authorization, quotation_id, payload, if_match
+    )
+    await session.commit()
+    response.headers["ETag"] = f'"{result.quotation.version}"'
+    return result

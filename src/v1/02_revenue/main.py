@@ -12,6 +12,7 @@ from finance.errors import FinanceError
 from router import router
 from services.documents_client import DocumentsClient
 from services.identity_client import IdentityClient
+from services.mail_client import mail_client
 from services.notification_client import notification_client
 from services.website_lead_import import start_import_loop
 from services.website_leads_client import website_leads_client
@@ -34,6 +35,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         app.state.documents_client = DocumentsClient(documents_http, settings.internal_service_token)
         if settings.communication_service_url:
             notification_client.start(communication_http, settings.internal_service_token)
+            mail_client.start(communication_http, settings.internal_service_token)
         if settings.website_leads_api_key:
             website_leads_client.start(
                 website_http, settings.website_leads_url, settings.website_leads_organization_id
@@ -55,6 +57,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         website_leads_client.stop()
         await website_leads_client.drain()
         notification_client.stop()
+        mail_client.stop()
         await notification_client.drain()
 
 

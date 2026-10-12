@@ -433,3 +433,50 @@ class DocumentNotLinkedError(RevenueServiceError):
             "DOCUMENT_NOT_LINKED",
             "Upload the signed copy to this contract first; that document isn't attached to it.",
         )
+
+
+class MailUnavailableError(RevenueServiceError):
+    """503: The communication service, which sends email, is not set up or can't be reached."""
+
+    def __init__(self) -> None:
+        super().__init__(
+            status.HTTP_503_SERVICE_UNAVAILABLE,
+            "MAIL_SERVICE_UNAVAILABLE",
+            "Email can't be sent right now. Nothing was sent; try again shortly.",
+        )
+
+
+class QuotationNotEmailableError(RevenueServiceError):
+    """409: Only a draft, approved, sent or accepted quotation goes to the customer."""
+
+    def __init__(self, current_status: str) -> None:
+        super().__init__(
+            status.HTTP_409_CONFLICT,
+            "QUOTATION_NOT_EMAILABLE",
+            f"A quotation that is {current_status.replace('_', ' ')} can't be emailed to the customer.",
+            meta={"status": current_status},
+        )
+
+
+class DocumentNotAttachedError(RevenueServiceError):
+    """422: A file picked for the email isn't attached to this quotation."""
+
+    def __init__(self, document_id: uuid.UUID) -> None:
+        super().__init__(
+            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            "DOCUMENT_NOT_ATTACHED",
+            "One of the chosen files isn't attached to this quotation any more. Reload and choose again.",
+            meta={"document_id": str(document_id)},
+        )
+
+
+class AttachmentsTooLargeError(RevenueServiceError):
+    """422: The chosen files together are more than an email may carry."""
+
+    def __init__(self, total_bytes: int, limit_bytes: int) -> None:
+        super().__init__(
+            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            "ATTACHMENTS_TOO_LARGE",
+            f"The chosen files come to {total_bytes / 1048576:.1f} MB; an email may carry {limit_bytes / 1048576:.0f} MB.",
+            meta={"total_bytes": total_bytes, "limit_bytes": limit_bytes},
+        )
