@@ -76,6 +76,9 @@ class WorkTemplateResponse(BaseModel):
     work_unit_type_code: str
     status: Literal["active", "retired"]
     published_version_no: Optional[int] = None
+    published_workflow_definition_code: Optional[str] = Field(
+        None, description="The project workflow the published version can start with a new project."
+    )
 
 
 class WorkTemplateVersionCreate(BaseModel):
@@ -233,6 +236,15 @@ class MilestoneResponse(BaseModel):
     requires_client_acceptance: bool
     status: MilestoneStatus
     deliverables: list[DeliverableResponse] = Field(default_factory=list)
+
+
+class WorkPackageResponse(BaseModel):
+    id: uuid.UUID
+    phase_id: Optional[uuid.UUID] = None
+    name: str
+    owner_unit: Optional[UnitRef] = None
+    estimated_hours: float
+    status: str
 
 
 class MilestoneCreate(BaseModel):

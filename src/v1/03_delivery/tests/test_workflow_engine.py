@@ -171,6 +171,31 @@ async def test_a_project_can_start_its_templates_workflow(async_client, db_sessi
     assert (refused.status_code, refused.json()["detail"]["code"]) == (422, "VALIDATION_ERROR")
 
 
+async def test_a_templates_workflow_must_be_a_published_project_workflow(async_client, db_session: AsyncSession):
+    content = {"stages": [STAGES[0], STAGES[2]], "transitions": [transition("finish", "intake", "done")]}
+    await publish(async_client, "delivery-flow", content)
+    await ok(await async_client.post(f"{BASE}/workflow/definitions", json={"code": "unpublished", "name": "Draft", "subject_type": "work.work_unit"}), 201)
+    await ok(await async_client.post(f"{BASE}/workflow/definitions", json={"code": "task-flow", "name": "Tasks", "subject_type": "task.task"}), 201)
+    db_session.add(WorkTemplate(organization_id=TEST_ORG_ID, work_unit_type_id=BUILTIN_WORK_UNIT_TYPE_IDS["internal"], code="FLOWS", name="Flows"))
+    await db_session.commit()
+
+    for workflow in ("nothing-like-it", "task-flow", "unpublished"):
+        refused = await async_client.post(f"{BASE}/templates/FLOWS/versions", json={"workflow_definition_code": workflow})
+        assert (refused.status_code, refused.json()["detail"]["code"]) == (422, "VALIDATION_ERROR"), workflow
+
+    [listed] = [t for t in (await ok(await async_client.get(f"{BASE}/templates")))["data"] if t["code"] == "FLOWS"]
+    assert (listed["published_version_no"], listed["published_workflow_definition_code"]) == (None, None)
+    await ok(await async_client.post(f"{BASE}/templates/FLOWS/versions", json={"workflow_definition_code": "delivery-flow"}), 201)
+    await ok(await async_client.post(f"{BASE}/templates/FLOWS/versions/1/publish", headers={"If-Match": '"1"'}))
+    # A newer draft doesn't change what new projects get: the latest published version does.
+    await ok(await async_client.post(f"{BASE}/templates/FLOWS/versions", json={}), 201)
+    [listed] = [t for t in (await ok(await async_client.get(f"{BASE}/templates")))["data"] if t["code"] == "FLOWS"]
+    assert (listed["published_version_no"], listed["published_workflow_definition_code"]) == (1, "delivery-flow")
+    await ok(await async_client.post(f"{BASE}/templates/FLOWS/versions/2/publish", headers={"If-Match": '"1"'}))
+    [listed] = [t for t in (await ok(await async_client.get(f"{BASE}/templates")))["data"] if t["code"] == "FLOWS"]
+    assert (listed["published_version_no"], listed["published_workflow_definition_code"]) == (2, None)
+
+
 async def test_starting_a_workflow_with_a_project_needs_the_operate_permission(client_as):  # noqa: F811
     planner = client_as(uuid.uuid4(), permissions.WORK_UNIT_WRITE, permissions.WORK_UNIT_READ)
     forbidden = await planner.post(

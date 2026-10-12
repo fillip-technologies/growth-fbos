@@ -31,6 +31,7 @@ from schemas.work_units import (
     WorkTemplateUpdate,
     WorkTemplateVersionCreate,
     WorkTemplateVersionResponse,
+    WorkPackageResponse,
     WorkUnitCreate,
     WorkUnitResponse,
     WorkUnitStatusChange,
@@ -241,6 +242,12 @@ async def list_milestones(
 ) -> PageResponse[MilestoneResponse]:
     """List milestones."""
     return await service.list_milestones(session, org_id, work_unit_id, limit, cursor)
+
+
+@router.get("/work-units/{work_unit_id}/work-packages", response_model=list[WorkPackageResponse], dependencies=[CAN_READ, IN_VIEW])
+async def list_work_packages(work_unit_id: uuid.UUID, session: DatabaseSession, org_id: OrgId) -> list[WorkPackageResponse]:
+    """The project's work packages, phase by phase."""
+    return await service.list_work_packages(session, org_id, work_unit_id)
 
 
 @router.patch("/milestones/{milestone_id}", response_model=MilestoneResponse, dependencies=[CAN_WRITE])

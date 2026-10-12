@@ -102,7 +102,11 @@ async def test_own_records_only_shows_just_your_tasks_and_projects(act_as):
     projects = await ok(await own_only.get(f"{BASE}/work-units"))
     assert ids(projects) == {with_my_task["id"], managed_by_me["id"], on_my_team["id"]}
     assert (await own_only.get(f"{BASE}/work-units/{with_my_task['id']}")).status_code == 200
-    for path in (f"/work-units/{someone_elses_project['id']}", f"/work-units/{someone_elses_project['id']}/milestones"):
+    for path in (
+        f"/work-units/{someone_elses_project['id']}",
+        f"/work-units/{someone_elses_project['id']}/milestones",
+        f"/work-units/{someone_elses_project['id']}/work-packages",
+    ):
         hidden = await own_only.get(f"{BASE}{path}")
         assert (hidden.status_code, error_code(hidden)) == (404, "WORK_UNIT_NOT_FOUND")
 

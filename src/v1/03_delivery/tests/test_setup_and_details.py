@@ -139,6 +139,46 @@ async def test_templated_milestones_are_planned_from_the_project_start(async_cli
     assert (phase["planned_start"], phase["planned_end"]) == (fixed, None)
 
 
+async def test_templated_work_packages_are_read_back_phase_by_phase(async_client):
+    await ok(await async_client.post(f"{BASE}/templates", json={"code": "SHOP", "name": "Shop", "work_unit_type_code": "internal"}), 201)
+    team = str(uuid.uuid4())
+    structure = {
+        "phases": [{"seq": 1, "name": "Build"}, {"seq": 2, "name": "Launch"}],
+        "packages": [
+            {"name": "Pages", "phase_seq": 2, "estimated_hours": 12.5, "owner_unit_id": team},
+            {"name": "  Copy  ", "phase_seq": 1, "estimated_hours": 4},
+            # What a template can't be trusted to hold is left out, never a failed project.
+            {"name": "", "estimated_hours": "lots", "owner_unit_id": "the web team"},
+            {"name": 7, "estimated_hours": True, "phase_seq": 9},
+            {"name": "Everything", "estimated_hours": 10**9},
+            {"name": "Backwards", "estimated_hours": -3},
+        ],
+    }
+    await ok(await async_client.post(f"{BASE}/templates/SHOP/versions", json={"structure": structure}), 201)
+    await ok(await async_client.post(f"{BASE}/templates/SHOP/versions/1/publish", headers={"If-Match": '"1"'}))
+    project = await create_project(async_client, work_unit_type_code=None, template_code="SHOP")
+
+    packages = await ok(await async_client.get(f"{BASE}/work-units/{project['id']}/work-packages"))
+    phase_names = {p["id"]: p["name"] for p in (await ok(await async_client.get(f"{BASE}/work-units/{project['id']}/summary")))["phases"]}
+    rows = [
+        (p["name"], phase_names.get(p["phase_id"]), p["estimated_hours"], p["owner_unit"] and p["owner_unit"]["id"], p["status"])
+        for p in packages
+    ]
+    assert rows[:2] == [("Copy", "Build", 4.0, None, "planned"), ("Pages", "Launch", 12.5, team, "planned")]
+    # Packages in no phase come last.
+    assert sorted(rows[2:]) == [
+        ("Backwards", None, 0.0, None, "planned"),
+        ("Everything", None, 0.0, None, "planned"),
+        ("Work package", None, 0.0, None, "planned"),
+        ("Work package", None, 0.0, None, "planned"),
+    ]
+
+    empty = await create_project(async_client)
+    assert await ok(await async_client.get(f"{BASE}/work-units/{empty['id']}/work-packages")) == []
+    missing = await async_client.get(f"{BASE}/work-units/{uuid.uuid4()}/work-packages")
+    assert (missing.status_code, error_code(missing)) == (404, "WORK_UNIT_NOT_FOUND")
+
+
 async def test_task_templates(async_client):
     template = await ok(
         await async_client.post(
