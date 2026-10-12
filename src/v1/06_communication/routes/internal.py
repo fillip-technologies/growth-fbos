@@ -1,7 +1,9 @@
 from fastapi import APIRouter, Depends, Response, status
 
+import services.mail_service as mail_service
 import services.notification_service as service
 from dependencies import DatabaseSession, verify_internal_caller
+from schemas.emails import EmailCreate, EmailSender, EmailSent
 from schemas.notifications import NotificationCreate, NotificationCreated
 
 # Service-to-service endpoints. Mounted outside the public /api/communication/v1 prefix,
@@ -22,3 +24,15 @@ async def create_notification(
         return result
     await session.commit()
     return result
+
+
+@router.get("/email-sender", response_model=EmailSender)
+async def get_email_sender() -> EmailSender:
+    """The address emails go out from, and whether sending is set up at all."""
+    return mail_service.sender()
+
+
+@router.post("/emails", response_model=EmailSent, status_code=status.HTTP_201_CREATED)
+async def send_email(payload: EmailCreate) -> EmailSent:
+    """Send one email now. Answers only once the mail server has accepted it."""
+    return await mail_service.send_email(payload)

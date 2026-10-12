@@ -80,3 +80,26 @@ class ValidationFailedError(CommunicationServiceError):
             "Schema or field-level business rules failed.",
             meta={"errors": errors} if errors else None,
         )
+
+
+class MailNotConfiguredError(CommunicationServiceError):
+    """503: No SMTP server or sender address is set, so no email can go out."""
+
+    def __init__(self) -> None:
+        super().__init__(
+            status.HTTP_503_SERVICE_UNAVAILABLE,
+            "MAIL_NOT_CONFIGURED",
+            "Email sending is not set up on this server.",
+        )
+
+
+class MailSendFailedError(CommunicationServiceError):
+    """502: The mail server refused the message or could not be reached."""
+
+    def __init__(self, reason: str) -> None:
+        super().__init__(
+            status.HTTP_502_BAD_GATEWAY,
+            "MAIL_SEND_FAILED",
+            "The mail server did not accept the email. Nothing was sent.",
+            meta={"reason": reason[:300]},
+        )
