@@ -8,8 +8,9 @@ bare JSON ``object`` with no published schema, so there is no fixed shape to
 copy from. This service accepts an optional, best-effort shape
 (``{"phases": [...], "milestones": [...], "packages": [...]}``, each item
 using the same field names as the corresponding response schema, plus a
-milestone's ``offset_days`` from the project's start) and copies whatever is
-present; an organization free to shape ``structure`` however it
+milestone's ``offset_days`` from the project's start and a package's
+``owner_unit_id``) and copies whatever is present, ignoring values it can't
+use; an organization free to shape ``structure`` however it
 likes would need a real template-authoring contract, which is out of scope
 here.
 
@@ -55,6 +56,7 @@ from models.task import Task
 from models.work_unit import WorkUnit, WorkUnitMember
 from models.work_unit_template import WorkTemplate, WorkTemplateVersion, WorkUnitType
 from models.work_unit_tracking import ProgressSnapshot, StatusHistory
+from models.workflow_definition import WorkflowDefinition
 from schemas.common import Money, PageResponse, SubjectRefInput
 from schemas.work_units import (
     ChangeRequestApprove,
@@ -78,6 +80,7 @@ from schemas.work_units import (
     WorkTemplateUpdate,
     WorkTemplateVersionCreate,
     WorkTemplateVersionResponse,
+    WorkPackageResponse,
     WorkUnitCreate,
     WorkUnitResponse,
     WorkUnitStatusChange,
@@ -268,18 +271,18 @@ async def _template_responses(session: AsyncSession, templates: list[WorkTemplat
             )
         ).all()
     )
-    published_version_nos = dict(
-        (
-            await session.execute(
-                select(WorkTemplateVersion.template_id, func.max(WorkTemplateVersion.version_no))
-                .where(
-                    WorkTemplateVersion.template_id.in_({t.id for t in templates}),
-                    WorkTemplateVersion.status == "published",
-                )
-                .group_by(WorkTemplateVersion.template_id)
-            )
-        ).all()
+    # The version a new project copies is each template's latest published one.
+    published: dict[uuid.UUID, tuple[int, Optional[str]]] = {}
+    rows = await session.execute(
+        select(WorkTemplateVersion.template_id, WorkTemplateVersion.version_no, WorkTemplateVersion.workflow_definition_code)
+        .where(
+            WorkTemplateVersion.template_id.in_({t.id for t in templates}),
+            WorkTemplateVersion.status == "published",
+        )
+        .order_by(WorkTemplateVersion.version_no)
     )
+    for template_id, version_no, workflow_code in rows.all():
+        published[template_id] = (version_no, workflow_code)
     return [
         WorkTemplateResponse(
             id=template.id,
@@ -288,7 +291,8 @@ async def _template_responses(session: AsyncSession, templates: list[WorkTemplat
             vertical=vertical_ref(template.vertical_id),
             work_unit_type_code=type_codes[template.work_unit_type_id],
             status=template.status,
-            published_version_no=published_version_nos.get(template.id),
+            published_version_no=published.get(template.id, (None, None))[0],
+            published_workflow_definition_code=published.get(template.id, (None, None))[1],
         )
         for template in templates
     ]
@@ -298,6 +302,8 @@ async def create_template_version(
     session: AsyncSession, org_id: uuid.UUID, template_code: str, data: WorkTemplateVersionCreate
 ) -> WorkTemplateVersionResponse:
     template = await _get_template_by_code(session, org_id, template_code)
+    if data.workflow_definition_code is not None:
+        await _require_project_workflow(session, org_id, data.workflow_definition_code)
 
     res = await session.execute(
         select(func.max(WorkTemplateVersion.version_no)).where(WorkTemplateVersion.template_id == template.id)
@@ -314,6 +320,25 @@ async def create_template_version(
     session.add(version)
     await session.flush()
     return _to_template_version_response(version, template.code)
+
+
+async def _require_project_workflow(session: AsyncSession, org_id: uuid.UUID, definition_code: str) -> None:
+    """A template's workflow starts with each new project, so it must be a project workflow of the
+    organization that has a published version and isn't retired; anything else would only fail
+    later, when someone creates a project with it."""
+    definition = (
+        await session.execute(
+            select(WorkflowDefinition).where(
+                WorkflowDefinition.organization_id == org_id, WorkflowDefinition.code == definition_code
+            )
+        )
+    ).scalars().first()
+    if definition is None:
+        raise ValidationFailedError("workflow_definition_code", f"There is no workflow '{definition_code}'")
+    if definition.subject_type != WORK_UNIT_SUBJECT:
+        raise ValidationFailedError("workflow_definition_code", f"'{definition_code}' isn't a project workflow")
+    if definition.status != "active" or definition.current_version_id is None:
+        raise ValidationFailedError("workflow_definition_code", f"'{definition_code}' has no published version in use")
 
 
 async def publish_template_version(
@@ -615,13 +640,37 @@ async def _copy_template_structure(session: AsyncSession, work_unit: WorkUnit, s
             WorkPackage(
                 work_unit_id=work_unit.id,
                 phase_id=phase_id_by_seq.get(item.get("phase_seq")),
-                name=item.get("name", "Work package"),
-                estimated_hours=item.get("estimated_hours", 0),
+                name=_template_text(item.get("name")) or "Work package",
+                owner_unit_id=_template_uuid(item.get("owner_unit_id")),
+                estimated_hours=_template_hours(item.get("estimated_hours")),
                 status="planned",
             )
         )
 
     await session.flush()
+
+
+def _template_text(value) -> Optional[str]:
+    """A name written in a template's structure, cut to what the column holds; None when blank."""
+    if not isinstance(value, str) or not value.strip():
+        return None
+    return value.strip()[:255]
+
+
+def _template_uuid(value) -> Optional[uuid.UUID]:
+    if not isinstance(value, str):
+        return None
+    try:
+        return uuid.UUID(value)
+    except ValueError:
+        return None
+
+
+def _template_hours(value) -> float:
+    """A package's estimate in hours: a number from 0 up to a million, anything else is none (0)."""
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return 0
+    return value if 0 <= value < 1_000_000 else 0
 
 
 def _template_date(value) -> Optional[date]:
@@ -897,6 +946,28 @@ async def list_milestones(
     query = select(Milestone).where(Milestone.work_unit_id == work_unit_id)
     rows, page = await paginate(session, query, Milestone, limit, cursor, order_by=Milestone.seq)
     return PageResponse(data=await _milestone_responses(session, rows), page=page)
+
+
+async def list_work_packages(session: AsyncSession, org_id: uuid.UUID, work_unit_id: uuid.UUID) -> list[WorkPackageResponse]:
+    """The project's work packages (copied from its template), phase by phase; those in no phase last."""
+    await _get_work_unit(session, org_id, work_unit_id)
+    rows = await session.execute(
+        select(WorkPackage)
+        .outerjoin(Phase, Phase.id == WorkPackage.phase_id)
+        .where(WorkPackage.work_unit_id == work_unit_id)
+        .order_by(Phase.seq.is_(None), Phase.seq, WorkPackage.name, WorkPackage.id)
+    )
+    return [
+        WorkPackageResponse(
+            id=package.id,
+            phase_id=package.phase_id,
+            name=package.name,
+            owner_unit=unit_ref(package.owner_unit_id),
+            estimated_hours=float(package.estimated_hours),
+            status=package.status,
+        )
+        for package in rows.scalars().all()
+    ]
 
 
 async def create_milestone(
