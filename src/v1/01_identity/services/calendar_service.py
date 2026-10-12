@@ -1,4 +1,5 @@
 import logging
+import re
 from typing import Optional
 import uuid
 
@@ -10,18 +11,64 @@ from exceptions import (
     CalendarNotFoundError,
     PreconditionFailedError,
     PreconditionRequiredError,
+    ValidationFailedError,
 )
-from models.calendar import Calendar, CalendarHoliday
+from models.calendar import Calendar, CalendarHoliday, CalendarWorkingDay
 from schemas.calendar import (
     CalendarCreate,
     CalendarResponse,
     HolidayBatch,
     HolidayItem,
+    WorkingDayItem,
 )
 from schemas.common import PageInfo, PaginatedResponse
 from services.event_publisher import event_publisher
 
 logger = logging.getLogger("identity.calendar_service")
+
+_CLOCK = re.compile(r"^([01]\d|2[0-4]):([0-5]\d)$")
+
+
+def _clock_minutes(clock: str) -> Optional[int]:
+    """Minutes after midnight of an "HH:MM" time (up to 24:00), or None."""
+    match = _CLOCK.match(clock)
+    if not match:
+        return None
+    total = int(match.group(1)) * 60 + int(match.group(2))
+    return total if total <= 24 * 60 else None
+
+
+def _hours_problem(hours: list[tuple[str, str]]) -> Optional[str]:
+    """What is wrong with one day's time ranges, or None."""
+    ranges = []
+    for start, end in hours:
+        opens, closes = _clock_minutes(start), _clock_minutes(end)
+        if opens is None or closes is None:
+            return f"{start}–{end}: times must be HH:MM"
+        if closes <= opens:
+            return f"{start}–{end}: the end must be after the start"
+        ranges.append((opens, closes))
+    ranges.sort()
+    for previous, current in zip(ranges, ranges[1:]):
+        if current[0] < previous[1]:
+            return "time ranges overlap"
+    return None
+
+
+def _working_day_errors(working_days: list[WorkingDayItem], holiday_dates: set) -> list[dict[str, str]]:
+    errors = []
+    seen = set()
+    for index, day in enumerate(working_days):
+        field = f"working_days.{index}"
+        if day.date in seen:
+            errors.append({"field": f"{field}.date", "issue": f"{day.date}: listed twice as a working day"})
+        if day.date in holiday_dates:
+            errors.append({"field": f"{field}.date", "issue": f"{day.date}: is also a holiday; keep one of the two"})
+        seen.add(day.date)
+        problem = _hours_problem(day.hours)
+        if problem:
+            errors.append({"field": f"{field}.hours", "issue": f"{day.date}: {problem}"})
+    return errors
 
 
 class CalendarService:
@@ -34,12 +81,17 @@ class CalendarService:
             )
             for h in (calendar.holidays or [])
         ]
+        working_days = [
+            WorkingDayItem(date=w.work_date, name=w.name, hours=w.hours)
+            for w in sorted(calendar.working_days or [], key=lambda w: w.work_date)
+        ]
         return CalendarResponse(
             id=calendar.id,
             name=calendar.name,
             timezone=calendar.timezone,
             weekly_hours=calendar.weekly_hours,
             holidays=holidays,
+            working_days=working_days,
             version=calendar.version,
         )
 
@@ -150,6 +202,16 @@ class CalendarService:
                 f"ETag mismatch. Current version is '{calendar.version}'"
             )
 
+        # Without a list of working days, the ones the calendar has stay; a holiday mustn't land on one.
+        working_days = data.working_days
+        if working_days is None:
+            working_days = [
+                WorkingDayItem(date=w.work_date, name=w.name, hours=w.hours) for w in calendar.working_days
+            ]
+        errors = _working_day_errors(working_days, {h.date for h in data.holidays})
+        if errors:
+            raise ValidationFailedError(errors)
+
         # Clear existing holidays
         await session.execute(
             delete(CalendarHoliday).where(CalendarHoliday.calendar_id == calendar.id)
@@ -166,6 +228,21 @@ class CalendarService:
             )
             session.add(holiday)
 
+        if data.working_days is not None:
+            await session.execute(
+                delete(CalendarWorkingDay).where(CalendarWorkingDay.calendar_id == calendar.id)
+            )
+            for w in data.working_days:
+                session.add(
+                    CalendarWorkingDay(
+                        id=uuid.uuid4(),
+                        calendar_id=calendar.id,
+                        work_date=w.date,
+                        name=w.name.strip(),
+                        hours=[list(r) for r in sorted(w.hours)],
+                    )
+                )
+
         calendar.version += 1
         await session.commit()
         await session.refresh(calendar)
@@ -181,6 +258,7 @@ class CalendarService:
                 "organization_id": str(organization_id),
                 "version": calendar.version,
                 "holiday_count": len(calendar.holidays),
+                "working_day_count": len(calendar.working_days),
             },
         )
 

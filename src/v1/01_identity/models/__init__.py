@@ -1,7 +1,7 @@
 from models.client import Client
 from models.organization import Organization
 from models.platform_admin import PlatformAdmin, PlatformRefreshToken
-from models.calendar import Calendar, CalendarHoliday
+from models.calendar import Calendar, CalendarHoliday, CalendarWorkingDay
 from models.org_unit import OrgUnit, OrgUnitVertical
 from models.vertical import (
     FieldDefinition,
@@ -26,6 +26,7 @@ __all__ = [
     "PlatformRefreshToken",
     "Calendar",
     "CalendarHoliday",
+    "CalendarWorkingDay",
     "OrgUnit",
     "OrgUnitVertical",
     "Vertical",
