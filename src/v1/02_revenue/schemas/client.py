@@ -67,3 +67,14 @@ class ClientResponse(BaseModel):
     version: int
     created_at: datetime
     contacts: List[ContactResponse] = []
+
+
+class ClientMatch(BaseModel):
+    """A customer that may be the same business as one about to be created, and why."""
+
+    id: uuid.UUID
+    code: str
+    name: str
+    status: str
+    gstin: Optional[str] = None
+    reasons: List[Literal["gstin", "pan", "email", "name"]]

@@ -26,4 +26,7 @@ class Offering(Base):
     billing_model: Mapped[str] = mapped_column(String(50), nullable=False)
     list_price: Mapped[Optional[float]] = mapped_column(Numeric(15, 2), nullable=True)
     default_work_template_code: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    # What a won contract for it is delivered as: a delivery project, a client service, or
+    # neither (the default). The contract page offers the matching next step.
+    fulfilment: Mapped[str] = mapped_column(String(20), nullable=False, default="none", server_default="none")
     status: Mapped[str] = mapped_column(String(50), nullable=False, default="active")

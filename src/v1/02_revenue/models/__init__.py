@@ -16,7 +16,7 @@ from models.lead import Lead
 from models.offering import Offering
 from models.opportunity import Opportunity
 from models.payment import Payment, PaymentAllocation, Refund
-from models.quotation import NegotiationNote, Quotation, QuotationItem
+from models.quotation import NegotiationNote, Quotation, QuotationEvent, QuotationItem
 from models.receivables import InvoiceWriteOff, TdsReceivable
 from models.renewal import Renewal
 from models.tax_config import TaxConfigEntry, TaxConfigRevision, TaxPackApplication
@@ -37,6 +37,7 @@ __all__ = [
     "Offering",
     "Quotation",
     "QuotationItem",
+    "QuotationEvent",
     "NegotiationNote",
     "Contract",
     "ContractTerm",

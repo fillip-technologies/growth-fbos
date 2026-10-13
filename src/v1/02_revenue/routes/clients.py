@@ -4,9 +4,9 @@ from typing import Optional
 from fastapi import APIRouter, Depends, Header, Query, Response, status
 
 from dependencies import CurrentActor, DatabaseSession, OrgId, require_permission
-from schemas.client import ClientCreate, ClientResponse, ClientUpdate, ContactCreate, ContactResponse
+from schemas.client import ClientCreate, ClientMatch, ClientResponse, ClientUpdate, ContactCreate, ContactResponse
 from schemas.common import PageResponse
-from services import notifications
+from services import client_matches, notifications
 from services.client_service import ClientService
 
 router = APIRouter(prefix="/clients", tags=["clients"])
@@ -31,6 +31,19 @@ async def list_clients(
         limit=limit,
         cursor=cursor,
     )
+
+
+@router.get("/matches", response_model=list[ClientMatch], dependencies=[CAN_READ])
+async def find_client_matches(
+    session: DatabaseSession,
+    org_id: OrgId,
+    gstin: Optional[str] = Query(None, max_length=20),
+    pan: Optional[str] = Query(None, max_length=20),
+    email: Optional[str] = Query(None, max_length=255, description="A contact's email"),
+    name: Optional[str] = Query(None, max_length=255),
+) -> list[ClientMatch]:
+    """Customers that may be the same business (e.g. before converting a lead), strongest match first."""
+    return await client_matches.find_matches(session, org_id, gstin=gstin, pan=pan, email=email, name=name)
 
 
 @router.post("", response_model=ClientResponse, status_code=status.HTTP_201_CREATED, dependencies=[CAN_WRITE])

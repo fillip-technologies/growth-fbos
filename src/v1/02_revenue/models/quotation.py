@@ -1,9 +1,9 @@
 import uuid
-from datetime import datetime
+from datetime import date, datetime
 from decimal import Decimal
 from typing import Optional
 
-from sqlalchemy import JSON, DateTime, ForeignKey, Integer, Numeric, String, Text, func
+from sqlalchemy import JSON, Boolean, Date, DateTime, ForeignKey, Integer, Numeric, String, Text, false, func
 from sqlalchemy.orm import Mapped, mapped_column
 
 from database.base import Base
@@ -43,7 +43,18 @@ class Quotation(Base):
     tax_notes: Mapped[Optional[list]] = mapped_column(JSON, nullable=True)
     withholding: Mapped[Optional[list]] = mapped_column(JSON, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), nullable=False)
+    # When it was accepted. (It once held the valid-until date, then the send time: migration b4c8e2f1a9d3.)
     completed_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    valid_until: Mapped[Optional[date]] = mapped_column(Date, nullable=True)
+    # First time it went to the customer; later emails are quotation_events.
+    sent_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    # The last change request, rejection or withdrawal: what was said, and the reason code if any.
+    status_note: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    status_reason: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
+    # An option among several on the opportunity ("Option A - Basic"); revisions keep it.
+    name: Mapped[Optional[str]] = mapped_column(String(120), nullable=True)
+    # One per opportunity (kept so by the service): its value is the opportunity's expected value.
+    is_main: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default=false())
     version: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
 
 
@@ -86,3 +97,23 @@ class NegotiationNote(Base):
     summary: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     requested_changes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), nullable=False)
+
+
+class QuotationEvent(Base):
+    """What happened to a quotation, in order: its history on the quotation page."""
+
+    __tablename__ = "quotation_events"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUIDType, primary_key=True, default=uuid.uuid4)
+    organization_id: Mapped[uuid.UUID] = mapped_column(UUIDType, nullable=False, index=True)
+    quotation_id: Mapped[uuid.UUID] = mapped_column(
+        UUIDType, ForeignKey("quotations.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    # created | submitted | approved | sent | emailed | changes_requested | revised | accepted
+    # | rejected | withdrawn | not_chosen | validity_extended
+    event: Mapped[str] = mapped_column(String(30), nullable=False)
+    actor_user_id: Mapped[Optional[uuid.UUID]] = mapped_column(UUIDType, nullable=True)
+    occurred_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+    note: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    # For an email: to / cc / bcc / subject / files; for a revision: the other revision.
+    data: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)

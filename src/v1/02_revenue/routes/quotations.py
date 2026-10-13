@@ -8,13 +8,18 @@ from schemas.quotation import (
     QuotationEmailCreate,
     QuotationEmailDraft,
     QuotationEmailSent,
+    QuotationChangeRequest,
+    QuotationEventResponse,
     QuotationItemsReplace,
     QuotationReject,
     QuotationResponse,
+    QuotationUpdate,
+    QuotationValidityUpdate,
+    QuotationWithdrawal,
 )
-from services import notifications, quotation_email_service
+from services import notifications, quotation_email_service, quotation_events
 from services.documents_client import SubjectRef
-from services.quotation_service import QuotationService
+from services.quotation_service import QuotationService, get_quote_in_org
 
 router = APIRouter(prefix="/quotations", tags=["quotations"])
 
@@ -39,6 +44,29 @@ async def get_quotation(
         quotation_id=quotation_id,
         org_id=org_id,
     )
+    response.headers["ETag"] = f'"{quotation.version}"'
+    return quotation
+
+
+@router.patch(
+    "/{quotation_id}", response_model=QuotationResponse,
+    dependencies=[CAN_WRITE],
+)
+async def update_quotation(
+    quotation_id: uuid.UUID,
+    payload: QuotationUpdate,
+    session: DatabaseSession,
+    org_id: OrgId,
+    actor: CurrentActor,
+    response: Response,
+    if_match: Optional[str] = Header(None, alias="If-Match"),
+) -> QuotationResponse:
+    """Rename the option (`name`), or make it the opportunity's main quotation (`is_main: true`)."""
+    quotation = await QuotationService.update_quotation(
+        session=session, quotation_id=quotation_id, org_id=org_id, payload=payload, if_match=if_match,
+        actor_user_id=actor.user_id,
+    )
+    await session.commit()
     response.headers["ETag"] = f'"{quotation.version}"'
     return quotation
 
@@ -76,6 +104,7 @@ async def submit_quotation(
     quotation_id: uuid.UUID,
     session: DatabaseSession,
     org_id: OrgId,
+    actor: CurrentActor,
     response: Response,
     if_match: Optional[str] = Header(None, alias="If-Match"),
     idempotency_key: Optional[str] = Header(None, alias="Idempotency-Key"),
@@ -86,6 +115,7 @@ async def submit_quotation(
         quotation_id=quotation_id,
         org_id=org_id,
         if_match=if_match,
+        actor_user_id=actor.user_id,
     )
     await session.commit()
     response.headers["ETag"] = f'"{quotation.version}"'
@@ -107,7 +137,7 @@ async def approve_quotation(
 ) -> QuotationResponse:
     """Approve a quotation held for its discount, so it can be sent."""
     quotation = await QuotationService.approve_quotation(
-        session=session, quotation_id=quotation_id, org_id=org_id, if_match=if_match
+        session=session, quotation_id=quotation_id, org_id=org_id, if_match=if_match, actor_user_id=actor.user_id
     )
     await session.commit()
     await notifications.quotation_approved(session, actor, quotation)
@@ -123,6 +153,7 @@ async def send_quotation(
     quotation_id: uuid.UUID,
     session: DatabaseSession,
     org_id: OrgId,
+    actor: CurrentActor,
     response: Response,
     if_match: Optional[str] = Header(None, alias="If-Match"),
     idempotency_key: Optional[str] = Header(None, alias="Idempotency-Key"),
@@ -133,6 +164,7 @@ async def send_quotation(
         quotation_id=quotation_id,
         org_id=org_id,
         if_match=if_match,
+        actor_user_id=actor.user_id,
     )
     await session.commit()
     response.headers["ETag"] = f'"{quotation.version}"'
@@ -147,6 +179,7 @@ async def revise_quotation(
     quotation_id: uuid.UUID,
     session: DatabaseSession,
     org_id: OrgId,
+    actor: CurrentActor,
     response: Response,
     authorization: Authorization,
     documents: Documents,
@@ -157,6 +190,7 @@ async def revise_quotation(
         session=session,
         quotation_id=quotation_id,
         org_id=org_id,
+        actor_user_id=actor.user_id,
     )
     # Before the commit: if documents can't be reached the revision isn't created, rather
     # than created without its files.
@@ -191,6 +225,7 @@ async def accept_quotation(
         quotation_id=quotation_id,
         org_id=org_id,
         if_match=if_match,
+        actor_user_id=actor.user_id,
     )
     await session.commit()
     await notifications.deal_won(session, actor, quotation)
@@ -207,6 +242,7 @@ async def reject_quotation(
     payload: QuotationReject,
     session: DatabaseSession,
     org_id: OrgId,
+    actor: CurrentActor,
     response: Response,
     if_match: Optional[str] = Header(None, alias="If-Match"),
 ) -> QuotationResponse:
@@ -217,10 +253,94 @@ async def reject_quotation(
         org_id=org_id,
         payload=payload,
         if_match=if_match,
+        actor_user_id=actor.user_id,
     )
     await session.commit()
     response.headers["ETag"] = f'"{quotation.version}"'
     return quotation
+
+
+@router.post(
+    "/{quotation_id}/change-requests", response_model=QuotationResponse,
+    dependencies=[CAN_WRITE],
+)
+async def request_quotation_changes(
+    quotation_id: uuid.UUID,
+    payload: QuotationChangeRequest,
+    session: DatabaseSession,
+    org_id: OrgId,
+    actor: CurrentActor,
+    response: Response,
+    if_match: Optional[str] = Header(None, alias="If-Match"),
+) -> QuotationResponse:
+    """Record that the customer asked for changes to a sent quotation (what they asked, in `note`)."""
+    quotation = await QuotationService.request_changes(
+        session=session, quotation_id=quotation_id, org_id=org_id, payload=payload, if_match=if_match,
+        actor_user_id=actor.user_id,
+    )
+    await session.commit()
+    response.headers["ETag"] = f'"{quotation.version}"'
+    return quotation
+
+
+@router.post(
+    "/{quotation_id}/withdrawal", response_model=QuotationResponse,
+    dependencies=[CAN_WRITE],
+)
+async def withdraw_quotation(
+    quotation_id: uuid.UUID,
+    payload: QuotationWithdrawal,
+    session: DatabaseSession,
+    org_id: OrgId,
+    actor: CurrentActor,
+    response: Response,
+    if_match: Optional[str] = Header(None, alias="If-Match"),
+) -> QuotationResponse:
+    """Take a quotation back before the customer has answered it, with the reason."""
+    quotation = await QuotationService.withdraw_quotation(
+        session=session, quotation_id=quotation_id, org_id=org_id, payload=payload, if_match=if_match,
+        actor_user_id=actor.user_id,
+    )
+    await session.commit()
+    response.headers["ETag"] = f'"{quotation.version}"'
+    return quotation
+
+
+@router.patch(
+    "/{quotation_id}/validity", response_model=QuotationResponse,
+    dependencies=[CAN_WRITE],
+)
+async def update_quotation_validity(
+    quotation_id: uuid.UUID,
+    payload: QuotationValidityUpdate,
+    session: DatabaseSession,
+    org_id: OrgId,
+    actor: CurrentActor,
+    response: Response,
+    if_match: Optional[str] = Header(None, alias="If-Match"),
+) -> QuotationResponse:
+    """Change how long an open quotation is valid for (today or later); its status stays."""
+    quotation = await QuotationService.update_validity(
+        session=session, quotation_id=quotation_id, org_id=org_id, payload=payload, if_match=if_match,
+        actor_user_id=actor.user_id,
+    )
+    await session.commit()
+    response.headers["ETag"] = f'"{quotation.version}"'
+    return quotation
+
+
+@router.get(
+    "/{quotation_id}/events", response_model=list[QuotationEventResponse],
+    dependencies=[CAN_READ],
+)
+async def list_quotation_events(
+    quotation_id: uuid.UUID,
+    session: DatabaseSession,
+    org_id: OrgId,
+) -> list[QuotationEventResponse]:
+    """The quotation's history, oldest first."""
+    await get_quote_in_org(session, org_id, quotation_id)
+    return await quotation_events.list_events(session, org_id, quotation_id)
 
 
 @router.get(

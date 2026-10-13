@@ -84,6 +84,13 @@ async def _act(client: httpx.AsyncClient, quote: dict, action: str, **kwargs) ->
     )
 
 
+async def _sent_quotation(client: httpx.AsyncClient, opportunity_id: str, **kwargs) -> dict:
+    quote = await _quotation(client, opportunity_id, **kwargs)
+    res = await _act(client, quote, "send")
+    assert res.status_code == 200, res.json()
+    return res.json()
+
+
 async def test_converted_customer_is_a_prospect_until_a_quotation_is_accepted(async_client: httpx.AsyncClient):
     converted = await _converted_lead(async_client)
     assert converted["client_created"] is True
@@ -119,7 +126,7 @@ async def test_large_discount_waits_for_approval(async_client: httpx.AsyncClient
 async def test_opportunity_lists_its_quotations_and_contract(async_client: httpx.AsyncClient):
     converted = await _converted_lead(async_client)
     opportunity_id = converted["opportunity"]["id"]
-    first = await _quotation(async_client, opportunity_id)
+    first = await _sent_quotation(async_client, opportunity_id)
     revised = await async_client.post(f"{BASE}/quotations/{first['id']}/revise")
     assert revised.status_code == 201
 
