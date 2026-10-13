@@ -12,6 +12,8 @@ from schemas.token import TokenPayload
 from schemas.vertical import (
     FieldDefinitionCreate,
     FieldDefinitionResponse,
+    FormFieldsResponse,
+    FormFieldsUpdate,
     ObjectTypeResponse,
     PackInstallationResponse,
     PackInstallRequest,
@@ -232,6 +234,50 @@ async def publish_field_definition(
     )
     response.headers["ETag"] = f'"{fd.version_no}"'
     return fd
+
+
+@field_definitions_router.get(
+    "/forms/{object_type}",
+    response_model=FormFieldsResponse,
+    status_code=status.HTTP_200_OK,
+    summary="A form's custom fields as one list",
+)
+async def get_form_fields(
+    object_type: str,
+    response: Response,
+    actor: Actor = Depends(require_permission("identity.field_definition.read")),
+    db: AsyncSession = Depends(get_db_session),
+) -> FormFieldsResponse:
+    form = await vertical_service.get_form_fields(
+        session=db, organization_id=actor.organization_id, object_type=object_type
+    )
+    response.headers["ETag"] = f'"{form.revision}"'
+    return form
+
+
+@field_definitions_router.put(
+    "/forms/{object_type}",
+    response_model=FormFieldsResponse,
+    status_code=status.HTTP_200_OK,
+    summary="Replace a form's custom fields; they are live at once",
+)
+async def replace_form_fields(
+    object_type: str,
+    body: FormFieldsUpdate,
+    response: Response,
+    if_match: Optional[str] = Header(None, alias="If-Match"),
+    actor: Actor = Depends(require_permission("identity.field_definition.publish")),
+    db: AsyncSession = Depends(get_db_session),
+) -> FormFieldsResponse:
+    form = await vertical_service.replace_form_fields(
+        session=db,
+        organization_id=actor.organization_id,
+        object_type=object_type,
+        data=body,
+        if_match=if_match,
+    )
+    response.headers["ETag"] = f'"{form.revision}"'
+    return form
 
 
 # ---------------------------------------------------------------------------

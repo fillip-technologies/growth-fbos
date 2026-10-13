@@ -8,11 +8,12 @@ IST = ZoneInfo("Asia/Kolkata")
 WEEKDAYS = ("mon", "tue", "wed", "thu", "fri")
 
 
-def calendar(hours=(("09:00", "18:00"),), days=WEEKDAYS, holidays=()):
+def calendar(hours=(("09:00", "18:00"),), days=WEEKDAYS, holidays=(), working_days=()):
     return calendar_from({
         "timezone": "Asia/Kolkata",
         "weekly_hours": {day: [list(r) for r in hours] for day in days},
         "holidays": [{"date": d, "is_half_day": half} for d, half in holidays],
+        "working_days": [{"date": d, "hours": [list(r) for r in ranges]} for d, ranges in working_days],
     })
 
 
@@ -47,11 +48,24 @@ def test_holidays_and_half_days():
     assert monday_half.minutes_between(at(12, 9), at(12, 18)) == 270
 
 
+def test_an_extra_working_day_counts_with_its_own_hours():
+    # Saturday the 10th worked 10:00-14:00: Friday 17:00 plus two hours ends on Saturday at 11.
+    working_saturday = calendar(working_days=[("2026-10-10", (("10:00", "14:00"),))])
+    assert working_saturday.add_minutes(at(9, 17), 120) == at(10, 11)
+    assert working_saturday.minutes_between(at(9, 17), at(12, 10)) == 60 + 240 + 60
+    # On a working weekday its own hours replace the usual ones.
+    short_monday = calendar(working_days=[("2026-10-12", (("09:00", "12:00"),))])
+    assert short_monday.minutes_between(at(12, 8), at(12, 20)) == 180
+    # Its ranges, and nothing else, count on that day.
+    split_sunday = calendar(working_days=[("2026-10-11", (("09:00", "11:00"), ("15:00", "16:00")))])
+    assert split_sunday.add_minutes(at(11, 10), 90) == at(11, 15, 30)
+
+
 def test_adding_and_measuring_agree_across_weeks():
-    week = calendar()
     start = at(7, 11, 15)
-    for minutes in (1, 59, 540, 541, 2000, 9000):
-        assert week.minutes_between(start, week.add_minutes(start, minutes)) == minutes
+    for week in (calendar(), calendar(working_days=[("2026-10-10", (("10:00", "14:00"),))])):
+        for minutes in (1, 59, 540, 541, 2000, 9000):
+            assert week.minutes_between(start, week.add_minutes(start, minutes)) == minutes
 
 
 def test_a_calendar_without_working_time_or_a_known_zone_isnt_used():

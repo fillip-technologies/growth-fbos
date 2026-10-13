@@ -28,8 +28,10 @@ from schemas.work_units import (
     RiskUpdate,
     WorkTemplateCreate,
     WorkTemplateResponse,
+    WorkTemplateUpdate,
     WorkTemplateVersionCreate,
     WorkTemplateVersionResponse,
+    WorkPackageResponse,
     WorkUnitCreate,
     WorkUnitResponse,
     WorkUnitStatusChange,
@@ -242,6 +244,12 @@ async def list_milestones(
     return await service.list_milestones(session, org_id, work_unit_id, limit, cursor)
 
 
+@router.get("/work-units/{work_unit_id}/work-packages", response_model=list[WorkPackageResponse], dependencies=[CAN_READ, IN_VIEW])
+async def list_work_packages(work_unit_id: uuid.UUID, session: DatabaseSession, org_id: OrgId) -> list[WorkPackageResponse]:
+    """The project's work packages, phase by phase."""
+    return await service.list_work_packages(session, org_id, work_unit_id)
+
+
 @router.patch("/milestones/{milestone_id}", response_model=MilestoneResponse, dependencies=[CAN_WRITE])
 async def update_milestone(
     milestone_id: uuid.UUID,
@@ -411,6 +419,16 @@ async def update_work_unit_type(
 async def create_template(payload: WorkTemplateCreate, session: DatabaseSession, org_id: OrgId) -> WorkTemplateResponse:
     """Add a project template; its content goes in versions."""
     template = await service.create_template(session, org_id, payload)
+    await session.commit()
+    return template
+
+
+@router.patch("/templates/{template_code}", response_model=WorkTemplateResponse, dependencies=[CAN_MANAGE_TEMPLATES])
+async def update_template(
+    template_code: str, payload: WorkTemplateUpdate, session: DatabaseSession, org_id: OrgId
+) -> WorkTemplateResponse:
+    """Rename a project template, change its vertical, or retire it so no new project starts from it."""
+    template = await service.update_template(session, org_id, template_code, payload)
     await session.commit()
     return template
 

@@ -13,6 +13,17 @@ class HolidayItem(BaseModel):
     is_half_day: bool = False
 
 
+class WorkingDayItem(BaseModel):
+    """A date worked on with its own hours, usually one the week leaves off (a working Saturday)."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    date: date
+    name: str = Field(..., min_length=1, max_length=255)
+    # That day's working time, like one day of `weekly_hours`: [["09:00", "18:00"], ...].
+    hours: list[tuple[str, str]] = Field(..., min_length=1, max_length=12)
+
+
 class CalendarCreate(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -25,6 +36,8 @@ class HolidayBatch(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     holidays: list[HolidayItem]
+    # Left out (None): the calendar's extra working days stay as they are.
+    working_days: Optional[list[WorkingDayItem]] = None
 
 
 class CalendarResponse(BaseModel):
@@ -35,6 +48,7 @@ class CalendarResponse(BaseModel):
     timezone: str
     weekly_hours: Optional[dict[str, Any]] = None
     holidays: list[HolidayItem] = Field(default_factory=list)
+    working_days: list[WorkingDayItem] = Field(default_factory=list)
     version: int = 1
 
 
@@ -43,12 +57,19 @@ class WorkCalendarHoliday(BaseModel):
     is_half_day: bool = False
 
 
+class WorkCalendarWorkingDay(BaseModel):
+    date: date
+    # The day's working time; it replaces that weekday's hours.
+    hours: list[list[str]] = Field(default_factory=list)
+
+
 class WorkCalendar(BaseModel):
     id: uuid.UUID
     timezone: str
     # {mon: [["09:00", "17:00"], ...], ...}: a day missing or empty is a day off.
     weekly_hours: dict[str, Any] = Field(default_factory=dict)
     holidays: list[WorkCalendarHoliday] = Field(default_factory=list)
+    working_days: list[WorkCalendarWorkingDay] = Field(default_factory=list)
 
 
 class WorkCalendarsResponse(BaseModel):

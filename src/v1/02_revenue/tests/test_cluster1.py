@@ -2,6 +2,7 @@ import uuid
 from datetime import date, timedelta
 import pytest
 import httpx
+from sqlalchemy import select
 
 from models.lead import Lead
 
@@ -257,17 +258,33 @@ async def test_lead_disqualify(async_client: httpx.AsyncClient):
     assert disq_res.json()["status"] == "disqualified"
 
 
-async def _new_lead(async_client: httpx.AsyncClient) -> dict:
+async def _new_lead(async_client: httpx.AsyncClient, **fields) -> dict:
     res = await async_client.post(
         "/api/revenue/v1/leads",
         json={
             "vertical_id": str(uuid.uuid4()),
             "contact_name": "Ramesh Kumar",
             "consent": {"given": True, "text": "I agree to be contacted about my enquiry.", "channel": "phone_call"},
+            **fields,
         },
     )
     assert res.status_code == 201, res.text
     return res.json()
+
+
+async def test_every_edit_of_a_leads_extra_values_is_saved(async_client: httpx.AsyncClient, db_session):
+    lead = await _new_lead(async_client, attributes={"referral_name": "Ravi", "floor": "3"})
+
+    res = await async_client.patch(
+        f"/api/revenue/v1/leads/{lead['id']}",
+        json={"score": 40, "attributes": {"referral_name": "Meena", "floor": None}},
+        headers={"If-Match": f'"{lead["version"]}"'},
+    )
+    assert res.status_code == 200, res.text
+
+    # What the database holds, not the session's copy: a change made in place used to be lost.
+    stored = await db_session.execute(select(Lead.attributes).where(Lead.id == uuid.UUID(lead["id"])))
+    assert stored.scalar_one() == {"referral_name": "Meena", "score": 40}  # an emptied value is removed
 
 
 async def _set_status(async_client: httpx.AsyncClient, lead: dict, new_status: str) -> httpx.Response:

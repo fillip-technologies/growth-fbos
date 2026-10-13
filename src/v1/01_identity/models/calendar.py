@@ -2,7 +2,7 @@ import uuid
 from datetime import date
 from typing import Any, Optional
 
-from sqlalchemy import Boolean, Date, ForeignKey, Integer, JSON, String
+from sqlalchemy import Boolean, Date, ForeignKey, Integer, JSON, String, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from database.base import Base
@@ -24,6 +24,9 @@ class Calendar(Base):
     holidays: Mapped[list["CalendarHoliday"]] = relationship(
         "CalendarHoliday", back_populates="calendar", cascade="all, delete-orphan", lazy="selectin"
     )
+    working_days: Mapped[list["CalendarWorkingDay"]] = relationship(
+        "CalendarWorkingDay", back_populates="calendar", cascade="all, delete-orphan", lazy="selectin"
+    )
 
 
 class CalendarHoliday(Base):
@@ -39,3 +42,21 @@ class CalendarHoliday(Base):
 
     calendar: Mapped["Calendar"] = relationship("Calendar", back_populates="holidays")
 
+
+
+class CalendarWorkingDay(Base):
+    """A date worked on with its own hours, usually a day the week leaves off (a working Saturday)."""
+
+    __tablename__ = "calendar_working_days"
+    __table_args__ = (UniqueConstraint("calendar_id", "work_date", name="uq_calendar_working_days_date"),)
+
+    id: Mapped[uuid.UUID] = mapped_column(UUIDType, primary_key=True, default=uuid.uuid4)
+    calendar_id: Mapped[uuid.UUID] = mapped_column(
+        UUIDType, ForeignKey("calendars.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    work_date: Mapped[date] = mapped_column(Date, nullable=False)
+    name: Mapped[str] = mapped_column(String(255), nullable=False)
+    # That day's working time, like one day of `weekly_hours`: [["09:00", "18:00"], ...].
+    hours: Mapped[list[Any]] = mapped_column(JSON, nullable=False)
+
+    calendar: Mapped["Calendar"] = relationship("Calendar", back_populates="working_days")
