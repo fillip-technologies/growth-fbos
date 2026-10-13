@@ -480,3 +480,26 @@ class AttachmentsTooLargeError(RevenueServiceError):
             f"The chosen files come to {total_bytes / 1048576:.1f} MB; an email may carry {limit_bytes / 1048576:.0f} MB.",
             meta={"total_bytes": total_bytes, "limit_bytes": limit_bytes},
         )
+
+
+class ValidityInPastError(RevenueServiceError):
+    """422: A quotation can't be made valid until a day that has passed."""
+
+    def __init__(self, valid_until: str) -> None:
+        super().__init__(
+            status.HTTP_422_UNPROCESSABLE_CONTENT,
+            "VALIDITY_IN_PAST",
+            f"Valid until must be today or later, not {valid_until}.",
+            meta={"valid_until": valid_until},
+        )
+
+
+class ChangeNoteRequiredError(RevenueServiceError):
+    """422: Recording a change request needs what the customer asked for."""
+
+    def __init__(self) -> None:
+        super().__init__(
+            status.HTTP_422_UNPROCESSABLE_CONTENT,
+            "CHANGE_NOTE_REQUIRED",
+            "Write down what the customer asked to change.",
+        )

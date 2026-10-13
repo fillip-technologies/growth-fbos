@@ -11,7 +11,8 @@ from exceptions import MailUnavailableError
 from models.activity import Activity
 from models.client import ClientContact
 from services.mail_client import mail_client
-from tests.test_sales_flow import BASE, _act, _converted_lead, _quotation
+from tests.conftest import TEST_USER_ID
+from tests.test_sales_flow import ADDRESS, BASE, CONSENT, _act, _converted_lead, _quotation
 
 pytestmark = pytest.mark.asyncio
 
@@ -189,3 +190,39 @@ async def test_failed_mail_leaves_quotation_unsent(async_client, db_session, quo
     await db_session.rollback()
     after = await async_client.get(f"{BASE}/quotations/{quote['id']}")
     assert after.json()["status"] == "draft"
+
+
+async def test_draft_falls_back_to_the_leads_email(async_client, outbox):
+    """A customer converted from a lead has no contacts; the lead's email fills To."""
+    lead = await async_client.post(
+        f"{BASE}/leads",
+        json={"vertical_id": str(uuid.uuid4()), "contact_name": "Ravi Kumar", "contact_email": "ravi@client.test", "consent": CONSENT},
+    )
+    assert lead.status_code == 201, lead.json()
+    converted = await async_client.post(
+        f"{BASE}/leads/{lead.json()['id']}/convert",
+        json={
+            "new_client": {
+                "name": "Ravi Traders",
+                "legal_name": "Ravi Traders Pvt Ltd",
+                "billing_address": ADDRESS,
+                "owner_user_id": str(TEST_USER_ID),
+            },
+            "opportunity": {
+                "name": "Website",
+                "expected_value": {"amount": 1000, "currency": "INR"},
+                "expected_close_date": "2026-12-31",
+            },
+        },
+        headers={"If-Match": lead.headers["ETag"]},
+    )
+    assert converted.status_code == 200, converted.json()
+    quote = await _quotation(async_client, converted.json()["opportunity"]["id"])
+
+    draft = (await async_client.get(f"{BASE}/quotations/{quote['id']}/email-draft")).json()
+
+    assert draft["to"] == ["ravi@client.test"]
+    assert draft["contacts"] == [
+        {"name": "Ravi Kumar", "email": "ravi@client.test", "designation": "From the lead", "is_primary": False}
+    ]
+    assert draft["message"].startswith("Dear Ravi Kumar,")

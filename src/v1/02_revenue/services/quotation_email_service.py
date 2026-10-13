@@ -8,7 +8,6 @@ committed once the mail server has accepted the email.
 """
 
 import base64
-from datetime import datetime, timezone
 import html
 import uuid
 
@@ -17,8 +16,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from config import settings
 from exceptions import AttachmentsTooLargeError, DocumentNotAttachedError, QuotationNotEmailableError
-from models.activity import Activity
 from models.client import Client, ClientContact
+from models.lead import Lead
 from models.opportunity import Opportunity
 from models.quotation import Quotation
 from schemas.quotation import (
@@ -33,12 +32,12 @@ from schemas.quotation import (
 from services.documents_client import DocumentsClient, SubjectRef
 from services.identity_client import Actor
 from services.mail_client import mail_client
+from services import quotation_events
 from services.quotation_service import QuotationService, get_quote_in_org
 
 EMAILABLE = ("draft", "approved", "sent", "accepted")
 # Sending the email is what sends these to the customer.
 MARKED_SENT_BY_EMAIL = ("draft", "approved")
-OPPORTUNITY_SUBJECT = "commercial.opportunity"
 
 
 def _money(amount: object, currency: str) -> str:
@@ -58,11 +57,28 @@ async def _contacts(session: AsyncSession, client_id: uuid.UUID) -> list[EmailCo
     ]
 
 
+async def _lead_contact(session: AsyncSession, opportunity: Opportunity | None) -> EmailContact | None:
+    """
+    The email the opportunity's lead came in with. Converting a lead doesn't make it a
+    customer contact, so for many customers it is the only address there is.
+    """
+    if not opportunity or not opportunity.lead_id:
+        return None
+    lead = await session.get(Lead, opportunity.lead_id)
+    email = (lead.contact_email or "").strip() if lead else ""
+    if not email:
+        return None
+    return EmailContact(name=lead.contact_name or email, email=email, designation="From the lead")
+
+
 async def build_draft(session: AsyncSession, org_id: uuid.UUID, actor: Actor, quotation_id: uuid.UUID) -> QuotationEmailDraft:
     quote = await get_quote_in_org(session, org_id, quotation_id)
     client = await session.get(Client, quote.client_id)
     opportunity = await session.get(Opportunity, quote.opportunity_id) if quote.opportunity_id else None
     contacts = await _contacts(session, quote.client_id)
+    lead_contact = await _lead_contact(session, opportunity)
+    if lead_contact and not any(c.email.lower() == lead_contact.email.lower() for c in contacts):
+        contacts.append(lead_contact)
     primary = next((c for c in contacts if c.is_primary), contacts[0] if contacts else None)
 
     about = f" for {opportunity.name}" if opportunity else ""
@@ -162,7 +178,9 @@ async def send(
     attachments, files = await _attachments(documents, authorization, org_id, quotation_id, data.document_ids)
 
     if quote.status in MARKED_SENT_BY_EMAIL:
-        quotation: QuotationResponse = await QuotationService.send_quotation(session, quotation_id, org_id, if_match)
+        quotation: QuotationResponse = await QuotationService.send_quotation(
+            session, quotation_id, org_id, if_match, actor_user_id=actor.user_id, via_email=True
+        )
     else:
         quotation = await QuotationService.get_quotation(session, quotation_id, org_id)
 
@@ -178,20 +196,16 @@ async def send(
         }
     )
 
-    if quote.opportunity_id:
-        session.add(
-            Activity(
-                organization_id=org_id,
-                subject_type=OPPORTUNITY_SUBJECT,
-                subject_id=quote.opportunity_id,
-                activity_type="email",
-                owner_user_id=actor.user_id,
-                occurred_at=datetime.now(timezone.utc).replace(tzinfo=None),
-                summary=_activity_summary(quote, data, files),
-                outcome="sent",
-            )
-        )
-        await session.flush()
+    await quotation_events.record(
+        session, org_id, quote, "emailed", actor.user_id,
+        data={
+            "to": data.to, "cc": data.cc, "bcc": data.bcc, "subject": data.subject,
+            "files": [f.file_name for f in files],
+        },
+        timeline=_activity_summary(quote, data, files),
+        timeline_type="email",
+    )
+    quotation = quotation.model_copy(update={"last_sent_at": await quotation_events.last_sent_at(session, quote.id)})
 
     return QuotationEmailSent(
         from_address=sent["from_address"],

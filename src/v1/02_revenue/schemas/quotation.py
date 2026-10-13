@@ -36,6 +36,50 @@ class QuotationReject(BaseModel):
     reason: str = Field(..., min_length=1, max_length=512)
 
 
+class QuotationChangeRequest(BaseModel):
+    """POST /quotations/{id}/change-requests: the customer replied asking for changes."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    # Required; checked in the service so a blank note answers CHANGE_NOTE_REQUIRED.
+    note: Optional[str] = Field(None, max_length=5000)
+
+
+WithdrawalReason = Literal["mistake", "price_change", "scope_change", "customer_request", "other"]
+
+
+class QuotationWithdrawal(BaseModel):
+    """POST /quotations/{id}/withdrawal: we take the quotation back."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    reason: WithdrawalReason
+    note: Optional[str] = Field(None, max_length=5000)
+
+
+class QuotationValidityUpdate(BaseModel):
+    """PATCH /quotations/{id}/validity."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    valid_until: date
+
+
+QuotationEventType = Literal[
+    "created", "submitted", "approved", "sent", "emailed", "changes_requested", "revised",
+    "accepted", "rejected", "withdrawn", "not_chosen", "validity_extended",
+]
+
+
+class QuotationEventResponse(BaseModel):
+    id: uuid.UUID
+    event: QuotationEventType
+    occurred_at: datetime
+    actor_user_id: Optional[uuid.UUID] = None
+    note: Optional[str] = None
+    data: dict = {}
+
+
 class QuotationItemResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
@@ -77,8 +121,17 @@ class QuotationResponse(BaseModel):
     previous_revision_id: Optional[uuid.UUID] = None
     opportunity_id: Optional[uuid.UUID] = None
     client: ClientRef
-    status: Literal["draft", "pending_approval", "approved", "sent", "accepted", "rejected", "superseded", "expired"]
-    valid_until: date
+    status: Literal[
+        "draft", "pending_approval", "approved", "sent", "changes_requested", "accepted", "rejected",
+        "withdrawn", "superseded", "not_chosen",
+    ]
+    # Null for a quotation sent before valid_until was kept apart (its date was lost).
+    valid_until: Optional[date] = None
+    # Sent or awaiting changes, and past its valid-until date. Never stored as a status.
+    is_expired: bool = False
+    # The last change request, rejection or withdrawal: what was said, and the reason code.
+    status_note: Optional[str] = None
+    status_reason: Optional[str] = None
     currency: str = "INR"
     place_of_supply: str
     items: List[QuotationItemResponse]
@@ -87,6 +140,7 @@ class QuotationResponse(BaseModel):
     pdf_document_id: Optional[uuid.UUID] = None
     terms: Optional[str] = None
     sent_at: Optional[datetime] = None
+    last_sent_at: Optional[datetime] = None
     accepted_at: Optional[datetime] = None
     version: int
     supply_type: Optional[str] = None

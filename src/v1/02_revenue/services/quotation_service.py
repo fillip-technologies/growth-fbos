@@ -1,5 +1,5 @@
 from dataclasses import dataclass
-from datetime import date, datetime, timezone
+from datetime import date, datetime
 from typing import List, Optional
 import uuid
 
@@ -7,12 +7,14 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from exceptions import (
+    ChangeNoteRequiredError,
     InvalidStateTransitionError,
     OfferingNotFoundError,
     OpportunityNotFoundError,
     PreconditionRequiredError,
     QuotationFrozenError,
     QuotationNotFoundError,
+    ValidityInPastError,
     VersionConflictError,
 )
 from finance import policies
@@ -27,6 +29,7 @@ from models.quotation import NegotiationNote, Quotation, QuotationItem
 from schemas.common import Money
 from schemas.opportunity import ClientRef
 from schemas.quotation import (
+    QuotationChangeRequest,
     QuotationCreate,
     QuotationItemInput,
     QuotationItemResponse,
@@ -34,8 +37,12 @@ from schemas.quotation import (
     QuotationReject,
     QuotationResponse,
     QuotationTotals,
+    QuotationValidityUpdate,
+    QuotationWithdrawal,
 )
 from schemas.tax import LineTax, TaxAmount, WithholdingPreview
+from services import quotation_events
+from services.quotation_events import label, now_utc
 from services.tax_service import (
     DocumentLineSpec,
     TaxCalculation,
@@ -51,6 +58,24 @@ from services.tax_service import (
 
 
 QUOTATION_DOCUMENT = "quotation"  # DocumentTaxLine.document_type
+
+# With the customer, waiting for their answer: these expire once past valid_until.
+AWAITING_CUSTOMER = ("sent", "changes_requested")
+# Still ours to take back.
+WITHDRAWABLE = ("draft", "pending_approval", "approved", "sent", "changes_requested")
+# Revising answers the customer: a new revision after they have seen this one.
+REVISABLE = ("sent", "rejected", "changes_requested")
+REJECTABLE = AWAITING_CUSTOMER
+VALIDITY_EDITABLE = WITHDRAWABLE
+WITHDRAWAL_REASONS = {
+    "mistake": "sent by mistake",
+    "price_change": "price change",
+    "scope_change": "scope change",
+    "customer_request": "customer's request",
+    "other": "other",
+}
+# The open stages, in the order a deal moves through them.
+OPEN_STAGES = ("open", "qualification", "proposal", "negotiation")
 
 
 @dataclass(frozen=True)
@@ -156,11 +181,21 @@ def _money(amount, currency: str) -> Money:
     return Money(amount=as_float(to_decimal(amount)), currency=currency)
 
 
+def is_expired(quote: Quotation, today: Optional[date] = None) -> bool:
+    """Waiting for the customer past its valid-until date. Derived, never a stored status."""
+    return (
+        quote.status in AWAITING_CUSTOMER
+        and quote.valid_until is not None
+        and quote.valid_until < (today or date.today())
+    )
+
+
 def format_quotation_response(
     quote: Quotation,
     client: Client,
     items: List[QuotationItem],
     tax_lines: list[DocumentTaxLine],
+    last_sent_at: Optional[datetime] = None,
 ) -> QuotationResponse:
     currency = quote.currency
     totals = totals_of(tax_lines)
@@ -198,7 +233,10 @@ def format_quotation_response(
         opportunity_id=quote.opportunity_id,
         client=ClientRef(id=client.id, name=client.name),
         status=quote.status,
-        valid_until=quote.completed_at.date() if quote.completed_at else datetime.now(timezone.utc).date(),
+        valid_until=quote.valid_until,
+        is_expired=is_expired(quote),
+        status_note=quote.status_note,
+        status_reason=quote.status_reason,
         currency=currency,
         place_of_supply=quote.place_of_supply or "",
         items=item_responses,
@@ -221,7 +259,8 @@ def format_quotation_response(
         approval_request_id=quote.approved_request_id,
         pdf_document_id=None,
         terms=quote.summary,
-        sent_at=quote.completed_at if quote.status in ("sent", "accepted", "rejected") else None,
+        sent_at=quote.sent_at,
+        last_sent_at=last_sent_at or quote.sent_at,
         accepted_at=quote.completed_at if quote.status == "accepted" else None,
         version=quote.version,
         supply_type=quote.supply_type,
@@ -274,6 +313,17 @@ def _check_version(if_match: Optional[str], version: int) -> None:
         raise VersionConflictError(version)
 
 
+async def _advance_stage(session: AsyncSession, quote: Quotation, stage: str) -> None:
+    """Moves the opportunity forward to `stage`, never back, and never once it is won or lost."""
+    if not quote.opportunity_id:
+        return
+    opp = await session.get(Opportunity, quote.opportunity_id)
+    if not opp or opp.status not in OPEN_STAGES or OPEN_STAGES.index(opp.status) >= OPEN_STAGES.index(stage):
+        return
+    opp.status = stage
+    opp.version += 1
+
+
 class QuotationService:
     @staticmethod
     async def create_quotation(
@@ -281,6 +331,7 @@ class QuotationService:
         org_id: uuid.UUID,
         opportunity_id: uuid.UUID,
         payload: QuotationCreate,
+        actor_user_id: Optional[uuid.UUID] = None,
     ) -> QuotationResponse:
         opp_res = await session.execute(
             select(Opportunity).where(Opportunity.id == opportunity_id, Opportunity.organization_id == org_id)
@@ -302,7 +353,7 @@ class QuotationService:
             place_of_supply=payload.place_of_supply,
             tax_registration_id=payload.tax_registration_id,
             status="draft",
-            completed_at=datetime.combine(payload.valid_until, datetime.min.time()),
+            valid_until=payload.valid_until,
             version=1,
         )
         if payload.created_on:
@@ -312,6 +363,7 @@ class QuotationService:
         await session.flush()
 
         items = await _store_calculation(session, org_id, quote, quoted, calculation)
+        await quotation_events.record(session, org_id, quote, "created", actor_user_id)
         return format_quotation_response(quote, client, items, await load_tax_lines(session, QUOTATION_DOCUMENT, [quote.id]))
 
     @staticmethod
@@ -328,7 +380,10 @@ class QuotationService:
         )
         items = list(items_res.scalars().all())
 
-        return format_quotation_response(quote, client, items, await load_tax_lines(session, QUOTATION_DOCUMENT, [quote.id]))
+        return format_quotation_response(
+            quote, client, items, await load_tax_lines(session, QUOTATION_DOCUMENT, [quote.id]),
+            await quotation_events.last_sent_at(session, quote.id),
+        )
 
     @staticmethod
     async def replace_quotation_items(
@@ -339,12 +394,7 @@ class QuotationService:
         if_match: Optional[str] = None,
     ) -> QuotationResponse:
         quote = await get_quote_in_org(session, org_id, quotation_id)
-
-        if if_match is None:
-            raise PreconditionRequiredError()
-        expected_version = int(if_match.strip('"').replace("W/", ""))
-        if quote.version != expected_version:
-            raise VersionConflictError(quote.version)
+        _check_version(if_match, quote.version)
 
         if quote.status != "draft":
             raise QuotationFrozenError("replace items on", quote.status)
@@ -363,14 +413,10 @@ class QuotationService:
         quotation_id: uuid.UUID,
         org_id: uuid.UUID,
         if_match: Optional[str] = None,
+        actor_user_id: Optional[uuid.UUID] = None,
     ) -> QuotationResponse:
         quote = await get_quote_in_org(session, org_id, quotation_id)
-
-        if if_match is None:
-            raise PreconditionRequiredError()
-        expected_version = int(if_match.strip('"').replace("W/", ""))
-        if quote.version != expected_version:
-            raise VersionConflictError(quote.version)
+        _check_version(if_match, quote.version)
 
         if quote.status != "draft":
             raise InvalidStateTransitionError(quote.status, "submit")
@@ -384,7 +430,7 @@ class QuotationService:
             quote.status = "approved"
 
         quote.version += 1
-        await session.flush()
+        await quotation_events.record(session, org_id, quote, "submitted", actor_user_id, data={"status": quote.status})
         return await QuotationService.get_quotation(session, quotation_id, org_id)
 
     @staticmethod
@@ -393,14 +439,15 @@ class QuotationService:
         quotation_id: uuid.UUID,
         org_id: uuid.UUID,
         if_match: Optional[str] = None,
+        actor_user_id: Optional[uuid.UUID] = None,
+        via_email: bool = False,
     ) -> QuotationResponse:
+        """
+        Marks the quotation sent. Emailing it records its own event and timeline line
+        (`via_email`), so this one then records nothing.
+        """
         quote = await get_quote_in_org(session, org_id, quotation_id)
-
-        if if_match is None:
-            raise PreconditionRequiredError()
-        expected_version = int(if_match.strip('"').replace("W/", ""))
-        if quote.version != expected_version:
-            raise VersionConflictError(quote.version)
+        _check_version(if_match, quote.version)
 
         if quote.status not in ("approved", "draft"):
             raise InvalidStateTransitionError(quote.status, "send")
@@ -413,9 +460,16 @@ class QuotationService:
         quoted = await _stored_items_as_quoted(session, org_id, list(stored.scalars().all()))
         await _store_calculation(session, org_id, quote, quoted, await _calculate(session, org_id, client, quoted, quote))
 
+        moment = now_utc()
         quote.status = "sent"
-        quote.completed_at = datetime.now(timezone.utc)
+        quote.sent_at = quote.sent_at or moment
         quote.version += 1
+        await _advance_stage(session, quote, "proposal")
+        if not via_email:
+            await quotation_events.record(
+                session, org_id, quote, "sent", actor_user_id, occurred_at=moment,
+                timeline=f"Marked quotation {label(quote)} as sent to the customer.",
+            )
         await session.flush()
         return await QuotationService.get_quotation(session, quotation_id, org_id)
 
@@ -424,10 +478,11 @@ class QuotationService:
         session: AsyncSession,
         quotation_id: uuid.UUID,
         org_id: uuid.UUID,
+        actor_user_id: Optional[uuid.UUID] = None,
     ) -> QuotationResponse:
+        """Revision N+1 as a draft, answering what the customer said; this one is superseded."""
         curr_quote = await get_quote_in_org(session, org_id, quotation_id)
-        # An accepted quotation is the deal; a superseded one already has a newer revision.
-        if curr_quote.status in ("accepted", "superseded"):
+        if curr_quote.status not in REVISABLE:
             raise InvalidStateTransitionError(curr_quote.status, "revise")
 
         client = await session.get(Client, curr_quote.client_id)
@@ -436,12 +491,10 @@ class QuotationService:
         )
         old_items = list(old_items_res.scalars().all())
 
-        # Mark current quotation superseded
         curr_quote.status = "superseded"
         curr_quote.version += 1
         await session.flush()
 
-        # Create revision N+1
         new_rev = Quotation(
             opportunity_id=curr_quote.opportunity_id,
             client_id=curr_quote.client_id,
@@ -462,7 +515,7 @@ class QuotationService:
             tax_notes=curr_quote.tax_notes,
             withholding=curr_quote.withholding,
             status="draft",
-            completed_at=curr_quote.completed_at,
+            valid_until=curr_quote.valid_until,
             version=1,
         )
         session.add(new_rev)
@@ -490,6 +543,15 @@ class QuotationService:
 
         await session.flush()
         tax_lines = await copy_tax_lines(session, org_id, QUOTATION_DOCUMENT, curr_quote.id, new_rev.id)
+        await _advance_stage(session, curr_quote, "negotiation")
+        await quotation_events.record(
+            session, org_id, curr_quote, "revised", actor_user_id,
+            data={"revision_id": str(new_rev.id), "revision_no": new_rev.revision_no},
+        )
+        await quotation_events.record(
+            session, org_id, new_rev, "created", actor_user_id,
+            data={"revision_id": str(curr_quote.id), "revision_no": curr_quote.revision_no},
+        )
         return format_quotation_response(new_rev, client, persisted_items, tax_lines)
 
     @staticmethod
@@ -513,6 +575,7 @@ class QuotationService:
         quotation_id: uuid.UUID,
         org_id: uuid.UUID,
         if_match: Optional[str] = None,
+        actor_user_id: Optional[uuid.UUID] = None,
     ) -> QuotationResponse:
         """Approve a quotation held for its discount (over 20%), so it can be sent."""
         quote = await get_quote_in_org(session, org_id, quotation_id)
@@ -522,7 +585,7 @@ class QuotationService:
 
         quote.status = "approved"
         quote.version += 1
-        await session.flush()
+        await quotation_events.record(session, org_id, quote, "approved", actor_user_id)
         return await QuotationService.get_quotation(session, quotation_id, org_id)
 
     @staticmethod
@@ -531,23 +594,20 @@ class QuotationService:
         quotation_id: uuid.UUID,
         org_id: uuid.UUID,
         if_match: Optional[str] = None,
+        actor_user_id: Optional[uuid.UUID] = None,
     ) -> QuotationResponse:
+        """The customer agreed: the opportunity is won and a prospect becomes a customer. Expired is no bar."""
         quote = await get_quote_in_org(session, org_id, quotation_id)
+        _check_version(if_match, quote.version)
 
-        if if_match is None:
-            raise PreconditionRequiredError()
-        expected_version = int(if_match.strip('"').replace("W/", ""))
-        if quote.version != expected_version:
-            raise VersionConflictError(quote.version)
-
-        if quote.status not in ("sent", "approved", "draft"):
+        if quote.status != "sent":
             raise InvalidStateTransitionError(quote.status, "accept")
 
+        expired = is_expired(quote)
         quote.status = "accepted"
-        quote.completed_at = datetime.now(timezone.utc)
+        quote.completed_at = now_utc()
         quote.version += 1
 
-        # Advance opportunity to won
         if quote.opportunity_id:
             opp = await session.get(Opportunity, quote.opportunity_id)
             if opp:
@@ -560,7 +620,11 @@ class QuotationService:
             client.status = "active"
             client.version += 1
 
-        await session.flush()
+        await quotation_events.record(
+            session, org_id, quote, "accepted", actor_user_id,
+            data={"expired": True} if expired else None,
+            timeline=f"Customer accepted quotation {label(quote)}" + (" after its validity ran out." if expired else "."),
+        )
         return await QuotationService.get_quotation(session, quotation_id, org_id)
 
     @staticmethod
@@ -570,29 +634,124 @@ class QuotationService:
         org_id: uuid.UUID,
         payload: QuotationReject,
         if_match: Optional[str] = None,
+        actor_user_id: Optional[uuid.UUID] = None,
     ) -> QuotationResponse:
         quote = await get_quote_in_org(session, org_id, quotation_id)
+        _check_version(if_match, quote.version)
 
-        if if_match is None:
-            raise PreconditionRequiredError()
-        expected_version = int(if_match.strip('"').replace("W/", ""))
-        if quote.version != expected_version:
-            raise VersionConflictError(quote.version)
-
-        if quote.status != "sent":
+        if quote.status not in REJECTABLE:
             raise InvalidStateTransitionError(quote.status, "reject")
 
         quote.status = "rejected"
+        quote.status_note = payload.reason
+        quote.status_reason = None
         quote.version += 1
 
-        # Add negotiation note
-        note = NegotiationNote(
+        session.add(NegotiationNote(
             quotation_id=quote.id,
             summary=f"Quotation rejected by client: {payload.reason}",
             requested_changes=payload.reason,
             round_no=quote.revision_no,
+        ))
+        await quotation_events.record(
+            session, org_id, quote, "rejected", actor_user_id, note=payload.reason,
+            timeline=f"Customer rejected quotation {label(quote)}: {payload.reason}",
         )
-        session.add(note)
-        await session.flush()
+        return await QuotationService.get_quotation(session, quotation_id, org_id)
 
+    @staticmethod
+    async def request_changes(
+        session: AsyncSession,
+        quotation_id: uuid.UUID,
+        org_id: uuid.UUID,
+        payload: QuotationChangeRequest,
+        if_match: Optional[str] = None,
+        actor_user_id: Optional[uuid.UUID] = None,
+    ) -> QuotationResponse:
+        """The customer replied asking for changes; a revision answers them."""
+        quote = await get_quote_in_org(session, org_id, quotation_id)
+        _check_version(if_match, quote.version)
+
+        if quote.status != "sent":
+            raise InvalidStateTransitionError(quote.status, "request_changes")
+        note = (payload.note or "").strip()
+        if not note:
+            raise ChangeNoteRequiredError()
+
+        quote.status = "changes_requested"
+        quote.status_note = note
+        quote.status_reason = None
+        quote.version += 1
+
+        session.add(NegotiationNote(
+            quotation_id=quote.id,
+            summary=f"Customer asked for changes: {note}",
+            requested_changes=note,
+            round_no=quote.revision_no,
+        ))
+        await _advance_stage(session, quote, "negotiation")
+        await quotation_events.record(
+            session, org_id, quote, "changes_requested", actor_user_id, note=note,
+            timeline=f"Customer asked for changes to quotation {label(quote)}: {note}",
+        )
+        return await QuotationService.get_quotation(session, quotation_id, org_id)
+
+    @staticmethod
+    async def withdraw_quotation(
+        session: AsyncSession,
+        quotation_id: uuid.UUID,
+        org_id: uuid.UUID,
+        payload: QuotationWithdrawal,
+        if_match: Optional[str] = None,
+        actor_user_id: Optional[uuid.UUID] = None,
+    ) -> QuotationResponse:
+        """We take the quotation back (a mistake, a wrong price, the deal changed)."""
+        quote = await get_quote_in_org(session, org_id, quotation_id)
+        _check_version(if_match, quote.version)
+
+        if quote.status not in WITHDRAWABLE:
+            raise InvalidStateTransitionError(quote.status, "withdraw")
+
+        note = (payload.note or "").strip() or None
+        quote.status = "withdrawn"
+        quote.status_reason = payload.reason
+        quote.status_note = note
+        quote.version += 1
+
+        summary = f"Withdrew quotation {label(quote)} ({WITHDRAWAL_REASONS[payload.reason]})"
+        await quotation_events.record(
+            session, org_id, quote, "withdrawn", actor_user_id, note=note, data={"reason": payload.reason},
+            timeline=f"{summary}: {note}" if note else f"{summary}.",
+        )
+        return await QuotationService.get_quotation(session, quotation_id, org_id)
+
+    @staticmethod
+    async def update_validity(
+        session: AsyncSession,
+        quotation_id: uuid.UUID,
+        org_id: uuid.UUID,
+        payload: QuotationValidityUpdate,
+        if_match: Optional[str] = None,
+        actor_user_id: Optional[uuid.UUID] = None,
+    ) -> QuotationResponse:
+        """A new valid-until date, today or later, for a quotation still open. Its status stays."""
+        quote = await get_quote_in_org(session, org_id, quotation_id)
+        _check_version(if_match, quote.version)
+
+        if payload.valid_until < date.today():
+            raise ValidityInPastError(payload.valid_until.isoformat())
+        if quote.status not in VALIDITY_EDITABLE:
+            raise InvalidStateTransitionError(quote.status, "update_validity")
+
+        previous = quote.valid_until
+        quote.valid_until = payload.valid_until
+        quote.version += 1
+
+        # Only a change the customer has been told about belongs on the timeline.
+        told = quote.status in AWAITING_CUSTOMER
+        await quotation_events.record(
+            session, org_id, quote, "validity_extended", actor_user_id,
+            data={"from": previous.isoformat() if previous else None, "to": payload.valid_until.isoformat()},
+            timeline=f"Quotation {label(quote)} is now valid until {payload.valid_until:%d %b %Y}." if told else None,
+        )
         return await QuotationService.get_quotation(session, quotation_id, org_id)

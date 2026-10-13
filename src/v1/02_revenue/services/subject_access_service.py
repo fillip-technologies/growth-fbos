@@ -57,7 +57,7 @@ SUBJECT_RULES: dict[str, SubjectRule] = {
         read_permission="revenue.opportunity.read",
         attach_permission="revenue.opportunity.write",
         # A superseded revision's files are carried over to the next revision.
-        closed_statuses=frozenset({"accepted", "rejected", "superseded"}),
+        closed_statuses=frozenset({"accepted", "rejected", "superseded", "withdrawn", "not_chosen"}),
         load=_load_quotation,
     ),
     "revenue.contract": SubjectRule(

@@ -3,7 +3,7 @@ from typing import Optional
 
 from fastapi import APIRouter, Depends, Header, Query, Response, status
 
-from dependencies import DatabaseSession, OrgId, require_permission
+from dependencies import CurrentActor, DatabaseSession, OrgId, require_permission
 from schemas.common import PageMeta, PageResponse
 from schemas.opportunity import (
     OpportunityDetailResponse,
@@ -140,6 +140,7 @@ async def create_quotation(
     payload: QuotationCreate,
     session: DatabaseSession,
     org_id: OrgId,
+    actor: CurrentActor,
     response: Response,
     idempotency_key: Optional[str] = Header(None, alias="Idempotency-Key"),
 ) -> QuotationResponse:
@@ -149,6 +150,7 @@ async def create_quotation(
         org_id=org_id,
         opportunity_id=opportunity_id,
         payload=payload,
+        actor_user_id=actor.user_id,
     )
     await session.commit()
     response.headers["ETag"] = f'"{quotation.version}"'
