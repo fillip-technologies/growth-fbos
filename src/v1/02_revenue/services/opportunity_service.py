@@ -5,16 +5,19 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from exceptions import (
+    ClientNotFoundError,
     InvalidStateTransitionError,
     OpportunityNotFoundError,
     PreconditionRequiredError,
     VersionConflictError,
 )
 from models.client import Client
+from models.deal import Deal
 from models.opportunity import Opportunity
 from schemas.common import Money, PageMeta, PageResponse, decode_cursor, encode_cursor
 from schemas.opportunity import (
     ClientRef,
+    OpportunityCreate,
     OpportunityDetailResponse,
     OpportunityLost,
     OpportunityUpdate,
@@ -45,6 +48,43 @@ def format_opportunity_detail(opp: Opportunity, client_name: str) -> Opportunity
 
 
 class OpportunityService:
+    @staticmethod
+    async def create_opportunity(
+        session: AsyncSession,
+        org_id: uuid.UUID,
+        payload: OpportunityCreate,
+        actor_user_id: uuid.UUID,
+    ) -> OpportunityDetailResponse:
+        """New business with an existing customer or prospect, without a lead; it starts at qualification."""
+        client = (
+            await session.execute(select(Client).where(Client.id == payload.client_id, Client.organization_id == org_id))
+        ).scalars().first()
+        if not client:
+            raise ClientNotFoundError(str(payload.client_id))
+        if client.status == "inactive":
+            raise InvalidStateTransitionError(client.status, "add_opportunity")
+
+        owner = payload.owner_user_id or actor_user_id
+        deal = Deal(organization_id=org_id, name=payload.name, status="open", owner_user_id=owner)
+        session.add(deal)
+        await session.flush()
+        opp = Opportunity(
+            organization_id=org_id,
+            client_id=client.id,
+            deal_id=deal.id,
+            name=payload.name,
+            status="qualification",
+            probability=50,
+            expected_value=payload.expected_value.amount,
+            currency=payload.expected_value.currency,
+            expected_close_date=payload.expected_close_date,
+            owner_user_id=owner,
+            version=1,
+        )
+        session.add(opp)
+        await session.flush()
+        return format_opportunity_detail(opp, client.name)
+
     @staticmethod
     async def list_opportunities(
         session: AsyncSession,

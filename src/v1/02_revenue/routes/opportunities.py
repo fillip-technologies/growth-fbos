@@ -6,6 +6,7 @@ from fastapi import APIRouter, Depends, Header, Query, Response, status
 from dependencies import Authorization, CurrentActor, DatabaseSession, Documents, OrgId, require_permission
 from schemas.common import PageMeta, PageResponse
 from schemas.opportunity import (
+    OpportunityCreate,
     OpportunityDetailResponse,
     OpportunityLost,
     OpportunityUpdate,
@@ -44,6 +45,26 @@ async def list_opportunities(
         limit=limit,
         cursor=cursor,
     )
+
+
+@router.post(
+    "", response_model=OpportunityDetailResponse, status_code=status.HTTP_201_CREATED,
+    dependencies=[CAN_WRITE],
+)
+async def create_opportunity(
+    payload: OpportunityCreate,
+    session: DatabaseSession,
+    org_id: OrgId,
+    actor: CurrentActor,
+    response: Response,
+    idempotency_key: Optional[str] = Header(None, alias="Idempotency-Key"),
+) -> OpportunityDetailResponse:
+    """New business with a customer already on the books (repeat business), without a lead."""
+    opp = await OpportunityService.create_opportunity(session, org_id, payload, actor.user_id)
+    await session.commit()
+    response.headers["ETag"] = f'"{opp.version}"'
+    response.headers["Location"] = f"/api/revenue/v1/opportunities/{opp.id}"
+    return opp
 
 
 @router.get(

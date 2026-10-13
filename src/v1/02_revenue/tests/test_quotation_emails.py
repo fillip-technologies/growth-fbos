@@ -5,7 +5,7 @@ import uuid
 
 import httpx
 import pytest
-from sqlalchemy import select
+from sqlalchemy import delete, select
 
 from exceptions import MailUnavailableError
 from models.activity import Activity
@@ -192,8 +192,7 @@ async def test_failed_mail_leaves_quotation_unsent(async_client, db_session, quo
     assert after.json()["status"] == "draft"
 
 
-async def test_draft_falls_back_to_the_leads_email(async_client, outbox):
-    """A customer converted from a lead has no contacts; the lead's email fills To."""
+async def _ravi_quote(async_client) -> dict:
     lead = await async_client.post(
         f"{BASE}/leads",
         json={"vertical_id": str(uuid.uuid4()), "contact_name": "Ravi Kumar", "contact_email": "ravi@client.test", "consent": CONSENT},
@@ -217,7 +216,24 @@ async def test_draft_falls_back_to_the_leads_email(async_client, outbox):
         headers={"If-Match": lead.headers["ETag"]},
     )
     assert converted.status_code == 200, converted.json()
-    quote = await _quotation(async_client, converted.json()["opportunity"]["id"])
+    return await _quotation(async_client, converted.json()["opportunity"]["id"])
+
+
+async def test_the_converted_leads_contact_is_the_customers_primary(async_client, outbox):
+    quote = await _ravi_quote(async_client)
+
+    draft = (await async_client.get(f"{BASE}/quotations/{quote['id']}/email-draft")).json()
+
+    assert draft["to"] == ["ravi@client.test"]
+    assert draft["contacts"] == [{"name": "Ravi Kumar", "email": "ravi@client.test", "designation": None, "is_primary": True}]
+    assert draft["message"].startswith("Dear Ravi Kumar,")
+
+
+async def test_draft_falls_back_to_the_leads_email(async_client, db_session, outbox):
+    """A customer whose contacts were removed (or converted before contacts were copied): the lead's email fills To."""
+    quote = await _ravi_quote(async_client)
+    await db_session.execute(delete(ClientContact).where(ClientContact.client_id == uuid.UUID(quote["client"]["id"])))
+    await db_session.commit()
 
     draft = (await async_client.get(f"{BASE}/quotations/{quote['id']}/email-draft")).json()
 
@@ -225,7 +241,6 @@ async def test_draft_falls_back_to_the_leads_email(async_client, outbox):
     assert draft["contacts"] == [
         {"name": "Ravi Kumar", "email": "ravi@client.test", "designation": "From the lead", "is_primary": False}
     ]
-    assert draft["message"].startswith("Dear Ravi Kumar,")
 
 
 async def test_quotation_with_changes_requested_can_be_emailed_again(async_client, db_session, outbox, quotation_files):

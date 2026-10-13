@@ -18,6 +18,7 @@ from exceptions import (
 from models.activity import Activity
 from models.client import Client
 from models.contract import Contract, ContractPaymentTerm, ContractTerm
+from models.offering import Offering
 from models.quotation import QuotationItem
 from schemas.common import Money, PageMeta, PageResponse, decode_cursor, encode_cursor
 from schemas.contract import (
@@ -79,6 +80,7 @@ def format_contract_response(
     contract: Contract,
     client: Client,
     terms: List[ContractPaymentTerm],
+    fulfilment: Optional[List[str]] = None,
 ) -> ContractResponse:
     payment_terms = [
         PaymentTermResponse(
@@ -108,7 +110,25 @@ def format_contract_response(
         signed_at=contract.signed_at,
         signed_document_id=contract.signed_document_id,
         version=contract.version,
+        fulfilment=fulfilment or [],
     )
+
+
+async def _fulfilment_by_contract(session: AsyncSession, contract_ids: List[uuid.UUID]) -> dict[uuid.UUID, List[str]]:
+    """How each contract's offerings are delivered, projects first, without "none"."""
+    rows = await session.execute(
+        select(ContractTerm.contract_id, Offering.fulfilment)
+        .join(Offering, Offering.id == ContractTerm.offering_id)
+        .where(ContractTerm.contract_id.in_(contract_ids))
+    )
+    kinds: dict[uuid.UUID, set[str]] = {}
+    for contract_id, kind in rows.all():
+        kinds.setdefault(contract_id, set()).add(kind)
+    return {cid: [k for k in ("project", "service") if k in found] for cid, found in kinds.items()}
+
+
+async def _fulfilment(session: AsyncSession, contract_id: uuid.UUID) -> List[str]:
+    return (await _fulfilment_by_contract(session, [contract_id])).get(contract_id, [])
 
 
 class ContractService:
@@ -193,7 +213,7 @@ class ContractService:
             session, contract, actor_user_id,
             f"Contract {contract.contract_no} created from quotation {quote.quote_no} rev {quote.revision_no}.", "created",
         )
-        return format_contract_response(contract, client, persisted_terms)
+        return format_contract_response(contract, client, persisted_terms, await _fulfilment(session, contract.id))
 
     @staticmethod
     async def list_contracts(
@@ -234,10 +254,14 @@ class ContractService:
             )
             for term in terms.scalars().all():
                 terms_by_contract[term.contract_id].append(term)
+        fulfilment = await _fulfilment_by_contract(session, list(terms_by_contract)) if rows else {}
 
         next_cursor = encode_cursor({"last_id": str(rows[-1][0].id)}) if has_more and rows else None
         return PageResponse(
-            data=[format_contract_response(contract, client, terms_by_contract[contract.id]) for contract, client in rows],
+            data=[
+                format_contract_response(contract, client, terms_by_contract[contract.id], fulfilment.get(contract.id))
+                for contract, client in rows
+            ],
             page=PageMeta(next_cursor=next_cursor, has_more=has_more, limit=limit),
         )
 
@@ -262,7 +286,7 @@ class ContractService:
         )
         payment_terms = list(pt_res.scalars().all())
 
-        return format_contract_response(contract, client, payment_terms)
+        return format_contract_response(contract, client, payment_terms, await _fulfilment(session, contract.id))
 
     @staticmethod
     async def activate_contract(

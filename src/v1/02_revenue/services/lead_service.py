@@ -12,7 +12,7 @@ from exceptions import (
     PreconditionRequiredError,
     VersionConflictError,
 )
-from models.client import Client
+from models.client import Client, ClientContact
 from models.deal import Deal
 from models.lead import Lead
 from models.opportunity import Opportunity
@@ -67,6 +67,36 @@ async def next_lead_number(session: AsyncSession, org_id: uuid.UUID) -> int:
 
 def lead_code(lead_number: int) -> str:
     return f"LD-{datetime.now(timezone.utc).year}-{lead_number:04d}"
+
+
+async def _copy_lead_contact(session: AsyncSession, lead: Lead, client: Client) -> bool:
+    """
+    The person the lead came in with becomes one of the customer's contacts (the primary one
+    if it has none yet), unless they are already there: the same email, or with no email the
+    same name. Returns whether a contact was added.
+    """
+    name = (lead.contact_name or "").strip()
+    email = (lead.contact_email or "").strip()
+    if not name and not email:
+        return False
+    existing = list((await session.execute(select(ClientContact).where(ClientContact.client_id == client.id))).scalars())
+    already = any(
+        (c.email or "").strip().lower() == email.lower() if email else c.name.strip().lower() == name.lower()
+        for c in existing
+    )
+    if already:
+        return False
+    session.add(
+        ClientContact(
+            client_id=client.id,
+            name=name or email,
+            email=email or None,
+            phone=(lead.contact_phone or "").strip() or None,
+            is_primary=not any(c.is_primary for c in existing),
+        )
+    )
+    await session.flush()
+    return True
 
 
 class LeadService:
@@ -272,6 +302,8 @@ class LeadService:
             client_created = True
         else:
             raise ClientNotFoundError("Either existing_client_id or new_client must be provided")
+        if await _copy_lead_contact(session, lead, client_entity):
+            client_resp = await ClientService.get_client(session, client_entity.id, org_id)
 
         # 2. Create Deal
         deal = Deal(

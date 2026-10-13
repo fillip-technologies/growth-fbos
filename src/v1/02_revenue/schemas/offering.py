@@ -5,6 +5,8 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 from schemas.common import Money
 from schemas.opportunity import VerticalRef
 
+Fulfilment = Literal["project", "service", "none"]
+
 
 class OfferingCreate(BaseModel):
     code: str = Field(..., min_length=1, max_length=100, description="SKU / Unique offering code")
@@ -17,6 +19,7 @@ class OfferingCreate(BaseModel):
     billing_model: Literal["one_time", "recurring", "milestone", "time_and_material"] = "one_time"
     list_price: Money
     default_work_template_code: Optional[str] = None
+    fulfilment: Fulfilment = "none"
 
     @model_validator(mode="after")
     def taxed_somehow(self) -> "OfferingCreate":
@@ -40,4 +43,13 @@ class OfferingResponse(BaseModel):
     billing_model: str
     list_price: Money
     default_work_template_code: Optional[str] = None
+    fulfilment: Fulfilment = "none"
     status: Literal["active", "retired"]
+
+
+class OfferingUpdate(BaseModel):
+    """PATCH /offerings/{id}."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    fulfilment: Optional[Fulfilment] = None

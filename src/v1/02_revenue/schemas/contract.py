@@ -55,6 +55,8 @@ class ContractResponse(BaseModel):
     signed_at: Optional[datetime] = None
     signed_document_id: Optional[uuid.UUID] = None
     version: int
+    # What its offerings are delivered as ("project", "service"): the next steps once active.
+    fulfilment: List[Literal["project", "service"]] = []
 
 
 class SignedDocumentSet(BaseModel):

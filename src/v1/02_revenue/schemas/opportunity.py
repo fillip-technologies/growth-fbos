@@ -27,6 +27,19 @@ class VerticalRef(BaseModel):
     name: str
 
 
+class OpportunityCreate(BaseModel):
+    """POST /opportunities: new business with a customer already on the books (no lead)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    client_id: uuid.UUID
+    name: str = Field(..., min_length=1, max_length=255)
+    expected_value: Money
+    expected_close_date: date
+    # Defaults to whoever creates it.
+    owner_user_id: Optional[uuid.UUID] = None
+
+
 class OpportunityUpdate(BaseModel):
     stage: Optional[Literal["qualification", "proposal", "negotiation"]] = None
     probability: Optional[int] = Field(None, ge=0, le=100)
