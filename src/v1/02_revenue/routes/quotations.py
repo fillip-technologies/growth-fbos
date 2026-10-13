@@ -13,6 +13,7 @@ from schemas.quotation import (
     QuotationItemsReplace,
     QuotationReject,
     QuotationResponse,
+    QuotationUpdate,
     QuotationValidityUpdate,
     QuotationWithdrawal,
 )
@@ -43,6 +44,29 @@ async def get_quotation(
         quotation_id=quotation_id,
         org_id=org_id,
     )
+    response.headers["ETag"] = f'"{quotation.version}"'
+    return quotation
+
+
+@router.patch(
+    "/{quotation_id}", response_model=QuotationResponse,
+    dependencies=[CAN_WRITE],
+)
+async def update_quotation(
+    quotation_id: uuid.UUID,
+    payload: QuotationUpdate,
+    session: DatabaseSession,
+    org_id: OrgId,
+    actor: CurrentActor,
+    response: Response,
+    if_match: Optional[str] = Header(None, alias="If-Match"),
+) -> QuotationResponse:
+    """Rename the option (`name`), or make it the opportunity's main quotation (`is_main: true`)."""
+    quotation = await QuotationService.update_quotation(
+        session=session, quotation_id=quotation_id, org_id=org_id, payload=payload, if_match=if_match,
+        actor_user_id=actor.user_id,
+    )
+    await session.commit()
     response.headers["ETag"] = f'"{quotation.version}"'
     return quotation
 

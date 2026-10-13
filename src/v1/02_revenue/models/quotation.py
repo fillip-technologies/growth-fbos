@@ -3,7 +3,7 @@ from datetime import date, datetime
 from decimal import Decimal
 from typing import Optional
 
-from sqlalchemy import JSON, Date, DateTime, ForeignKey, Integer, Numeric, String, Text, func
+from sqlalchemy import JSON, Boolean, Date, DateTime, ForeignKey, Integer, Numeric, String, Text, false, func
 from sqlalchemy.orm import Mapped, mapped_column
 
 from database.base import Base
@@ -51,6 +51,10 @@ class Quotation(Base):
     # The last change request, rejection or withdrawal: what was said, and the reason code if any.
     status_note: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     status_reason: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
+    # An option among several on the opportunity ("Option A - Basic"); revisions keep it.
+    name: Mapped[Optional[str]] = mapped_column(String(120), nullable=True)
+    # One per opportunity (kept so by the service): its value is the opportunity's expected value.
+    is_main: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default=false())
     version: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
 
 

@@ -2,7 +2,7 @@ import re
 import uuid
 from datetime import date, datetime
 from typing import List, Literal, Optional
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from schemas.common import Money, PastDate
 from schemas.opportunity import ClientRef
@@ -18,14 +18,41 @@ class QuotationItemInput(BaseModel):
 
 
 class QuotationCreate(BaseModel):
-    valid_until: date
+    """
+    A new quotation (an option) on the opportunity. With `copy_from`, a copy of that quotation
+    on the same opportunity: its lines (taxed again as of today), terms and files; anything
+    else given here replaces what is copied.
+    """
+
+    copy_from: Optional[uuid.UUID] = None
+    # The option's label, e.g. "Option A - Basic".
+    name: Optional[str] = Field(None, max_length=120)
+    # Required unless copying (then the copied date if still ahead, else 30 days from today).
+    valid_until: Optional[date] = None
     # A jurisdiction code (GST state code); defaults to the customer's.
     place_of_supply: Optional[str] = None
     tax_registration_id: Optional[uuid.UUID] = None
-    items: List[QuotationItemInput] = Field(..., min_length=1)
+    items: Optional[List[QuotationItemInput]] = Field(None, min_length=1)
     terms: Optional[str] = None
     # Back-dating support: when omitted, the quotation is dated today.
     created_on: Optional[PastDate] = None
+
+    @model_validator(mode="after")
+    def _new_needs_lines_and_date(self) -> "QuotationCreate":
+        if self.copy_from is None and (self.items is None or self.valid_until is None):
+            raise ValueError("items and valid_until are required unless copy_from is given")
+        return self
+
+
+class QuotationUpdate(BaseModel):
+    """PATCH /quotations/{id}: its option label, or make it the opportunity's main quotation."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    # Blank clears it.
+    name: Optional[str] = Field(None, max_length=120)
+    # Only true: another quotation becomes main instead of this one stopping being main.
+    is_main: Optional[Literal[True]] = None
 
 
 class QuotationItemsReplace(BaseModel):
@@ -67,7 +94,7 @@ class QuotationValidityUpdate(BaseModel):
 
 QuotationEventType = Literal[
     "created", "submitted", "approved", "sent", "emailed", "changes_requested", "revised",
-    "accepted", "rejected", "withdrawn", "not_chosen", "validity_extended",
+    "accepted", "rejected", "withdrawn", "not_chosen", "validity_extended", "renamed", "made_main",
 ]
 
 
@@ -120,6 +147,9 @@ class QuotationResponse(BaseModel):
     revision_no: int
     previous_revision_id: Optional[uuid.UUID] = None
     opportunity_id: Optional[uuid.UUID] = None
+    name: Optional[str] = None
+    # The opportunity's main quotation: its value is the opportunity's expected value.
+    is_main: bool = False
     client: ClientRef
     status: Literal[
         "draft", "pending_approval", "approved", "sent", "changes_requested", "accepted", "rejected",

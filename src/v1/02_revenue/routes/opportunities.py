@@ -3,7 +3,7 @@ from typing import Optional
 
 from fastapi import APIRouter, Depends, Header, Query, Response, status
 
-from dependencies import CurrentActor, DatabaseSession, OrgId, require_permission
+from dependencies import Authorization, CurrentActor, DatabaseSession, Documents, OrgId, require_permission
 from schemas.common import PageMeta, PageResponse
 from schemas.opportunity import (
     OpportunityDetailResponse,
@@ -12,6 +12,7 @@ from schemas.opportunity import (
 )
 from schemas.quotation import QuotationCreate, QuotationResponse
 from services.opportunity_service import OpportunityService
+from services.documents_client import SubjectRef
 from services.quotation_service import QuotationService
 
 router = APIRouter(prefix="/opportunities", tags=["opportunities"])
@@ -141,10 +142,15 @@ async def create_quotation(
     session: DatabaseSession,
     org_id: OrgId,
     actor: CurrentActor,
+    authorization: Authorization,
+    documents: Documents,
     response: Response,
     idempotency_key: Optional[str] = Header(None, alias="Idempotency-Key"),
 ) -> QuotationResponse:
-    """Create a quotation revision 1 attached to the opportunity."""
+    """
+    Add a quotation (an option, revision 1) to the opportunity. With `copy_from`, a copy of
+    another of its quotations, files included.
+    """
     quotation = await QuotationService.create_quotation(
         session=session,
         org_id=org_id,
@@ -152,6 +158,15 @@ async def create_quotation(
         payload=payload,
         actor_user_id=actor.user_id,
     )
+    if payload.copy_from:
+        # Before the commit: if documents can't be reached the copy isn't made without its files.
+        await documents.copy_links(
+            authorization,
+            org_id,
+            source=SubjectRef("revenue.quotation", payload.copy_from),
+            target=SubjectRef("revenue.quotation", quotation.id),
+            target_label=f"{quotation.quote_no} rev {quotation.revision_no}",
+        )
     await session.commit()
     response.headers["ETag"] = f'"{quotation.version}"'
     response.headers["Location"] = f"/api/revenue/v1/quotations/{quotation.id}"

@@ -1,5 +1,5 @@
 from dataclasses import dataclass
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from typing import List, Optional
 import uuid
 
@@ -37,6 +37,7 @@ from schemas.quotation import (
     QuotationReject,
     QuotationResponse,
     QuotationTotals,
+    QuotationUpdate,
     QuotationValidityUpdate,
     QuotationWithdrawal,
 )
@@ -61,8 +62,9 @@ QUOTATION_DOCUMENT = "quotation"  # DocumentTaxLine.document_type
 
 # With the customer, waiting for their answer: these expire once past valid_until.
 AWAITING_CUSTOMER = ("sent", "changes_requested")
-# Still ours to take back.
-WITHDRAWABLE = ("draft", "pending_approval", "approved", "sent", "changes_requested")
+# Not yet answered for good: still ours to take back, and open on the opportunity.
+OPEN_QUOTATION = ("draft", "pending_approval", "approved", "sent", "changes_requested")
+WITHDRAWABLE = OPEN_QUOTATION
 # Revising answers the customer: a new revision after they have seen this one.
 REVISABLE = ("sent", "rejected", "changes_requested")
 REJECTABLE = AWAITING_CUSTOMER
@@ -76,6 +78,8 @@ WITHDRAWAL_REASONS = {
 }
 # The open stages, in the order a deal moves through them.
 OPEN_STAGES = ("open", "qualification", "proposal", "negotiation")
+# A copy made once the copied quotation's date has passed is valid this long.
+COPY_VALID_DAYS = 30
 
 
 @dataclass(frozen=True)
@@ -231,6 +235,8 @@ def format_quotation_response(
         revision_no=quote.revision_no,
         previous_revision_id=quote.previous_revision_id,
         opportunity_id=quote.opportunity_id,
+        name=quote.name,
+        is_main=quote.is_main,
         client=ClientRef(id=client.id, name=client.name),
         status=quote.status,
         valid_until=quote.valid_until,
@@ -324,6 +330,57 @@ async def _advance_stage(session: AsyncSession, quote: Quotation, stage: str) ->
     opp.version += 1
 
 
+async def _quotes_on(session: AsyncSession, opportunity_id: uuid.UUID) -> list[Quotation]:
+    rows = await session.execute(select(Quotation).where(Quotation.opportunity_id == opportunity_id))
+    return list(rows.scalars().all())
+
+
+async def _sync_expected_value(session: AsyncSession, quote: Quotation) -> None:
+    """The main quotation's value before tax is the open opportunity's expected value."""
+    if not quote.is_main or not quote.opportunity_id:
+        return
+    opp = await session.get(Opportunity, quote.opportunity_id)
+    if not opp or opp.status not in OPEN_STAGES:
+        return
+    value = to_decimal(quote.subtotal) - to_decimal(quote.discount_total)
+    if opp.expected_value is not None and to_decimal(opp.expected_value) == value and opp.currency == quote.currency:
+        return
+    opp.expected_value = value
+    opp.currency = quote.currency
+    opp.version += 1
+
+
+async def _make_main(session: AsyncSession, quote: Quotation) -> None:
+    """This quotation becomes the opportunity's main one, and no other is."""
+    for other in await _quotes_on(session, quote.opportunity_id):
+        if other.id != quote.id and other.is_main:
+            other.is_main = False
+            other.version += 1
+    quote.is_main = True
+    await _sync_expected_value(session, quote)
+
+
+async def _items_as_input(session: AsyncSession, quote: Quotation) -> list[QuotationItemInput]:
+    """A quotation's lines as they were entered, to quote them again."""
+    rows = await session.execute(
+        select(QuotationItem).where(QuotationItem.quotation_id == quote.id).order_by(QuotationItem.line_no.asc())
+    )
+    return [
+        QuotationItemInput(
+            offering_id=item.offering_id,
+            description=item.description,
+            quantity=float(item.quantity),
+            unit_price=_money(item.unit_price, quote.currency),
+            discount_pct=float(item.discount_pct),
+        )
+        for item in rows.scalars()
+    ]
+
+
+def _clean_name(name: Optional[str]) -> Optional[str]:
+    return (name or "").strip() or None
+
+
 class QuotationService:
     @staticmethod
     async def create_quotation(
@@ -339,9 +396,26 @@ class QuotationService:
         opp = opp_res.scalars().first()
         if not opp:
             raise OpportunityNotFoundError(str(opportunity_id))
+        if opp.status not in OPEN_STAGES:
+            raise InvalidStateTransitionError(opp.status, "add_quotation")
+
+        source = None
+        items, valid_until, terms = payload.items, payload.valid_until, payload.terms
+        place_of_supply, registration_id = payload.place_of_supply, payload.tax_registration_id
+        if payload.copy_from:
+            source = await get_quote_in_org(session, org_id, payload.copy_from)
+            if source.opportunity_id != opp.id:
+                raise QuotationNotFoundError(str(payload.copy_from))
+            items = items or await _items_as_input(session, source)
+            still_valid = source.valid_until and source.valid_until >= date.today()
+            valid_until = valid_until or (source.valid_until if still_valid else date.today() + timedelta(days=COPY_VALID_DAYS))
+            terms = terms if terms is not None else source.summary
+            place_of_supply = place_of_supply or source.place_of_supply
+            registration_id = registration_id or source.tax_registration_id
 
         client = await session.get(Client, opp.client_id)
-        quoted = await _quoted_items(session, org_id, payload.items)
+        quoted = await _quoted_items(session, org_id, items)
+        siblings = await _quotes_on(session, opp.id)
 
         quote = Quotation(
             opportunity_id=opp.id,
@@ -349,11 +423,14 @@ class QuotationService:
             quote_no=await _quote_number(session, org_id, date.today()),
             revision_no=1,
             currency="INR",
-            summary=payload.terms,
-            place_of_supply=payload.place_of_supply,
-            tax_registration_id=payload.tax_registration_id,
+            summary=terms,
+            place_of_supply=place_of_supply,
+            tax_registration_id=registration_id,
             status="draft",
-            valid_until=payload.valid_until,
+            valid_until=valid_until,
+            name=_clean_name(payload.name),
+            # The first open option is the main one; another is made main by hand.
+            is_main=not any(q.is_main and q.status in OPEN_QUOTATION for q in siblings),
             version=1,
         )
         if payload.created_on:
@@ -363,7 +440,10 @@ class QuotationService:
         await session.flush()
 
         items = await _store_calculation(session, org_id, quote, quoted, calculation)
-        await quotation_events.record(session, org_id, quote, "created", actor_user_id)
+        if quote.is_main:
+            await _make_main(session, quote)
+        copied = {"copied_from": str(source.id), "quote_no": source.quote_no, "revision_no": source.revision_no} if source else None
+        await quotation_events.record(session, org_id, quote, "created", actor_user_id, data=copied)
         return format_quotation_response(quote, client, items, await load_tax_lines(session, QUOTATION_DOCUMENT, [quote.id]))
 
     @staticmethod
@@ -404,6 +484,7 @@ class QuotationService:
         calculation = await _calculate(session, org_id, client, quoted, quote)
         items = await _store_calculation(session, org_id, quote, quoted, calculation)
         quote.version += 1
+        await _sync_expected_value(session, quote)
         await session.flush()
         return format_quotation_response(quote, client, items, await load_tax_lines(session, QUOTATION_DOCUMENT, [quote.id]))
 
@@ -460,6 +541,7 @@ class QuotationService:
         quoted = await _stored_items_as_quoted(session, org_id, list(stored.scalars().all()))
         await _store_calculation(session, org_id, quote, quoted, await _calculate(session, org_id, client, quoted, quote))
 
+        await _sync_expected_value(session, quote)
         moment = now_utc()
         quote.status = "sent"
         quote.sent_at = quote.sent_at or moment
@@ -493,6 +575,8 @@ class QuotationService:
 
         curr_quote.status = "superseded"
         curr_quote.version += 1
+        # The new revision takes over the option's name and whether it is the main one.
+        was_main, curr_quote.is_main = curr_quote.is_main, False
         await session.flush()
 
         new_rev = Quotation(
@@ -516,6 +600,8 @@ class QuotationService:
             withholding=curr_quote.withholding,
             status="draft",
             valid_until=curr_quote.valid_until,
+            name=curr_quote.name,
+            is_main=was_main,
             version=1,
         )
         session.add(new_rev)
@@ -560,12 +646,12 @@ class QuotationService:
         org_id: uuid.UUID,
         opportunity_id: uuid.UUID,
     ) -> List[QuotationResponse]:
-        """Every revision quoted on the opportunity, newest first."""
+        """Every option and revision quoted on the opportunity: newest option first, its latest revision first."""
         res = await session.execute(
             select(Quotation.id)
             .join(Client, Client.id == Quotation.client_id)
             .where(Quotation.opportunity_id == opportunity_id, Client.organization_id == org_id)
-            .order_by(Quotation.revision_no.desc())
+            .order_by(Quotation.quote_no.desc(), Quotation.revision_no.desc())
         )
         return [await QuotationService.get_quotation(session, qid, org_id) for qid in res.scalars().all()]
 
@@ -608,6 +694,22 @@ class QuotationService:
         quote.completed_at = now_utc()
         quote.version += 1
 
+        # One accepted quotation per opportunity: the other open options close, and the
+        # accepted one's value is the deal's.
+        not_chosen = []
+        if quote.opportunity_id:
+            for other in await _quotes_on(session, quote.opportunity_id):
+                if other.id == quote.id or other.status not in OPEN_QUOTATION:
+                    continue
+                other.status = "not_chosen"
+                other.version += 1
+                not_chosen.append(other)
+                await quotation_events.record(
+                    session, org_id, other, "not_chosen", actor_user_id,
+                    data={"accepted_id": str(quote.id), "quote_no": quote.quote_no, "revision_no": quote.revision_no},
+                )
+            await _make_main(session, quote)
+
         if quote.opportunity_id:
             opp = await session.get(Opportunity, quote.opportunity_id)
             if opp:
@@ -623,7 +725,11 @@ class QuotationService:
         await quotation_events.record(
             session, org_id, quote, "accepted", actor_user_id,
             data={"expired": True} if expired else None,
-            timeline=f"Customer accepted quotation {label(quote)}" + (" after its validity ran out." if expired else "."),
+            timeline=(
+                f"Customer accepted quotation {label(quote)}"
+                + (" after its validity ran out." if expired else ".")
+                + (f" Not chosen: {', '.join(label(q) for q in not_chosen)}." if not_chosen else "")
+            ),
         )
         return await QuotationService.get_quotation(session, quotation_id, org_id)
 
@@ -754,4 +860,38 @@ class QuotationService:
             data={"from": previous.isoformat() if previous else None, "to": payload.valid_until.isoformat()},
             timeline=f"Quotation {label(quote)} is now valid until {payload.valid_until:%d %b %Y}." if told else None,
         )
+        return await QuotationService.get_quotation(session, quotation_id, org_id)
+
+    @staticmethod
+    async def update_quotation(
+        session: AsyncSession,
+        quotation_id: uuid.UUID,
+        org_id: uuid.UUID,
+        payload: QuotationUpdate,
+        if_match: Optional[str] = None,
+        actor_user_id: Optional[uuid.UUID] = None,
+    ) -> QuotationResponse:
+        """Rename the option, or make it the opportunity's main quotation (an open one only)."""
+        quote = await get_quote_in_org(session, org_id, quotation_id)
+        _check_version(if_match, quote.version)
+
+        if payload.is_main and (quote.status not in OPEN_QUOTATION or not quote.opportunity_id):
+            raise InvalidStateTransitionError(quote.status, "make_main")
+
+        changed = False
+        name = _clean_name(payload.name)
+        if "name" in payload.model_fields_set and name != quote.name:
+            await quotation_events.record(
+                session, org_id, quote, "renamed", actor_user_id, data={"from": quote.name, "to": name}
+            )
+            quote.name = name
+            changed = True
+        if payload.is_main and not quote.is_main:
+            await _make_main(session, quote)
+            await quotation_events.record(session, org_id, quote, "made_main", actor_user_id)
+            changed = True
+
+        if changed:
+            quote.version += 1
+            await session.flush()
         return await QuotationService.get_quotation(session, quotation_id, org_id)
