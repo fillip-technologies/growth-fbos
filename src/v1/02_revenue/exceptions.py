@@ -447,7 +447,7 @@ class MailUnavailableError(RevenueServiceError):
 
 
 class QuotationNotEmailableError(RevenueServiceError):
-    """409: Only a draft, approved, sent or accepted quotation goes to the customer."""
+    """409: Only an open (not yet answered) or accepted quotation goes to the customer."""
 
     def __init__(self, current_status: str) -> None:
         super().__init__(
@@ -459,13 +459,13 @@ class QuotationNotEmailableError(RevenueServiceError):
 
 
 class DocumentNotAttachedError(RevenueServiceError):
-    """422: A file picked for the email isn't attached to this quotation."""
+    """422: A file picked for the email isn't attached to the record being emailed."""
 
     def __init__(self, document_id: uuid.UUID) -> None:
         super().__init__(
             status.HTTP_422_UNPROCESSABLE_ENTITY,
             "DOCUMENT_NOT_ATTACHED",
-            "One of the chosen files isn't attached to this quotation any more. Reload and choose again.",
+            "One of the chosen files isn't attached here any more. Reload and choose again.",
             meta={"document_id": str(document_id)},
         )
 
@@ -502,4 +502,16 @@ class ChangeNoteRequiredError(RevenueServiceError):
             status.HTTP_422_UNPROCESSABLE_CONTENT,
             "CHANGE_NOTE_REQUIRED",
             "Write down what the customer asked to change.",
+        )
+
+
+class ContractNotEmailableError(RevenueServiceError):
+    """409: A terminated or expired contract isn't sent to the customer."""
+
+    def __init__(self, current_status: str) -> None:
+        super().__init__(
+            status.HTTP_409_CONFLICT,
+            "CONTRACT_NOT_EMAILABLE",
+            f"A contract that is {current_status.replace('_', ' ')} can't be emailed to the customer.",
+            meta={"status": current_status},
         )

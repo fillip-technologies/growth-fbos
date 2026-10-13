@@ -4,6 +4,7 @@ from typing import List, Literal, Optional
 from pydantic import BaseModel, ConfigDict, Field
 
 from schemas.common import Money
+from schemas.customer_email import CustomerEmailSent
 from schemas.opportunity import ClientRef
 
 
@@ -62,3 +63,7 @@ class SignedDocumentSet(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     document_id: uuid.UUID
+
+
+class ContractEmailSent(CustomerEmailSent):
+    contract: ContractResponse

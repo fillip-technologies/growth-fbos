@@ -226,3 +226,17 @@ async def test_draft_falls_back_to_the_leads_email(async_client, outbox):
         {"name": "Ravi Kumar", "email": "ravi@client.test", "designation": "From the lead", "is_primary": False}
     ]
     assert draft["message"].startswith("Dear Ravi Kumar,")
+
+
+async def test_quotation_with_changes_requested_can_be_emailed_again(async_client, db_session, outbox, quotation_files):
+    _, quote = await _quote_with_contact(async_client, db_session)
+    sent = (await _act(async_client, quote, "send")).json()
+    changed = await async_client.post(
+        f"{BASE}/quotations/{sent['id']}/change-requests", json={"note": "Cheaper please"}, headers={"If-Match": f'"{sent["version"]}"'}
+    )
+
+    res = await async_client.post(f"{BASE}/quotations/{sent['id']}/emails", json=_email())
+
+    assert res.status_code == 201, res.json()
+    assert res.json()["quotation"]["status"] == "changes_requested"
+    assert res.json()["quotation"]["version"] == changed.json()["version"]

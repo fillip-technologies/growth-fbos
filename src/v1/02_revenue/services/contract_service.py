@@ -15,6 +15,7 @@ from exceptions import (
     SignedCopyRequiredError,
     VersionConflictError,
 )
+from models.activity import Activity
 from models.client import Client
 from models.contract import Contract, ContractPaymentTerm, ContractTerm
 from models.quotation import QuotationItem
@@ -31,6 +32,47 @@ from services.quotation_service import get_quote_in_org
 
 # Statuses in which the signed copy can still be (re)attached.
 SIGNABLE_STATUSES = ("draft", "pending_signature")
+TIMELINE_SUBJECTS = ("commercial.contract", "commercial.opportunity")
+
+
+async def get_contract_in_org(session: AsyncSession, org_id: uuid.UUID, contract_id: uuid.UUID) -> Contract:
+    contract = (
+        await session.execute(select(Contract).where(Contract.id == contract_id, Contract.organization_id == org_id))
+    ).scalars().first()
+    if not contract:
+        raise ContractNotFoundError(str(contract_id))
+    return contract
+
+
+async def log_on_timeline(
+    session: AsyncSession,
+    contract: Contract,
+    actor_user_id: Optional[uuid.UUID],
+    summary: str,
+    outcome: str,
+    activity_type: str = "note",
+) -> None:
+    """One line on the contract's timeline, and the same on its opportunity's (the deal's story)."""
+    if actor_user_id is None:
+        return
+    moment = datetime.now(timezone.utc).replace(tzinfo=None)
+    subjects = [("commercial.contract", contract.id)]
+    if contract.opportunity_id:
+        subjects.append(("commercial.opportunity", contract.opportunity_id))
+    for subject_type, subject_id in subjects:
+        session.add(
+            Activity(
+                organization_id=contract.organization_id,
+                subject_type=subject_type,
+                subject_id=subject_id,
+                activity_type=activity_type,
+                owner_user_id=actor_user_id,
+                occurred_at=moment,
+                summary=summary,
+                outcome=outcome,
+            )
+        )
+    await session.flush()
 
 
 def format_contract_response(
@@ -75,6 +117,7 @@ class ContractService:
         session: AsyncSession,
         org_id: uuid.UUID,
         payload: ContractCreate,
+        actor_user_id: Optional[uuid.UUID] = None,
     ) -> ContractResponse:
         quote = await get_quote_in_org(session, org_id, payload.quotation_id)
 
@@ -146,6 +189,10 @@ class ContractService:
             session.add(c_term)
 
         await session.flush()
+        await log_on_timeline(
+            session, contract, actor_user_id,
+            f"Contract {contract.contract_no} created from quotation {quote.quote_no} rev {quote.revision_no}.", "created",
+        )
         return format_contract_response(contract, client, persisted_terms)
 
     @staticmethod
@@ -223,13 +270,9 @@ class ContractService:
         contract_id: uuid.UUID,
         org_id: uuid.UUID,
         if_match: Optional[str] = None,
+        actor_user_id: Optional[uuid.UUID] = None,
     ) -> ContractResponse:
-        c_res = await session.execute(
-            select(Contract).where(Contract.id == contract_id, Contract.organization_id == org_id)
-        )
-        contract = c_res.scalars().first()
-        if not contract:
-            raise ContractNotFoundError(str(contract_id))
+        contract = await get_contract_in_org(session, org_id, contract_id)
 
         if if_match is None:
             raise PreconditionRequiredError()
@@ -247,6 +290,7 @@ class ContractService:
         await session.flush()
         # Staged billing: the contract's money is invoiced line by line from its schedule.
         await build_schedule(session, contract)
+        await log_on_timeline(session, contract, actor_user_id, f"Contract {contract.contract_no} activated.", "activated")
 
         return await ContractService.get_contract(session, contract_id, org_id)
 
@@ -259,16 +303,13 @@ class ContractService:
         if_match: Optional[str],
         documents: DocumentsClient,
         authorization: str,
+        actor_user_id: Optional[uuid.UUID] = None,
     ) -> ContractResponse:
         """
         Record which uploaded document is the signed copy. The file itself lives in the
         documents service and must already be attached to this contract there.
         """
-        contract = (
-            await session.execute(select(Contract).where(Contract.id == contract_id, Contract.organization_id == org_id))
-        ).scalars().first()
-        if not contract:
-            raise ContractNotFoundError(str(contract_id))
+        contract = await get_contract_in_org(session, org_id, contract_id)
 
         if if_match is None:
             raise PreconditionRequiredError()
@@ -289,5 +330,11 @@ class ContractService:
         contract.signed_at = datetime.now(timezone.utc)
         contract.version += 1
         await session.flush()
+        file_name = (document.get("current_version") or {}).get("file_name")
+        await log_on_timeline(
+            session, contract, actor_user_id,
+            f"Signed copy of contract {contract.contract_no} attached" + (f": {file_name}." if file_name else "."),
+            "signed_copy",
+        )
 
         return await ContractService.get_contract(session, contract_id, org_id)
