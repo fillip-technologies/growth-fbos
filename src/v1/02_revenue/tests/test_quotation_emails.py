@@ -5,13 +5,14 @@ import uuid
 
 import httpx
 import pytest
-from sqlalchemy import select
+from sqlalchemy import delete, select
 
 from exceptions import MailUnavailableError
 from models.activity import Activity
 from models.client import ClientContact
 from services.mail_client import mail_client
-from tests.test_sales_flow import BASE, _act, _converted_lead, _quotation
+from tests.conftest import TEST_USER_ID
+from tests.test_sales_flow import ADDRESS, BASE, CONSENT, _act, _converted_lead, _quotation
 
 pytestmark = pytest.mark.asyncio
 
@@ -189,3 +190,68 @@ async def test_failed_mail_leaves_quotation_unsent(async_client, db_session, quo
     await db_session.rollback()
     after = await async_client.get(f"{BASE}/quotations/{quote['id']}")
     assert after.json()["status"] == "draft"
+
+
+async def _ravi_quote(async_client) -> dict:
+    lead = await async_client.post(
+        f"{BASE}/leads",
+        json={"vertical_id": str(uuid.uuid4()), "contact_name": "Ravi Kumar", "contact_email": "ravi@client.test", "consent": CONSENT},
+    )
+    assert lead.status_code == 201, lead.json()
+    converted = await async_client.post(
+        f"{BASE}/leads/{lead.json()['id']}/convert",
+        json={
+            "new_client": {
+                "name": "Ravi Traders",
+                "legal_name": "Ravi Traders Pvt Ltd",
+                "billing_address": ADDRESS,
+                "owner_user_id": str(TEST_USER_ID),
+            },
+            "opportunity": {
+                "name": "Website",
+                "expected_value": {"amount": 1000, "currency": "INR"},
+                "expected_close_date": "2026-12-31",
+            },
+        },
+        headers={"If-Match": lead.headers["ETag"]},
+    )
+    assert converted.status_code == 200, converted.json()
+    return await _quotation(async_client, converted.json()["opportunity"]["id"])
+
+
+async def test_the_converted_leads_contact_is_the_customers_primary(async_client, outbox):
+    quote = await _ravi_quote(async_client)
+
+    draft = (await async_client.get(f"{BASE}/quotations/{quote['id']}/email-draft")).json()
+
+    assert draft["to"] == ["ravi@client.test"]
+    assert draft["contacts"] == [{"name": "Ravi Kumar", "email": "ravi@client.test", "designation": None, "is_primary": True}]
+    assert draft["message"].startswith("Dear Ravi Kumar,")
+
+
+async def test_draft_falls_back_to_the_leads_email(async_client, db_session, outbox):
+    """A customer whose contacts were removed (or converted before contacts were copied): the lead's email fills To."""
+    quote = await _ravi_quote(async_client)
+    await db_session.execute(delete(ClientContact).where(ClientContact.client_id == uuid.UUID(quote["client"]["id"])))
+    await db_session.commit()
+
+    draft = (await async_client.get(f"{BASE}/quotations/{quote['id']}/email-draft")).json()
+
+    assert draft["to"] == ["ravi@client.test"]
+    assert draft["contacts"] == [
+        {"name": "Ravi Kumar", "email": "ravi@client.test", "designation": "From the lead", "is_primary": False}
+    ]
+
+
+async def test_quotation_with_changes_requested_can_be_emailed_again(async_client, db_session, outbox, quotation_files):
+    _, quote = await _quote_with_contact(async_client, db_session)
+    sent = (await _act(async_client, quote, "send")).json()
+    changed = await async_client.post(
+        f"{BASE}/quotations/{sent['id']}/change-requests", json={"note": "Cheaper please"}, headers={"If-Match": f'"{sent["version"]}"'}
+    )
+
+    res = await async_client.post(f"{BASE}/quotations/{sent['id']}/emails", json=_email())
+
+    assert res.status_code == 201, res.json()
+    assert res.json()["quotation"]["status"] == "changes_requested"
+    assert res.json()["quotation"]["version"] == changed.json()["version"]

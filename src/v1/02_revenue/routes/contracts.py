@@ -3,9 +3,11 @@ from typing import Optional
 
 from fastapi import APIRouter, Depends, Header, Query, Response, status
 
-from dependencies import Authorization, DatabaseSession, Documents, OrgId, require_permission
+from dependencies import Authorization, CurrentActor, DatabaseSession, Documents, OrgId, require_permission
 from schemas.common import PageResponse
-from schemas.contract import ContractCreate, ContractResponse, SignedDocumentSet
+from schemas.contract import ContractCreate, ContractEmailSent, ContractResponse, SignedDocumentSet
+from schemas.customer_email import CustomerEmailCreate, CustomerEmailDraft
+from services import contract_email_service
 from services.contract_service import ContractService
 
 router = APIRouter(prefix="/contracts", tags=["contracts"])
@@ -48,6 +50,7 @@ async def create_contract(
     payload: ContractCreate,
     session: DatabaseSession,
     org_id: OrgId,
+    actor: CurrentActor,
     response: Response,
     idempotency_key: Optional[str] = Header(None, alias="Idempotency-Key"),
 ) -> ContractResponse:
@@ -56,6 +59,7 @@ async def create_contract(
         session=session,
         org_id=org_id,
         payload=payload,
+        actor_user_id=actor.user_id,
     )
     await session.commit()
     response.headers["ETag"] = f'"{contract.version}"'
@@ -92,6 +96,7 @@ async def set_signed_document(
     payload: SignedDocumentSet,
     session: DatabaseSession,
     org_id: OrgId,
+    actor: CurrentActor,
     response: Response,
     authorization: Authorization,
     documents: Documents,
@@ -109,6 +114,7 @@ async def set_signed_document(
         if_match=if_match,
         documents=documents,
         authorization=authorization,
+        actor_user_id=actor.user_id,
     )
     await session.commit()
     response.headers["ETag"] = f'"{contract.version}"'
@@ -123,6 +129,7 @@ async def activate_contract(
     contract_id: uuid.UUID,
     session: DatabaseSession,
     org_id: OrgId,
+    actor: CurrentActor,
     response: Response,
     if_match: Optional[str] = Header(None, alias="If-Match"),
     idempotency_key: Optional[str] = Header(None, alias="Idempotency-Key"),
@@ -133,7 +140,41 @@ async def activate_contract(
         contract_id=contract_id,
         org_id=org_id,
         if_match=if_match,
+        actor_user_id=actor.user_id,
     )
     await session.commit()
     response.headers["ETag"] = f'"{contract.version}"'
     return contract
+
+
+@router.get(
+    "/{contract_id}/email-draft", response_model=CustomerEmailDraft,
+    dependencies=[CAN_READ],
+)
+async def get_contract_email_draft(
+    contract_id: uuid.UUID,
+    session: DatabaseSession,
+    org_id: OrgId,
+    actor: CurrentActor,
+) -> CustomerEmailDraft:
+    """What the send-by-email form starts from: the sender, the customer's contacts, a subject and message."""
+    return await contract_email_service.build_draft(session, org_id, actor, contract_id)
+
+
+@router.post(
+    "/{contract_id}/emails", response_model=ContractEmailSent, status_code=status.HTTP_201_CREATED,
+    dependencies=[CAN_WRITE],
+)
+async def email_contract(
+    contract_id: uuid.UUID,
+    payload: CustomerEmailCreate,
+    session: DatabaseSession,
+    org_id: OrgId,
+    actor: CurrentActor,
+    authorization: Authorization,
+    documents: Documents,
+) -> ContractEmailSent:
+    """Email the contract and the files chosen from it (e.g. for signing) to the customer. Its status stays."""
+    result = await contract_email_service.send(session, org_id, actor, documents, authorization, contract_id, payload)
+    await session.commit()
+    return result

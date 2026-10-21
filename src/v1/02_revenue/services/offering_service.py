@@ -12,7 +12,7 @@ from finance.tax.snapshot import ConfigSnapshot
 from finance.tax.store import load_snapshot
 from models.offering import Offering
 from schemas.common import Money, PageMeta, PageResponse, decode_cursor, encode_cursor
-from schemas.offering import OfferingCreate, OfferingResponse
+from schemas.offering import OfferingCreate, OfferingResponse, OfferingUpdate
 from schemas.opportunity import VerticalRef
 from services.tax_service import legacy_rate
 
@@ -52,6 +52,7 @@ def format_offering_response(offering: Offering, snapshot: Optional[ConfigSnapsh
         billing_model=offering.billing_model,
         list_price=price,
         default_work_template_code=offering.default_work_template_code,
+        fulfilment=offering.fulfilment or "none",
         status=offering.status,
     )
 
@@ -123,6 +124,7 @@ class OfferingService:
             billing_model=payload.billing_model,
             list_price=payload.list_price.amount if payload.list_price else None,
             default_work_template_code=payload.default_work_template_code,
+            fulfilment=payload.fulfilment,
             status="active",
         )
         session.add(offering)
@@ -141,4 +143,21 @@ class OfferingService:
         offering = res.scalars().first()
         if not offering:
             raise OfferingNotFoundError(str(offering_id))
+        return format_offering_response(offering, await _snapshot_if_needed(session, org_id, [offering]))
+
+    @staticmethod
+    async def update_offering(
+        session: AsyncSession,
+        offering_id: uuid.UUID,
+        org_id: uuid.UUID,
+        payload: OfferingUpdate,
+    ) -> OfferingResponse:
+        offering = (
+            await session.execute(select(Offering).where(Offering.id == offering_id, Offering.organization_id == org_id))
+        ).scalars().first()
+        if not offering:
+            raise OfferingNotFoundError(str(offering_id))
+        if payload.fulfilment is not None:
+            offering.fulfilment = payload.fulfilment
+        await session.flush()
         return format_offering_response(offering, await _snapshot_if_needed(session, org_id, [offering]))

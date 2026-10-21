@@ -5,7 +5,7 @@ from fastapi import APIRouter, Depends, Header, Query, status
 
 from dependencies import DatabaseSession, OrgId, require_permission
 from schemas.common import PageResponse
-from schemas.offering import OfferingCreate, OfferingResponse
+from schemas.offering import OfferingCreate, OfferingResponse, OfferingUpdate
 from services.offering_service import OfferingService
 
 router = APIRouter(prefix="/offerings", tags=["offerings"])
@@ -65,3 +65,20 @@ async def create_offering(
 async def get_offering(offering_id: uuid.UUID, session: DatabaseSession, org_id: OrgId) -> OfferingResponse:
     """Retrieve one offering."""
     return await OfferingService.get_offering(session=session, offering_id=offering_id, org_id=org_id)
+
+
+@router.patch(
+    "/{offering_id}",
+    response_model=OfferingResponse,
+    dependencies=[CAN_WRITE],
+)
+async def update_offering(
+    offering_id: uuid.UUID,
+    payload: OfferingUpdate,
+    session: DatabaseSession,
+    org_id: OrgId,
+) -> OfferingResponse:
+    """Change what a won contract for this offering is delivered as (`fulfilment`)."""
+    offering = await OfferingService.update_offering(session, offering_id, org_id, payload)
+    await session.commit()
+    return offering

@@ -4,6 +4,7 @@ from typing import List, Literal, Optional
 from pydantic import BaseModel, ConfigDict, Field
 
 from schemas.common import Money
+from schemas.customer_email import CustomerEmailSent
 from schemas.opportunity import ClientRef
 
 
@@ -54,6 +55,8 @@ class ContractResponse(BaseModel):
     signed_at: Optional[datetime] = None
     signed_document_id: Optional[uuid.UUID] = None
     version: int
+    # What its offerings are delivered as ("project", "service"): the next steps once active.
+    fulfilment: List[Literal["project", "service"]] = []
 
 
 class SignedDocumentSet(BaseModel):
@@ -62,3 +65,7 @@ class SignedDocumentSet(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     document_id: uuid.UUID
+
+
+class ContractEmailSent(CustomerEmailSent):
+    contract: ContractResponse

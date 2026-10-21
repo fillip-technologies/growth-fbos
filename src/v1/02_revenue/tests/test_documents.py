@@ -10,7 +10,7 @@ from exceptions import DocumentsServiceUnavailableError
 from main import app
 from services.identity_client import Actor
 from tests.conftest import TEST_ORG_ID, TEST_USER_ID
-from tests.test_sales_flow import BASE, _act, _converted_lead, _quotation
+from tests.test_sales_flow import BASE, _act, _converted_lead, _quotation, _sent_quotation
 
 pytestmark = pytest.mark.asyncio
 
@@ -86,7 +86,7 @@ async def test_subject_access_follows_the_records_permissions(async_client):
 
 async def test_revision_carries_the_quotations_documents_over(async_client, fake_documents):
     converted = await _converted_lead(async_client)
-    first = await _quotation(async_client, converted["opportunity"]["id"])
+    first = await _sent_quotation(async_client, converted["opportunity"]["id"])
 
     revised = await async_client.post(f"{BASE}/quotations/{first['id']}/revise")
     assert revised.status_code == 201
@@ -98,7 +98,7 @@ async def test_revision_carries_the_quotations_documents_over(async_client, fake
 
 async def test_revision_is_not_created_when_documents_are_unreachable(async_client, db_session):
     converted = await _converted_lead(async_client)
-    first = await _quotation(async_client, converted["opportunity"]["id"])
+    first = await _sent_quotation(async_client, converted["opportunity"]["id"])
 
     class DocumentsDown:
         async def copy_links(self, *args, **kwargs):
@@ -112,7 +112,7 @@ async def test_revision_is_not_created_when_documents_are_unreachable(async_clie
     await db_session.rollback()
 
     listing = await async_client.get(f"{BASE}/opportunities/{converted['opportunity']['id']}/quotations")
-    assert [(q["revision_no"], q["status"]) for q in listing.json()["data"]] == [(1, "draft")]
+    assert [(q["revision_no"], q["status"]) for q in listing.json()["data"]] == [(1, "sent")]
 
 
 async def test_signed_copy_must_be_attached_to_the_contract(async_client, fake_documents):

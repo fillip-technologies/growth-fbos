@@ -15,8 +15,10 @@ from exceptions import (
     SignedCopyRequiredError,
     VersionConflictError,
 )
+from models.activity import Activity
 from models.client import Client
 from models.contract import Contract, ContractPaymentTerm, ContractTerm
+from models.offering import Offering
 from models.quotation import QuotationItem
 from schemas.common import Money, PageMeta, PageResponse, decode_cursor, encode_cursor
 from schemas.contract import (
@@ -31,12 +33,54 @@ from services.quotation_service import get_quote_in_org
 
 # Statuses in which the signed copy can still be (re)attached.
 SIGNABLE_STATUSES = ("draft", "pending_signature")
+TIMELINE_SUBJECTS = ("commercial.contract", "commercial.opportunity")
+
+
+async def get_contract_in_org(session: AsyncSession, org_id: uuid.UUID, contract_id: uuid.UUID) -> Contract:
+    contract = (
+        await session.execute(select(Contract).where(Contract.id == contract_id, Contract.organization_id == org_id))
+    ).scalars().first()
+    if not contract:
+        raise ContractNotFoundError(str(contract_id))
+    return contract
+
+
+async def log_on_timeline(
+    session: AsyncSession,
+    contract: Contract,
+    actor_user_id: Optional[uuid.UUID],
+    summary: str,
+    outcome: str,
+    activity_type: str = "note",
+) -> None:
+    """One line on the contract's timeline, and the same on its opportunity's (the deal's story)."""
+    if actor_user_id is None:
+        return
+    moment = datetime.now(timezone.utc).replace(tzinfo=None)
+    subjects = [("commercial.contract", contract.id)]
+    if contract.opportunity_id:
+        subjects.append(("commercial.opportunity", contract.opportunity_id))
+    for subject_type, subject_id in subjects:
+        session.add(
+            Activity(
+                organization_id=contract.organization_id,
+                subject_type=subject_type,
+                subject_id=subject_id,
+                activity_type=activity_type,
+                owner_user_id=actor_user_id,
+                occurred_at=moment,
+                summary=summary,
+                outcome=outcome,
+            )
+        )
+    await session.flush()
 
 
 def format_contract_response(
     contract: Contract,
     client: Client,
     terms: List[ContractPaymentTerm],
+    fulfilment: Optional[List[str]] = None,
 ) -> ContractResponse:
     payment_terms = [
         PaymentTermResponse(
@@ -66,7 +110,25 @@ def format_contract_response(
         signed_at=contract.signed_at,
         signed_document_id=contract.signed_document_id,
         version=contract.version,
+        fulfilment=fulfilment or [],
     )
+
+
+async def _fulfilment_by_contract(session: AsyncSession, contract_ids: List[uuid.UUID]) -> dict[uuid.UUID, List[str]]:
+    """How each contract's offerings are delivered, projects first, without "none"."""
+    rows = await session.execute(
+        select(ContractTerm.contract_id, Offering.fulfilment)
+        .join(Offering, Offering.id == ContractTerm.offering_id)
+        .where(ContractTerm.contract_id.in_(contract_ids))
+    )
+    kinds: dict[uuid.UUID, set[str]] = {}
+    for contract_id, kind in rows.all():
+        kinds.setdefault(contract_id, set()).add(kind)
+    return {cid: [k for k in ("project", "service") if k in found] for cid, found in kinds.items()}
+
+
+async def _fulfilment(session: AsyncSession, contract_id: uuid.UUID) -> List[str]:
+    return (await _fulfilment_by_contract(session, [contract_id])).get(contract_id, [])
 
 
 class ContractService:
@@ -75,6 +137,7 @@ class ContractService:
         session: AsyncSession,
         org_id: uuid.UUID,
         payload: ContractCreate,
+        actor_user_id: Optional[uuid.UUID] = None,
     ) -> ContractResponse:
         quote = await get_quote_in_org(session, org_id, payload.quotation_id)
 
@@ -146,7 +209,11 @@ class ContractService:
             session.add(c_term)
 
         await session.flush()
-        return format_contract_response(contract, client, persisted_terms)
+        await log_on_timeline(
+            session, contract, actor_user_id,
+            f"Contract {contract.contract_no} created from quotation {quote.quote_no} rev {quote.revision_no}.", "created",
+        )
+        return format_contract_response(contract, client, persisted_terms, await _fulfilment(session, contract.id))
 
     @staticmethod
     async def list_contracts(
@@ -187,10 +254,14 @@ class ContractService:
             )
             for term in terms.scalars().all():
                 terms_by_contract[term.contract_id].append(term)
+        fulfilment = await _fulfilment_by_contract(session, list(terms_by_contract)) if rows else {}
 
         next_cursor = encode_cursor({"last_id": str(rows[-1][0].id)}) if has_more and rows else None
         return PageResponse(
-            data=[format_contract_response(contract, client, terms_by_contract[contract.id]) for contract, client in rows],
+            data=[
+                format_contract_response(contract, client, terms_by_contract[contract.id], fulfilment.get(contract.id))
+                for contract, client in rows
+            ],
             page=PageMeta(next_cursor=next_cursor, has_more=has_more, limit=limit),
         )
 
@@ -215,7 +286,7 @@ class ContractService:
         )
         payment_terms = list(pt_res.scalars().all())
 
-        return format_contract_response(contract, client, payment_terms)
+        return format_contract_response(contract, client, payment_terms, await _fulfilment(session, contract.id))
 
     @staticmethod
     async def activate_contract(
@@ -223,13 +294,9 @@ class ContractService:
         contract_id: uuid.UUID,
         org_id: uuid.UUID,
         if_match: Optional[str] = None,
+        actor_user_id: Optional[uuid.UUID] = None,
     ) -> ContractResponse:
-        c_res = await session.execute(
-            select(Contract).where(Contract.id == contract_id, Contract.organization_id == org_id)
-        )
-        contract = c_res.scalars().first()
-        if not contract:
-            raise ContractNotFoundError(str(contract_id))
+        contract = await get_contract_in_org(session, org_id, contract_id)
 
         if if_match is None:
             raise PreconditionRequiredError()
@@ -247,6 +314,7 @@ class ContractService:
         await session.flush()
         # Staged billing: the contract's money is invoiced line by line from its schedule.
         await build_schedule(session, contract)
+        await log_on_timeline(session, contract, actor_user_id, f"Contract {contract.contract_no} activated.", "activated")
 
         return await ContractService.get_contract(session, contract_id, org_id)
 
@@ -259,16 +327,13 @@ class ContractService:
         if_match: Optional[str],
         documents: DocumentsClient,
         authorization: str,
+        actor_user_id: Optional[uuid.UUID] = None,
     ) -> ContractResponse:
         """
         Record which uploaded document is the signed copy. The file itself lives in the
         documents service and must already be attached to this contract there.
         """
-        contract = (
-            await session.execute(select(Contract).where(Contract.id == contract_id, Contract.organization_id == org_id))
-        ).scalars().first()
-        if not contract:
-            raise ContractNotFoundError(str(contract_id))
+        contract = await get_contract_in_org(session, org_id, contract_id)
 
         if if_match is None:
             raise PreconditionRequiredError()
@@ -289,5 +354,11 @@ class ContractService:
         contract.signed_at = datetime.now(timezone.utc)
         contract.version += 1
         await session.flush()
+        file_name = (document.get("current_version") or {}).get("file_name")
+        await log_on_timeline(
+            session, contract, actor_user_id,
+            f"Signed copy of contract {contract.contract_no} attached" + (f": {file_name}." if file_name else "."),
+            "signed_copy",
+        )
 
         return await ContractService.get_contract(session, contract_id, org_id)
