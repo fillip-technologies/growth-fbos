@@ -23,6 +23,8 @@ class Settings(BaseSettings):
     management_service_url: str = "http://management:8000"
     insight_service_url: str = "http://insight:8000"
     assets_service_url: str = "http://assets:8000"
+    # Inventory is the Fixly backend (Node), deployed on its own; it serves /api/inventory/v1.
+    inventory_service_url: str = "http://localhost:3000"
 
     # Per-dependency timeout budget for aggregated screens (seconds).
     aggregation_timeout_seconds: float = 0.8

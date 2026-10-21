@@ -17,6 +17,7 @@ SERVICE_URL_MAP: Final[dict[str, str]] = {
     "management": settings.management_service_url,
     "insight": settings.insight_service_url,
     "assets": settings.assets_service_url,
+    "inventory": settings.inventory_service_url,
 }
 
 HOP_BY_HOP_HEADERS: Final[set[str]] = {

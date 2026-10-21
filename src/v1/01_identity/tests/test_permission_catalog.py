@@ -125,3 +125,15 @@ def test_member_preset_leaves_out_sensitive_reads():
 def test_members_may_send_requests_but_not_manage_tasks():
     codes = ["delivery.task.read", "delivery.task.request", "delivery.task.write", "delivery.task.review"]
     assert permission_catalog.member_permission_codes(codes) == ["delivery.task.read", "delivery.task.request"]
+
+
+def test_inventory_reads_that_show_costs_or_every_customer_stay_out_of_the_member_preset():
+    catalog_codes = [code for code, _, _ in permission_catalog.PERMISSION_CATALOG]
+    member_codes = set(permission_catalog.member_permission_codes(catalog_codes))
+    for code in (
+        "inventory.cost.read", "inventory.purchase_order.read", "inventory.repair_order.read",
+        "inventory.disposal.read", "inventory.report.read",
+    ):
+        assert code in catalog_codes
+        assert code not in member_codes
+    assert "inventory.device.read" in member_codes
