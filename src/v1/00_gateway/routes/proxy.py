@@ -35,10 +35,16 @@ HOP_BY_HOP_HEADERS: Final[set[str]] = {
 
 
 def _build_forward_headers(request: Request) -> dict[str, str]:
-    """Prepare downstream request headers, preserving tracing and auth while filtering hop-by-hop."""
+    """
+    Prepare downstream request headers, preserving tracing and auth while filtering hop-by-hop.
+
+    The browser's Accept-Encoding is dropped: httpx then asks only for encodings it can
+    decode. Otherwise a compressing upstream (the Fixly backend answers brotli) sends a
+    body httpx can't decode, and with Content-Encoding stripped the browser gets bytes.
+    """
     headers: dict[str, str] = {}
     for key, value in request.headers.items():
-        if key.lower() not in ("host", "content-length"):
+        if key.lower() not in ("host", "content-length", "accept-encoding"):
             headers[key] = value.strip()
 
     client_host = request.client.host if request.client else "unknown"
