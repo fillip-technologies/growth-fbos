@@ -102,6 +102,38 @@ PERMISSION_CATALOG: list[tuple[str, str, str]] = [
     ("document.upload", "documents", "Upload documents and attach them to records"),
     ("document.share", "documents", "Share documents with people outside FBOS"),
     ("document.category.manage", "documents", "Set up the organization's document categories"),
+    # Inventory (the Fixly backend): field hardware from purchase to disposal
+    ("inventory.device.read", "inventory", "View devices, where they are, their history, installations and stock (grant per site for customer staff)"),
+    ("inventory.device.write", "inventory", "Edit devices, install and remove them in zones and log their daily status"),
+    ("inventory.setup.manage", "inventory", "Set up inventory customers, sites, zones and stock locations"),
+    ("inventory.catalog.read", "inventory", "View device models and vendors"),
+    ("inventory.catalog.write", "inventory", "Add and edit device models and vendors"),
+    ("inventory.cost.read", "inventory", "See prices and costs on devices, purchase orders and repairs"),
+    ("inventory.purchase_order.read", "inventory", "View purchase orders and goods receipts, with vendor prices"),
+    ("inventory.purchase_order.write", "inventory", "Draft, submit and cancel purchase orders"),
+    ("inventory.purchase_order.approve", "inventory", "Approve purchase orders"),
+    ("inventory.goods_receipt.write", "inventory", "Receive goods against a purchase order and register the devices"),
+    ("inventory.stock_transfer.read", "inventory", "View stock transfers between stores"),
+    ("inventory.stock_transfer.write", "inventory", "Create and cancel stock transfers"),
+    ("inventory.stock_transfer.approve", "inventory", "Approve stock transfers"),
+    ("inventory.stock_transfer.dispatch", "inventory", "Dispatch approved stock transfers"),
+    ("inventory.stock_transfer.receive", "inventory", "Receive stock transfers at a store"),
+    ("inventory.warranty.read", "inventory", "View warranties and AMC cover"),
+    ("inventory.warranty.write", "inventory", "Add and edit warranties"),
+    ("inventory.issue.read", "inventory", "View device issues, site visits and replacements (own records only: the issues you raised or are assigned)"),
+    ("inventory.issue.write", "inventory", "Raise and update device issues and log site visits"),
+    ("inventory.issue.assign", "inventory", "Assign technicians to device issues"),
+    ("inventory.replacement.write", "inventory", "Request device replacements"),
+    ("inventory.replacement.approve", "inventory", "Approve device replacements"),
+    ("inventory.repair_order.read", "inventory", "View repair orders and RMAs, with their costs"),
+    ("inventory.repair_order.write", "inventory", "Create, dispatch and close repair orders"),
+    ("inventory.repair_order.approve", "inventory", "Approve repair costs"),
+    ("inventory.disposal.read", "inventory", "View retired and disposed devices and their certificates"),
+    ("inventory.disposal.write", "inventory", "Record device disposals"),
+    ("inventory.disposal.approve", "inventory", "Approve device disposals"),
+    ("inventory.maintenance_plan.read", "inventory", "View preventive maintenance plans"),
+    ("inventory.maintenance_plan.write", "inventory", "Set up preventive maintenance plans"),
+    ("inventory.report.read", "inventory", "View inventory reports across every customer"),
 ]
 
 ADMIN_ROLE_CODE = "admin"
@@ -111,7 +143,18 @@ MEMBER_ROLE_CODE = "member"
 # Reads the `member` preset leaves out: other people's security data (sign-in places, IP
 # addresses), and approval requests, which show deals, discounts and costs across the
 # company (grant that one per person, "own records only" for people who just decide).
-SENSITIVE_READ_CODES = {"identity.session.read", "identity.audit_log.read", "control.approval.read"}
+# Inventory reads that show prices, vendor terms, repair costs, disposals or every
+# customer's figures are granted per person too.
+SENSITIVE_READ_CODES = {
+    "identity.session.read",
+    "identity.audit_log.read",
+    "control.approval.read",
+    "inventory.cost.read",
+    "inventory.purchase_order.read",
+    "inventory.repair_order.read",
+    "inventory.disposal.read",
+    "inventory.report.read",
+}
 
 
 # Beyond reading, what every member may do: ask another team for work (delivery routes it).

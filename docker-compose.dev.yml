@@ -22,6 +22,9 @@ services:
     <<: *dev
     volumes:
       - ./src/v1/00_gateway:/app
+    # The Fixly backend (inventory) runs on the host in dev: `npm run dev` in fixly_backend.
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
 
   identity:
     <<: *dev
@@ -47,6 +50,8 @@ services:
     <<: *dev
     volumes:
       - ./src/v1/05_documents:/app
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
 
   communication:
     <<: *dev
