@@ -11,7 +11,12 @@ name: fbos
 services:
   db:            { restart: always, ports: !reset [], profiles: ["local-db"] }
   redis:         { restart: always }
-  gateway:       { restart: always, ports: !override ["127.0.0.1:8100:8000"] }
+  gateway:
+    restart: always
+    ports: !override ["127.0.0.1:8100:8000"]
+    # /api/inventory/* is the Fixly backend (Node, hosted separately), not a container here.
+    environment:
+      INVENTORY_SERVICE_URL: https://fixly-backend.fillipsoftware.com
   identity:
     restart: always
     ports: !reset []
