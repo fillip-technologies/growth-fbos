@@ -728,3 +728,26 @@ class VersionConflictError(DeliveryServiceError):
             f"The resource was modified by another request. Current version is '{current_version}'.",
             meta={"current_version": current_version},
         )
+
+
+# --- Document attachments & subject access ----------------------------------
+
+
+class SubjectNotFoundError(DeliveryServiceError):
+    """404: The requested subject record does not exist or is of an unknown type."""
+
+    def __init__(self, subject_type: str = "record") -> None:
+        super().__init__(status.HTTP_404_NOT_FOUND, "NOT_FOUND", f"No such '{subject_type}' record")
+
+
+class SubjectLockedError(DeliveryServiceError):
+    """409: The record is closed and no longer accepts documents."""
+
+    def __init__(self, subject_type: str, current_status: str) -> None:
+        super().__init__(
+            status.HTTP_409_CONFLICT,
+            "SUBJECT_LOCKED",
+            f"A {current_status} {subject_type.split('.')[-1]} no longer accepts documents.",
+            meta={"status": current_status},
+        )
+

@@ -19,7 +19,11 @@ class Settings(BaseSettings):
     # Services that own the records documents attach to, by subject-type prefix: a subject
     # `revenue.contract` is checked at `<revenue base>/internal/subject-access/...`.
     # Set as JSON, e.g. SUBJECT_SERVICES='{"revenue": "http://revenue:8000/api/revenue/v1"}'.
-    subject_services: dict[str, str] = {"revenue": "http://localhost:8002/api/revenue/v1"}
+    subject_services: dict[str, str] = {
+        "revenue": "http://localhost:8002/api/revenue/v1",
+        "delivery": "http://localhost:8003/api/delivery/v1",
+        "inventory": "http://localhost:3000/api/inventory/v1",
+    }
     subject_check_timeout_seconds: float = 5.0
     # Read checks are cached this long per user and subject; attach checks never are.
     subject_read_cache_seconds: float = 30.0
