@@ -1,16 +1,14 @@
 """Delivery's side of document attachments: subject access for projects and tasks."""
 
-from datetime import timedelta
 import uuid
 
-import httpx
 import pytest
 
 from dependencies import get_actor
 from main import app
 from services.identity_client import Actor
 from tests.conftest import TEST_ORG_ID, TEST_USER_ID
-from tests.test_smoke import BASE, TODAY, create_project, create_task, if_match, ok
+from tests.test_smoke import BASE, create_project, create_task, if_match
 
 pytestmark = pytest.mark.asyncio
 

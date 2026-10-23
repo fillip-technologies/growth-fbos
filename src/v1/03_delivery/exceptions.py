@@ -750,4 +750,3 @@ class SubjectLockedError(DeliveryServiceError):
             f"A {current_status} {subject_type.split('.')[-1]} no longer accepts documents.",
             meta={"status": current_status},
         )
-
