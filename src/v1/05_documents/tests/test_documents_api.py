@@ -1,3 +1,4 @@
+from datetime import datetime, timedelta, timezone
 import uuid
 import pytest
 from sqlalchemy import select, update
@@ -246,7 +247,7 @@ async def test_share_workflow_and_open_share(async_client, db_session):
     # 2. Create password-protected share link with max 3 downloads
     share_payload = {
         "version_no": 1,
-        "expires_at": "2026-10-22T18:29:59Z",
+        "expires_at": (datetime.now(timezone.utc) + timedelta(days=7)).strftime("%Y-%m-%dT%H:%M:%SZ"),
         "password": "secret-password",
         "max_downloads": 3,
     }
