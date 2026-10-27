@@ -45,7 +45,7 @@ def format_offering_response(offering: Offering, snapshot: Optional[ConfigSnapsh
         code=offering.code,
         name=offering.name,
         vertical=VerticalRef(id=offering.vertical_id, name="Vertical") if offering.vertical_id else None,
-        sac_code=offering.sac_code or "",
+        sac_code=offering.sac_code or None,
         tax_category_code=offering.tax_category_code,
         gst_rate=gst_rate,
         unit=unit,
