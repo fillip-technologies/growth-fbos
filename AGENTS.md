@@ -24,6 +24,13 @@ This repository contains strict standards and design principles that all AI codi
    - Use standard HTTP verbs properly (`GET`, `POST`, `PUT`, `PATCH`, `DELETE`).
    - Use standard HTTP status codes and structured error responses.
 
+4. **[Evidence-First Investigation & Impact Analysis](.agents/AGENT_RESEARCH_AND_IMPACT.md)** (`.agents/AGENT_RESEARCH_AND_IMPACT.md`):
+   - **Do not guess or assume upfront**: verify code and exact dependency versions first.
+   - Read version-specific official and internal documentation first.
+   - Search web/references if the issue is not documented.
+   - Self-thinking & deduction is **last**, grounded strictly in facts.
+   - Conduct cross-feature and blast-radius impact analysis before modifying any code.
+
 ---
 
 ## 🛠️ Project Reference
