@@ -12,7 +12,7 @@ class OfferingCreate(BaseModel):
     code: str = Field(..., min_length=1, max_length=100, description="SKU / Unique offering code")
     name: str = Field(..., min_length=1, max_length=255, description="Display name of service")
     vertical_id: uuid.UUID
-    sac_code: str = Field(..., max_length=20, description="Services Accounting Code for GST")
+    sac_code: Optional[str] = Field(None, max_length=20, description="Services Accounting Code for GST")
     tax_category_code: Optional[str] = Field(None, max_length=100, description="Tax category from the tax configuration")
     gst_rate: Optional[float] = Field(None, ge=0, le=100, description="Legacy: a GST percentage, used when no tax category is given")
     unit: Literal["project", "hour", "month", "unit"] = "project"
@@ -35,7 +35,7 @@ class OfferingResponse(BaseModel):
     code: str
     name: str
     vertical: Optional[VerticalRef] = None
-    sac_code: str
+    sac_code: Optional[str] = None
     tax_category_code: Optional[str] = None
     # The category's rate today (or the legacy percentage); None when neither is set.
     gst_rate: Optional[float] = None
