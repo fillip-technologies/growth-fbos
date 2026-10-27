@@ -29,6 +29,13 @@ Before analyzing, writing, modifying, or reviewing any code in this repository, 
    - **Every endpoint change ships with its permissions, in the same change**: callers authenticated through Identity (never trusted headers), `<service>.<entity>.<action>` codes in Identity's catalog, a `require_permission` guard on every route, and tests that no route is left unguarded.
    - Record-level rules (assignee, reviewer, requester, "own records only") go in the service layer on top of the permission.
 
+5. **[Evidence-First Investigation & Impact Analysis](.agents/AGENT_RESEARCH_AND_IMPACT.md)** (`.agents/AGENT_RESEARCH_AND_IMPACT.md`):
+   - **Do not guess or assume upfront**: verify code and exact dependency versions first.
+   - Read version-specific official and internal documentation first.
+   - Search web/references if the issue is not documented.
+   - Self-thinking & deduction is **last**, grounded strictly in facts.
+   - Conduct cross-feature and blast-radius impact analysis before modifying any code.
+
 ---
 
 ## ⚙️ Development Commands
