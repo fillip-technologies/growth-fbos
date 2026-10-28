@@ -1,6 +1,6 @@
 # On every pull request to main: tests each service, so a failing change can't be merged.
 # On every push to main: the same tests, then deploys to the aaPanel server if they pass.
-# 07_management, 08_insight and 09_assets have no tests yet; add them to the matrix with their first test.
+# 07_management and 08_insight have no tests yet; add them to the matrix with their first test.
 # Setup (secrets, deploy key): DEPLOY_AAPANEL.md.
 name: CI/CD
 
@@ -22,7 +22,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        service: [01_identity, 02_revenue, 03_delivery, 04_control, 05_documents, 06_communication]
+        service: [01_identity, 02_revenue, 03_delivery, 04_control, 05_documents, 06_communication, 09_assets]
     defaults:
       run:
         working-directory: src/v1/${{ matrix.service }}

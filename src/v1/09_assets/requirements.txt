@@ -16,3 +16,8 @@ greenlet>=3.0.0
 alembic>=1.13.1
 aiomysql>=0.2.0
 cryptography>=42.0.5
+
+# Testing
+pytest>=8.3.0
+pytest-asyncio>=0.24.0
+aiosqlite>=0.20.0
