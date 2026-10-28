@@ -108,3 +108,17 @@ async def test_vendor_and_vendor_accounts(async_client: httpx.AsyncClient):
     acc_list = await ok(await async_client.get(f"{BASE}/vendor-accounts?vendor_id={vendor_id}"))
     assert len(acc_list["data"]) == 1
     assert acc_list["data"][0]["id"] == account["id"]
+
+
+async def test_new_org_auto_seeds_builtins(async_client: httpx.AsyncClient):
+    """Verify that a brand new organization calling categories/types is auto-seeded."""
+    brand_new_org = uuid.uuid4()
+    headers = {"X-Organization-Id": str(brand_new_org)}
+    res = await ok(await async_client.get(f"{BASE}/asset-categories", headers=headers))
+    codes = {c["code"] for c in res["data"]}
+    assert {"hardware", "facility", "software", "credential"}.issubset(codes)
+
+    types_res = await ok(await async_client.get(f"{BASE}/asset-types", headers=headers))
+    type_codes = {t["code"] for t in types_res["data"]}
+    assert {"laptop", "desktop", "monitor", "network_equipment", "saas_subscription"}.issubset(type_codes)
+

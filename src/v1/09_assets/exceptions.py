@@ -202,6 +202,18 @@ class DuplicateCategoryCodeError(HTTPException):
         )
 
 
+class DuplicateAssetTypeCodeError(HTTPException):
+    def __init__(self, code: str) -> None:
+        super().__init__(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "code": "DUPLICATE_ASSET_TYPE_CODE",
+                "message": f"Asset type with code '{code}' already exists",
+                "status": 409,
+            },
+        )
+
+
 class DuplicateVendorCodeError(HTTPException):
     def __init__(self, code: str) -> None:
         super().__init__(

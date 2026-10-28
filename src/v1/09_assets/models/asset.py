@@ -44,12 +44,13 @@ class AssetType(Base):
     """
 
     __tablename__ = "asset_types"
+    __table_args__ = (UniqueConstraint("category_id", "code", name="uq_asset_types_category_code"),)
 
     id: Mapped[uuid.UUID] = mapped_column(UUIDType, primary_key=True, default=uuid.uuid4)
     category_id: Mapped[uuid.UUID] = mapped_column(
         UUIDType, ForeignKey("asset_categories.id", ondelete="RESTRICT"), nullable=False, index=True
     )
-    code: Mapped[str] = mapped_column(String(100), nullable=False, unique=True, index=True)
+    code: Mapped[str] = mapped_column(String(100), nullable=False, index=True)
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     family: Mapped[str] = mapped_column(String(50), nullable=False)  # hardware, software, vehicle, facility, IP
     attribute_schema: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)

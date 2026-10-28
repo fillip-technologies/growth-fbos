@@ -7,6 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from exceptions import (
     AssetCategoryNotFoundError,
     AssetTypeNotFoundError,
+    DuplicateAssetTypeCodeError,
     DuplicateCategoryCodeError,
 )
 from models.asset import AssetCategory, AssetType
@@ -19,6 +20,7 @@ from schemas.categories import (
     AssetTypeUpdate,
 )
 from schemas.common import PageResponse
+from services.builtins import ensure_builtin_types
 from services.pagination import paginate
 
 
@@ -32,6 +34,13 @@ async def list_categories(
     limit: int = 25,
     cursor: Optional[str] = None,
 ) -> PageResponse[AssetCategoryResponse]:
+    has_cats = await session.scalar(
+        select(AssetCategory.id).where(AssetCategory.organization_id == org_id).limit(1)
+    )
+    if not has_cats:
+        await ensure_builtin_types(session, org_id)
+        await session.commit()
+
     query = select(AssetCategory).where(AssetCategory.organization_id == org_id)
     if parent_id is not None:
         query = query.where(AssetCategory.parent_id == parent_id)
@@ -116,6 +125,13 @@ async def list_types(
     limit: int = 25,
     cursor: Optional[str] = None,
 ) -> PageResponse[AssetTypeResponse]:
+    has_cats = await session.scalar(
+        select(AssetCategory.id).where(AssetCategory.organization_id == org_id).limit(1)
+    )
+    if not has_cats:
+        await ensure_builtin_types(session, org_id)
+        await session.commit()
+
     query = (
         select(AssetType)
         .join(AssetCategory, AssetType.category_id == AssetCategory.id)
@@ -155,6 +171,12 @@ async def create_type(
     )
     if not cat_res.scalars().first():
         raise AssetCategoryNotFoundError(str(data.category_id))
+
+    existing = await session.execute(
+        select(AssetType).where(AssetType.category_id == data.category_id, AssetType.code == data.code)
+    )
+    if existing.scalars().first():
+        raise DuplicateAssetTypeCodeError(data.code)
 
     at = AssetType(
         id=uuid.uuid4(),
