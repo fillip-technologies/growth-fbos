@@ -142,6 +142,18 @@ PERMISSION_CATALOG: list[tuple[str, str, str]] = [
     ("assets.asset.dispose", "assets", "Decommission and dispose of company assets"),
     ("assets.setup.manage", "assets", "Manage asset categories, types, vendors and accounts"),
     ("assets.credential.reveal", "assets", "Decrypt and reveal stored asset credentials"),
+    # People (HCM & ATS: recruitment, employee directory, shifts, attendance, overtime, leaves, compensation, separation)
+    ("people.recruitment.read", "people", "View job requisitions, candidate pipeline and applications"),
+    ("people.recruitment.manage", "people", "Manage job postings, schedule interviews, and issue offers"),
+    ("people.employee.read", "people", "View employee directory, org chart and profiles"),
+    ("people.employee.manage", "people", "Manage employee records, historical data, designations and promotions"),
+    ("people.attendance.read", "people", "View attendance, clock-in/out logs and overtime records"),
+    ("people.attendance.manage", "people", "Manage work shifts, approve regularizations and overtime claims"),
+    ("people.leave.apply", "people", "Apply for leaves and view personal balance ledger"),
+    ("people.leave.approve", "people", "Approve or reject team leave requests"),
+    ("people.compensation.read", "people", "View salary structures, payslips and reimbursement claims"),
+    ("people.compensation.manage", "people", "Manage payroll runs, salary hikes, bonuses and expense claims"),
+    ("people.separation.manage", "people", "Manage employee resignations, clearances, and full-and-final settlements"),
 ]
 
 ADMIN_ROLE_CODE = "admin"
