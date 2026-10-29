@@ -47,7 +47,10 @@ def _worker_to_response(w: Worker) -> dict:
         "date_of_joining": w.date_of_joining,
         "probation_end_date": w.probation_end_date,
         "confirmation_date": w.confirmation_date,
+        "resignation_date": w.resignation_date,
+        "last_working_date": w.last_working_date,
         "bank_name": w.bank_name,
+
         "bank_account_no": w.bank_account_no,
         "ifsc_code": w.ifsc_code,
         "tax_id": w.tax_id,

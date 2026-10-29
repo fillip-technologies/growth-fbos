@@ -10,9 +10,10 @@ import httpx
 import jwt
 
 from config import settings
-from exceptions import AuthenticationRequiredError
+from exceptions import AuthenticationRequiredError, PermissionDeniedError
 
 ACTOR_PATH = "/api/identity/v1/internal/authz/actor"
+
 
 ALL_PEOPLE_PERMISSIONS: frozenset[str] = frozenset([
     "people.recruitment.read",
@@ -49,6 +50,11 @@ class Actor:
 
     def has(self, permission: str) -> bool:
         return self.is_superuser or permission in self.permissions
+
+    def require_permission(self, permission: str) -> None:
+        if not self.has(permission):
+            raise PermissionDeniedError(permission)
+
 
 
 class IdentityClient:

@@ -1,7 +1,10 @@
 import uuid
 
-from sqlalchemy import String
+from sqlalchemy import JSON, String
 from sqlalchemy.types import TypeDecorator
+
+JSONType = JSON
+
 
 
 class UUIDType(TypeDecorator):

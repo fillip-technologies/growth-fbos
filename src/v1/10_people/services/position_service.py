@@ -3,6 +3,8 @@ from typing import Optional
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
+
 
 from exceptions import ConflictError, PositionNotFoundError
 from models.job_architecture import JobProfile, PayBand, Position
@@ -75,7 +77,10 @@ async def create_job_profile(
     )
     session.add(profile)
     await session.flush()
+    if profile.pay_band_id:
+        await session.refresh(profile, ["pay_band"])
     return profile
+
 
 
 async def list_job_profiles(
@@ -83,9 +88,11 @@ async def list_job_profiles(
 ) -> list[JobProfile]:
     stmt = (
         select(JobProfile)
+        .options(selectinload(JobProfile.pay_band))
         .where(JobProfile.organization_id == organization_id)
         .order_by(JobProfile.title.asc())
     )
+
     return list((await session.execute(stmt)).scalars().all())
 
 

@@ -57,6 +57,10 @@ class JobProfile(Base):
     )
     status: Mapped[str] = mapped_column(String(50), nullable=False, default="active", index=True)
 
+    pay_band = relationship("PayBand", lazy="selectin")
+
+
+
 
 class Position(Base):
     """
@@ -87,3 +91,7 @@ class Position(Base):
     is_critical: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     effective_from: Mapped[date] = mapped_column(Date, nullable=False)
     effective_to: Mapped[Optional[date]] = mapped_column(Date, nullable=True)
+
+    job_profile = relationship("JobProfile", lazy="selectin")
+
+

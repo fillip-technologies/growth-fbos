@@ -61,3 +61,21 @@ async def next_requisition_code(session: AsyncSession, organization_id: uuid.UUI
     year = datetime.now(timezone.utc).year
     num = await next_number(session, organization_id, sequence_key=f"REQ:{prefix}", period_key=str(year), prefix=prefix)
     return f"{prefix}-{year}-{num:04d}"
+
+
+async def next_claim_code(session: AsyncSession, organization_id: uuid.UUID, prefix: str = "EXP") -> str:
+    year = datetime.now(timezone.utc).year
+    num = await next_number(session, organization_id, sequence_key=f"CLAIM:{prefix}", period_key=str(year), prefix=prefix)
+    return f"{prefix}-{year}-{num:04d}"
+
+
+async def next_payroll_code(session: AsyncSession, organization_id: uuid.UUID, year: int, month: int, prefix: str = "PAY") -> str:
+    num = await next_number(session, organization_id, sequence_key=f"PAYROLL:{prefix}", period_key=f"{year}-{month:02d}", prefix=prefix)
+    return f"{prefix}-{year}-{month:02d}-{num:03d}"
+
+
+async def next_separation_code(session: AsyncSession, organization_id: uuid.UUID, prefix: str = "SEP") -> str:
+    year = datetime.now(timezone.utc).year
+    num = await next_number(session, organization_id, sequence_key=f"SEP:{prefix}", period_key=str(year), prefix=prefix)
+    return f"{prefix}-{year}-{num:04d}"
+

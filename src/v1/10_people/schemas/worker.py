@@ -33,6 +33,9 @@ class WorkerBase(BaseModel):
     date_of_joining: date = Field(..., description="Date joined company (can be back-dated)")
     probation_end_date: Optional[date] = None
     confirmation_date: Optional[date] = None
+    resignation_date: Optional[date] = None
+    last_working_date: Optional[date] = None
+
 
     # Banking & Tax Details
     bank_name: Optional[str] = None
