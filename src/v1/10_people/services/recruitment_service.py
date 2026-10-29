@@ -51,6 +51,7 @@ async def create_requisition(
     )
     session.add(req)
     await session.flush()
+    await session.refresh(req)
     return req
 
 
@@ -96,6 +97,7 @@ async def update_requisition(
     for field, value in data.model_dump(exclude_unset=True).items():
         setattr(req, field, value)
     await session.flush()
+    await session.refresh(req)
     return req
 
 
@@ -117,6 +119,7 @@ async def create_candidate(
     )
     session.add(candidate)
     await session.flush()
+    await session.refresh(candidate)
     return candidate
 
 
@@ -184,6 +187,7 @@ async def apply_for_job(
     )
     session.add(application)
     await session.flush()
+    await session.refresh(application)
     return application
 
 
@@ -230,6 +234,7 @@ async def transition_application_stage(
         application.status = "hired"
 
     await session.flush()
+    await session.refresh(application)
     return application
 
 
@@ -262,6 +267,7 @@ async def submit_scorecard(
     )
     session.add(scorecard)
     await session.flush()
+    await session.refresh(scorecard)
     return scorecard
 
 
@@ -340,4 +346,5 @@ async def create_offer(
     application.current_stage = "offer"
     application.status = "offered"
     await session.flush()
+    await session.refresh(offer)
     return offer

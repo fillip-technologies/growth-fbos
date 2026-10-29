@@ -217,6 +217,7 @@ async def update_worker(
         setattr(worker, field, val)
 
     await session.flush()
+    await session.refresh(worker)
     return worker
 
 
