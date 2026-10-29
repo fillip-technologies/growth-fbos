@@ -5,7 +5,7 @@ from datetime import date, datetime
 from decimal import Decimal
 from typing import Any, Dict, List, Optional
 
-from pydantic import BaseModel, ConfigDict, EmailStr, Field
+from pydantic import BaseModel, ConfigDict, EmailStr, Field, model_validator
 
 
 # ---------------------------------------------------------
@@ -19,7 +19,7 @@ class JobRequisitionCreate(BaseModel):
     employment_type: str = "full_time"
     hiring_manager_id: Optional[uuid.UUID] = None
     recruiter_id: Optional[uuid.UUID] = None
-    openings_count: int = 1
+    openings_count: int = Field(default=1, ge=1)
     job_description: Optional[str] = None
     target_start_date: Optional[date] = None
 
@@ -132,10 +132,17 @@ class ScorecardCreate(BaseModel):
     stage_name: str
     interviewer_name: str
     interviewer_id: Optional[uuid.UUID] = None
-    overall_recommendation: str  # strong_yes, yes, neutral, no, strong_no
+    overall_recommendation: str = Field(..., description="strong_yes, yes, neutral, no, strong_no")
     attribute_ratings: Dict[str, Any] = Field(default_factory=dict)
     feedback_notes: Optional[str] = None
     is_blinded: bool = True
+
+    @model_validator(mode="after")
+    def validate_recommendation(self) -> "ScorecardCreate":
+        valid = {"strong_yes", "yes", "neutral", "no", "strong_no"}
+        if self.overall_recommendation not in valid:
+            raise ValueError(f"overall_recommendation must be one of {valid}")
+        return self
 
 
 class ScorecardResponse(BaseModel):
@@ -160,8 +167,8 @@ class ScorecardResponse(BaseModel):
 class JobOfferCreate(BaseModel):
     candidate_id: uuid.UUID
     position_id: Optional[uuid.UUID] = None
-    base_annual_salary: Decimal
-    sign_on_bonus: Decimal = Decimal("0.0")
+    base_annual_salary: Decimal = Field(..., ge=0)
+    sign_on_bonus: Decimal = Field(default=Decimal("0.0"), ge=0)
     currency: str = "USD"
     expected_start_date: date
     out_of_band_reason: Optional[str] = None

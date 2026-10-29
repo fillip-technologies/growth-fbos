@@ -13,10 +13,10 @@ from pydantic import BaseModel, ConfigDict, Field
 # ---------------------------------------------------------
 class CompensationRevisionCreate(BaseModel):
     revision_type: str = "annual_hike"  # annual_hike, promotion_hike, market_correction, probation_confirmation
-    previous_annual_ctc: Decimal
+    previous_annual_ctc: Decimal = Field(..., ge=0)
     increment_pct: Optional[Decimal] = None
     increment_flat_amount: Optional[Decimal] = None
-    new_annual_ctc: Optional[Decimal] = None
+    new_annual_ctc: Optional[Decimal] = Field(default=None, ge=0)
     effective_date: date  # Supports past dates for historical record keeping
     notes: Optional[str] = None
     increment_letter_doc_id: Optional[uuid.UUID] = None
@@ -45,7 +45,7 @@ class CompensationRevisionResponse(BaseModel):
 # ---------------------------------------------------------
 class BonusDisbursementCreate(BaseModel):
     bonus_type: str = "performance"  # performance, spot_award, referral, retention, festival
-    amount: Decimal
+    amount: Decimal = Field(..., gt=0)
     currency: str = "USD"
     payout_month: str = "2026-04"  # YYYY-MM
     reason: str

@@ -239,7 +239,7 @@ async def finalize_exit(
 ) -> SeparationCase:
     sep = await get_separation_case(session, organization_id, separation_id)
     worker = await session.get(Worker, sep.worker_id)
-    if not worker:
+    if not worker or worker.organization_id != organization_id:
         raise WorkerNotFoundError("Worker not found")
 
     sep.status = "exited"

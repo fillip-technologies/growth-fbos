@@ -14,14 +14,14 @@ from pydantic import BaseModel, ConfigDict, Field
 class SalaryStructureCreate(BaseModel):
     worker_id: uuid.UUID
     currency: str = "USD"
-    basic_salary: Decimal
-    hra: Decimal = Decimal("0.0")
-    special_allowance: Decimal = Decimal("0.0")
-    pf_deduction: Decimal = Decimal("0.0")
-    pt_deduction: Decimal = Decimal("0.0")
-    tds_tax: Decimal = Decimal("0.0")
-    gross_monthly: Decimal
-    annual_ctc: Decimal
+    basic_salary: Decimal = Field(..., ge=0)
+    hra: Decimal = Field(default=Decimal("0.0"), ge=0)
+    special_allowance: Decimal = Field(default=Decimal("0.0"), ge=0)
+    pf_deduction: Decimal = Field(default=Decimal("0.0"), ge=0)
+    pt_deduction: Decimal = Field(default=Decimal("0.0"), ge=0)
+    tds_tax: Decimal = Field(default=Decimal("0.0"), ge=0)
+    gross_monthly: Decimal = Field(..., ge=0)
+    annual_ctc: Decimal = Field(..., ge=0)
     effective_from: date  # Supports past joining dates or historical back-dating
     is_current: bool = True
 
@@ -41,7 +41,7 @@ class SalaryStructureResponse(SalaryStructureCreate):
 class ReimbursementClaimCreate(BaseModel):
     worker_id: uuid.UUID
     category: str = "travel"  # travel, food, broadband, medical, office_supplies, other
-    amount: Decimal
+    amount: Decimal = Field(..., gt=0)
     currency: str = "USD"
     spent_date: date  # Supports historical back-dated claims
     receipt_doc_id: Optional[uuid.UUID] = None
@@ -72,8 +72,8 @@ class ReimbursementClaimResponse(BaseModel):
 # Payroll Runs & Payslips
 # ---------------------------------------------------------
 class PayrollRunCreate(BaseModel):
-    year: int
-    month: int  # 1-12
+    year: int = Field(..., ge=2000, le=2100)
+    month: int = Field(..., ge=1, le=12)
 
 
 class PayslipResponse(BaseModel):

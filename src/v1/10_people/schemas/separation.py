@@ -5,7 +5,7 @@ from datetime import date, datetime
 from decimal import Decimal
 from typing import List, Optional
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
 # ---------------------------------------------------------
@@ -17,8 +17,16 @@ class SeparationInitiateRequest(BaseModel):
     resignation_date: date  # Past date supported for historical exits
     contractual_lwd: date
     agreed_lwd: date
-    notice_shortfall_days: int = 0
+    notice_shortfall_days: int = Field(default=0, ge=0)
     reason: Optional[str] = None
+
+    @model_validator(mode="after")
+    def validate_lwd_dates(self) -> "SeparationInitiateRequest":
+        if self.contractual_lwd < self.resignation_date:
+            raise ValueError("contractual_lwd cannot be earlier than resignation_date")
+        if self.agreed_lwd < self.resignation_date:
+            raise ValueError("agreed_lwd cannot be earlier than resignation_date")
+        return self
 
 
 class ExitClearanceResponse(BaseModel):

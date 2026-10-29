@@ -6,7 +6,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 
-from exceptions import ConflictError, PositionNotFoundError
+from exceptions import ConflictError, PositionNotFoundError, ValidationFailedError
 from models.job_architecture import JobProfile, PayBand, Position
 from schemas.common import PageMeta, PageResponse
 from schemas.position import JobProfileCreate, PayBandCreate, PositionCreate
@@ -99,6 +99,30 @@ async def list_job_profiles(
 async def create_position(
     session: AsyncSession, organization_id: uuid.UUID, data: PositionCreate
 ) -> Position:
+    if data.job_profile_id:
+        jp = (
+            await session.execute(
+                select(JobProfile).where(
+                    JobProfile.organization_id == organization_id,
+                    JobProfile.id == data.job_profile_id,
+                )
+            )
+        ).scalar_one_or_none()
+        if not jp:
+            raise ValidationFailedError("job_profile_id", f"Job profile '{data.job_profile_id}' not found in organization")
+
+    if data.reports_to_position_id:
+        parent_pos = (
+            await session.execute(
+                select(Position).where(
+                    Position.organization_id == organization_id,
+                    Position.id == data.reports_to_position_id,
+                )
+            )
+        ).scalar_one_or_none()
+        if not parent_pos:
+            raise ValidationFailedError("reports_to_position_id", f"Reporting position '{data.reports_to_position_id}' not found in organization")
+
     pos_code = await next_position_code(session, organization_id)
     pos = Position(
         organization_id=organization_id,

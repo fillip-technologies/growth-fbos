@@ -169,6 +169,35 @@ async def update_worker(
 
     update_dict = data.model_dump(exclude_unset=True)
 
+    # Validate work email uniqueness if updated
+    if "work_email" in update_dict and update_dict["work_email"] != worker.work_email:
+        existing_email = (
+            await session.execute(
+                select(Worker).where(
+                    Worker.organization_id == organization_id,
+                    Worker.work_email == update_dict["work_email"],
+                    Worker.id != worker.id,
+                )
+            )
+        ).scalar_one_or_none()
+        if existing_email:
+            raise ConflictError(f"Worker with work email '{update_dict['work_email']}' already exists")
+
+    # Validate manager if updated
+    if "manager_id" in update_dict and update_dict["manager_id"] is not None:
+        if update_dict["manager_id"] == worker.id:
+            raise ValidationFailedError("manager_id", "A worker cannot be their own manager")
+        manager = (
+            await session.execute(
+                select(Worker).where(
+                    Worker.organization_id == organization_id,
+                    Worker.id == update_dict["manager_id"],
+                )
+            )
+        ).scalar_one_or_none()
+        if not manager:
+            raise ValidationFailedError("manager_id", f"Manager '{update_dict['manager_id']}' not found in organization")
+
     # Check for designation change to record timeline event
     if "designation" in update_dict and update_dict["designation"] != worker.designation:
         prev_desig = worker.designation
@@ -243,7 +272,10 @@ async def get_worker_detail(
     if worker.manager_id:
         mgr = (
             await session.execute(
-                select(Worker).where(Worker.id == worker.manager_id)
+                select(Worker).where(
+                    Worker.organization_id == organization_id,
+                    Worker.id == worker.manager_id,
+                )
             )
         ).scalar_one_or_none()
         if mgr:

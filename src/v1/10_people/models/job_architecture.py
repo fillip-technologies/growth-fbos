@@ -1,5 +1,6 @@
 import uuid
 from datetime import date
+from decimal import Decimal
 from typing import Optional
 
 from sqlalchemy import (
@@ -31,9 +32,9 @@ class PayBand(Base):
     organization_id: Mapped[uuid.UUID] = mapped_column(UUIDType, nullable=False, index=True)
     grade_code: Mapped[str] = mapped_column(String(50), nullable=False, index=True)
     currency: Mapped[str] = mapped_column(String(10), nullable=False, default="INR")
-    minimum_annual: Mapped[float] = mapped_column(Numeric(14, 2), nullable=False)
-    midpoint_annual: Mapped[float] = mapped_column(Numeric(14, 2), nullable=False)
-    maximum_annual: Mapped[float] = mapped_column(Numeric(14, 2), nullable=False)
+    minimum_annual: Mapped[Decimal] = mapped_column(Numeric(14, 2), nullable=False)
+    midpoint_annual: Mapped[Decimal] = mapped_column(Numeric(14, 2), nullable=False)
+    maximum_annual: Mapped[Decimal] = mapped_column(Numeric(14, 2), nullable=False)
 
 
 class JobProfile(Base):

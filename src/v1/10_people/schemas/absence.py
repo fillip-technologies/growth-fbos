@@ -5,7 +5,7 @@ from datetime import date, datetime
 from decimal import Decimal
 from typing import List, Optional
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
 # ---------------------------------------------------------
@@ -14,9 +14,9 @@ from pydantic import BaseModel, ConfigDict, Field
 class LeavePlanCreate(BaseModel):
     code: str = Field(..., max_length=32)  # ANNUAL, SICK, CASUAL, COMP_OFF, PARENTAL
     name: str = Field(..., max_length=128)
-    annual_quota: Decimal = Decimal("12.0")
+    annual_quota: Decimal = Field(default=Decimal("12.0"), ge=0)
     accrual_frequency: str = "annual"
-    carryforward_max: Decimal = Decimal("5.0")
+    carryforward_max: Decimal = Field(default=Decimal("5.0"), ge=0)
     is_encashable: bool = False
 
 
@@ -74,8 +74,14 @@ class LeaveRequestCreate(BaseModel):
     leave_plan_id: uuid.UUID
     start_date: date  # Supports past dates for historical leave entries
     end_date: date
-    days_count: Decimal
+    days_count: Decimal = Field(..., gt=0)
     reason: str
+
+    @model_validator(mode="after")
+    def validate_leave_dates(self) -> "LeaveRequestCreate":
+        if self.end_date < self.start_date:
+            raise ValueError("end_date cannot be earlier than start_date")
+        return self
 
 
 class LeaveRequestResponse(BaseModel):

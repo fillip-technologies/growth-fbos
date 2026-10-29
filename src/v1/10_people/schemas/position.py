@@ -1,16 +1,23 @@
 import uuid
 from datetime import date
+from decimal import Decimal
 from typing import Optional
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
 class PayBandCreate(BaseModel):
     grade_code: str = Field(..., min_length=1, max_length=50)
     currency: str = "INR"
-    minimum_annual: float = Field(..., ge=0)
-    midpoint_annual: float = Field(..., ge=0)
-    maximum_annual: float = Field(..., ge=0)
+    minimum_annual: Decimal = Field(..., ge=0)
+    midpoint_annual: Decimal = Field(..., ge=0)
+    maximum_annual: Decimal = Field(..., ge=0)
+
+    @model_validator(mode="after")
+    def validate_band_limits(self) -> "PayBandCreate":
+        if self.minimum_annual > self.maximum_annual:
+            raise ValueError("minimum_annual cannot exceed maximum_annual")
+        return self
 
 
 class PayBandResponse(PayBandCreate):
@@ -42,7 +49,7 @@ class PositionCreate(BaseModel):
     job_profile_id: Optional[uuid.UUID] = None
     unit_id: Optional[uuid.UUID] = None  # Department / Branch
     reports_to_position_id: Optional[uuid.UUID] = None
-    budgeted_fte: float = 1.00
+    budgeted_fte: float = Field(default=1.00, gt=0)
     is_critical: bool = False
     effective_from: date = Field(default_factory=date.today)
     effective_to: Optional[date] = None
