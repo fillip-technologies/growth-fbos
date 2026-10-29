@@ -21,7 +21,7 @@ class PermissionDeniedError(HTTPException):
 class ValidationFailedError(HTTPException):
     def __init__(self, field: str, issue: str) -> None:
         super().__init__(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code=422,
             detail={
                 "code": "VALIDATION_ERROR",
                 "message": "One or more fields are invalid.",
