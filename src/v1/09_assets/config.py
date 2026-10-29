@@ -15,6 +15,9 @@ class Settings(BaseSettings):
     port: int = 8009
     debug: bool = False
 
+    jwt_secret: str = ""
+    jwt_algorithm: str = "HS256"
+
     database_url: str = "mysql+aiomysql://root:fbos_root_password@db:3306/fbos_assets"
     db_ssl: bool = False
     db_pool_size: int = 5
