@@ -9,6 +9,7 @@ from typing import Sequence, Union
 
 from alembic import op
 import sqlalchemy as sa
+import database.types
 
 
 revision: str = '21ff4f661213'
