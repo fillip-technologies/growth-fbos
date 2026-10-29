@@ -2,6 +2,35 @@ from typing import Optional
 from fastapi import HTTPException, status
 
 
+class AuthenticationRequiredError(HTTPException):
+    def __init__(self) -> None:
+        super().__init__(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail={"code": "AUTHENTICATION_REQUIRED", "message": "Bearer token required", "status": 401},
+        )
+
+
+class PermissionDeniedError(HTTPException):
+    def __init__(self, permission: str) -> None:
+        super().__init__(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail={"code": "PERMISSION_DENIED", "message": f"Action requires permission '{permission}'", "status": 403},
+        )
+
+
+class ValidationFailedError(HTTPException):
+    def __init__(self, field: str, issue: str) -> None:
+        super().__init__(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail={
+                "code": "VALIDATION_ERROR",
+                "message": "One or more fields are invalid.",
+                "status": 422,
+                "details": [{"field": field, "issue": issue}],
+            },
+        )
+
+
 class AssetNotFoundError(HTTPException):
     def __init__(self, asset_id: Optional[str] = None) -> None:
         message = f"Asset '{asset_id}' not found" if asset_id is not None else "Asset not found"
@@ -168,6 +197,18 @@ class DuplicateCategoryCodeError(HTTPException):
             detail={
                 "code": "DUPLICATE_CATEGORY_CODE",
                 "message": f"Asset category with code '{code}' already exists",
+                "status": 409,
+            },
+        )
+
+
+class DuplicateAssetTypeCodeError(HTTPException):
+    def __init__(self, code: str) -> None:
+        super().__init__(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "code": "DUPLICATE_ASSET_TYPE_CODE",
+                "message": f"Asset type with code '{code}' already exists",
                 "status": 409,
             },
         )

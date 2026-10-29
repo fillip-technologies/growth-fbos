@@ -2,14 +2,18 @@ from contextlib import asynccontextmanager
 from typing import AsyncIterator
 
 from fastapi import FastAPI
-from router import router
-from database.base import Base
-from database.session import engine, dispose_engine
+
 import models  # Ensure all SQLAlchemy models are registered on Base.metadata
+from database.base import Base
+from database.session import dispose_engine, engine
+from router import router
+from services.identity_client import IdentityClient
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
+    identity = IdentityClient()
+    app.state.identity_client = identity
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
     yield

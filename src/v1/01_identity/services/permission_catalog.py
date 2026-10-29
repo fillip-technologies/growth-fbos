@@ -134,6 +134,14 @@ PERMISSION_CATALOG: list[tuple[str, str, str]] = [
     ("inventory.maintenance_plan.read", "inventory", "View preventive maintenance plans"),
     ("inventory.maintenance_plan.write", "inventory", "Set up preventive maintenance plans"),
     ("inventory.report.read", "inventory", "View inventory reports across every customer"),
+    # Assets (company fixed assets, hardware, software licenses, custody, maintenance, lifecycle)
+    ("assets.asset.read", "assets", "View company fixed and digital assets, custody and lifecycle"),
+    ("assets.asset.write", "assets", "Register and update company assets"),
+    ("assets.asset.assign", "assets", "Assign and transfer asset custody or return to stock"),
+    ("assets.asset.maintain", "assets", "Schedule and complete asset maintenance and repairs"),
+    ("assets.asset.dispose", "assets", "Decommission and dispose of company assets"),
+    ("assets.setup.manage", "assets", "Manage asset categories, types, vendors and accounts"),
+    ("assets.credential.reveal", "assets", "Decrypt and reveal stored asset credentials"),
 ]
 
 ADMIN_ROLE_CODE = "admin"
