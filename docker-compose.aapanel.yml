@@ -41,7 +41,7 @@ services:
     depends_on: !reset {}
     # Records documents attach to: revenue's (in this compose) and inventory's (the Fixly backend).
     environment:
-      SUBJECT_SERVICES: '{"revenue": "http://revenue:8000/api/revenue/v1", "delivery": "http://delivery:8000/api/delivery/v1", "inventory": "https://fixly-backend.fillipsoftware.com/api/inventory/v1"}'
+      SUBJECT_SERVICES: '{"revenue": "http://revenue:8000/api/revenue/v1", "delivery": "http://delivery:8000/api/delivery/v1", "inventory": "https://fixly-backend.fillipsoftware.com/api/inventory/v1", "people": "http://people:8000/api/people/v1"}'
   communication: { restart: always, ports: !reset [], depends_on: !reset {} }
   management:    { restart: always, ports: !reset [], depends_on: !reset {} }
   insight:       { restart: always, ports: !reset [], depends_on: !reset {} }

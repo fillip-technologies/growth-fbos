@@ -39,6 +39,9 @@ from models.separation import (
 from models.worker import (
     PositionAssignment,
     Worker,
+    OnboardingRequirement,
+    SensitiveAccessLog,
+    WorkerBankAccount,
     WorkerDocument,
     WorkerTimelineEvent,
 )
@@ -58,6 +61,9 @@ __all__ = [
     "Worker",
     "PositionAssignment",
     "WorkerTimelineEvent",
+    "OnboardingRequirement",
+    "SensitiveAccessLog",
+    "WorkerBankAccount",
     "WorkerDocument",
     # Recruitment & ATS
     "JobRequisition",

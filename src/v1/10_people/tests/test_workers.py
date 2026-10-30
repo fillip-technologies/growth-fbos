@@ -18,10 +18,6 @@ async def test_create_worker_with_back_date(async_client: httpx.AsyncClient):
         "status": "active",
         "date_of_joining": "2021-04-12",  # Historical back-date
         "confirmation_date": "2021-10-12",  # Past confirmation date
-        "bank_name": "HDFC Bank",
-        "bank_account_no": "50100123456789",
-        "ifsc_code": "HDFC0001234",
-        "tax_id": "ABCPS1234F",
     }
     res = await async_client.post("/v1/workers", json=payload)
     assert res.status_code == 201, res.text

@@ -5,12 +5,14 @@ from typing import AsyncGenerator, Optional
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+from cryptography.fernet import Fernet
 from fastapi import Header
 import httpx
 import pytest
 import pytest_asyncio
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
+from config import settings
 from database.base import Base
 from database.session import get_db
 from dependencies import get_actor
@@ -20,6 +22,11 @@ from services.identity_client import ALL_PEOPLE_PERMISSIONS, Actor
 
 TEST_ORG_ID = uuid.UUID("0191f3a2-0011-7011-8077-0000001b2aa9")
 TEST_USER_ID = uuid.UUID("0191f3a2-0015-7015-8093-000000218f0d")
+
+
+@pytest.fixture(autouse=True)
+def field_encryption_key(monkeypatch):
+    monkeypatch.setattr(settings, "field_encryption_key", Fernet.generate_key().decode())
 
 
 @pytest_asyncio.fixture(scope="function")
