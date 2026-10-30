@@ -184,3 +184,23 @@ async def test_exit_requires_clearance_and_settlement_in_order(async_client):
     # Settlement before clearance and exit before settlement are refused.
     assert (await async_client.post(f"/v1/separations/{sep_id}/settlement")).status_code == 409
     assert (await async_client.post(f"/v1/separations/{sep_id}/finalize")).status_code == 409
+
+
+@pytest.mark.asyncio
+async def test_worker_directory_hides_banking_details_from_pickers(async_client):
+    worker_id = await _worker(async_client, "banked@company.com")
+    await async_client.patch(
+        f"/v1/workers/{worker_id}", json={"bank_account_no": "1234567890", "tax_id": "ABCDE1234F"}
+    )
+
+    app.dependency_overrides[get_actor] = lambda: Actor(
+        user_id=uuid.uuid4(),
+        organization_id=uuid.UUID(ORG_A),
+        user_type="employee",
+        name="Attendance Clerk",
+        permissions=frozenset(["people.attendance.read"]),
+    )
+    listed = (await async_client.get("/v1/workers")).json()["data"]
+    assert listed and listed[0]["bank_account_no"] is None and listed[0]["tax_id"] is None
+    # ...but the full profile still needs employee.read
+    assert (await async_client.get(f"/v1/workers/{worker_id}")).status_code == 403

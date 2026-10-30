@@ -3,7 +3,7 @@ from typing import Optional
 
 from fastapi import APIRouter, Depends, Query, status
 
-from dependencies import CurrentActor, DatabaseSession, OrgId, require_permission
+from dependencies import CurrentActor, DatabaseSession, OrgId, require_any_permission, require_permission
 import permissions
 from schemas.common import PageResponse
 from schemas.worker import (
@@ -18,8 +18,29 @@ import services.worker_service as service
 
 router = APIRouter(prefix="/workers", tags=["workers"])
 
+# Screens that pick a worker (attendance, leaves, payroll, offboarding) may list the directory.
+WORKER_PICKER_PERMISSIONS = (
+    permissions.EMPLOYEE_READ,
+    permissions.ATTENDANCE_READ,
+    permissions.LEAVE_APPROVE,
+    permissions.COMPENSATION_READ,
+    permissions.SEPARATION_MANAGE,
+)
+SENSITIVE_WORKER_FIELDS = ("bank_name", "bank_account_no", "ifsc_code", "tax_id")
 
-@router.get("", response_model=PageResponse[WorkerResponse], dependencies=[Depends(require_permission(permissions.EMPLOYEE_READ))])
+
+def _redact_sensitive(actor, row: dict) -> dict:
+    """Banking and tax identifiers are only for those who manage employees or read compensation."""
+    if actor.has(permissions.EMPLOYEE_MANAGE) or actor.has(permissions.COMPENSATION_READ):
+        return row
+    return {**row, **{field: None for field in SENSITIVE_WORKER_FIELDS}}
+
+
+@router.get(
+    "",
+    response_model=PageResponse[WorkerResponse],
+    dependencies=[Depends(require_any_permission(*WORKER_PICKER_PERMISSIONS))],
+)
 async def list_workers(
     session: DatabaseSession,
     org_id: OrgId,
@@ -36,7 +57,7 @@ async def list_workers(
     rows, page = await service.list_workers(
         session, org_id, unit_id=unit_id, status=status, search=search, limit=limit, cursor=cursor
     )
-    return PageResponse(data=rows, page=page)
+    return PageResponse(data=[_redact_sensitive(actor, row) for row in rows], page=page)
 
 
 @router.post("", response_model=WorkerResponse, status_code=status.HTTP_201_CREATED, dependencies=[Depends(require_permission(permissions.EMPLOYEE_MANAGE))])
@@ -65,7 +86,7 @@ async def get_worker_detail(
     """
     Retrieve full 360° employee profile with reporting line, direct reports count, and career timeline.
     """
-    return await service.get_worker_detail(session, org_id, worker_id)
+    return _redact_sensitive(actor, await service.get_worker_detail(session, org_id, worker_id))
 
 
 @router.patch("/{worker_id}", response_model=WorkerResponse, dependencies=[Depends(require_permission(permissions.EMPLOYEE_MANAGE))])
