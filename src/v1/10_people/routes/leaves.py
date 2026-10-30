@@ -40,7 +40,9 @@ async def create_leave_plan_endpoint(
     data: LeavePlanCreate,
 ):
     actor.require_permission(LEAVE_APPROVE)
-    return await create_leave_plan(session, org_id, data)
+    result = await create_leave_plan(session, org_id, data)
+    await session.commit()
+    return result
 
 
 @router.get("/leave-plans", response_model=List[LeavePlanResponse])
@@ -82,7 +84,7 @@ async def adjust_balance_endpoint(
     Enables setting opening balance or historical back-dated adjustments for existing workers.
     """
     actor.require_permission(LEAVE_APPROVE)
-    return await post_ledger_transaction(
+    result = await post_ledger_transaction(
         session=session,
         organization_id=org_id,
         worker_id=data.worker_id,
@@ -92,6 +94,8 @@ async def adjust_balance_endpoint(
         effective_date=data.effective_date,
         description=data.description,
     )
+    await session.commit()
+    return result
 
 
 # ---------------------------------------------------------
@@ -109,7 +113,9 @@ async def submit_leave_request_endpoint(
     data: LeaveRequestCreate,
 ):
     actor.require_permission(LEAVE_APPLY)
-    return await submit_leave_request(session, org_id, data)
+    result = await submit_leave_request(session, org_id, data)
+    await session.commit()
+    return result
 
 
 @router.get("/leaves/requests", response_model=List[LeaveRequestResponse])
@@ -134,4 +140,6 @@ async def approve_leave_request_endpoint(
     approved: bool = Query(True),
 ):
     actor.require_permission(LEAVE_APPROVE)
-    return await approve_leave_request(session, org_id, id, user_id, approved)
+    result = await approve_leave_request(session, org_id, id, user_id, approved)
+    await session.commit()
+    return result

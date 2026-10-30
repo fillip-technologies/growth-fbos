@@ -40,7 +40,9 @@ async def initiate_separation_endpoint(
     Initiates separation workflow. Supports past dates for historical employee departures.
     """
     actor.require_permission(SEPARATION_MANAGE)
-    return await initiate_separation(session, org_id, data)
+    result = await initiate_separation(session, org_id, data)
+    await session.commit()
+    return result
 
 
 @router.get("/separations", response_model=List[SeparationCaseResponse])
@@ -76,7 +78,9 @@ async def update_clearance_endpoint(
     data: UpdateClearanceRequest,
 ):
     actor.require_permission(SEPARATION_MANAGE)
-    return await update_department_clearance(session, org_id, id, user_id, data)
+    result = await update_department_clearance(session, org_id, id, user_id, data)
+    await session.commit()
+    return result
 
 
 @router.post(
@@ -91,7 +95,9 @@ async def calculate_fnf_endpoint(
     actor: CurrentActor,
 ):
     actor.require_permission(SEPARATION_MANAGE)
-    return await calculate_fnf_settlement(session, org_id, id)
+    result = await calculate_fnf_settlement(session, org_id, id)
+    await session.commit()
+    return result
 
 
 @router.post("/separations/{id}/finalize", response_model=SeparationCaseResponse)
@@ -102,4 +108,6 @@ async def finalize_exit_endpoint(
     actor: CurrentActor,
 ):
     actor.require_permission(SEPARATION_MANAGE)
-    return await finalize_exit(session, org_id, id)
+    result = await finalize_exit(session, org_id, id)
+    await session.commit()
+    return result
