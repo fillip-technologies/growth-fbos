@@ -11,7 +11,7 @@ from datetime import date, datetime, timedelta, timezone
 from typing import Optional
 import uuid
 
-from sqlalchemy import Select, and_, select
+from sqlalchemy import Select, and_, false, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from exceptions import (
@@ -78,6 +78,19 @@ async def _get_asset(session: AsyncSession, org_id: uuid.UUID, asset_id: uuid.UU
     if not asset:
         raise AssetNotFoundError(str(asset_id))
     return asset
+
+
+async def _require_vendor_account(session: AsyncSession, org_id: uuid.UUID, vendor_account_id: uuid.UUID) -> VendorAccount:
+    """A vendor account belongs to the organization through its vendor."""
+    res = await session.execute(
+        select(VendorAccount)
+        .join(Vendor, VendorAccount.vendor_id == Vendor.id)
+        .where(VendorAccount.id == vendor_account_id, Vendor.organization_id == org_id)
+    )
+    account = res.scalars().first()
+    if not account:
+        raise VendorAccountNotFoundError(str(vendor_account_id))
+    return account
 
 
 async def _asset_type_by_code(session: AsyncSession, org_id: uuid.UUID, type_code: str) -> Optional[AssetType]:
@@ -190,8 +203,8 @@ async def list_assets(
 
     if type_code is not None:
         at = await _asset_type_by_code(session, org_id, type_code)
-        if at:
-            query = query.where(Asset.asset_type_id == at.id)
+        # An unknown type matches nothing rather than silently listing every asset.
+        query = query.where(Asset.asset_type_id == at.id) if at else query.where(false())
     if status is not None:
         query = query.where(Asset.status == status)
     if owner_unit_id is not None:
@@ -217,9 +230,7 @@ async def register_asset(
         raise AssetTypeNotFoundError(data.type_code)
 
     if data.vendor_account_id is not None:
-        va = await session.get(VendorAccount, data.vendor_account_id)
-        if not va:
-            raise VendorAccountNotFoundError(str(data.vendor_account_id))
+        await _require_vendor_account(session, org_id, data.vendor_account_id)
 
     prefix = data.type_code[:3].upper()
     asset_tag = await next_asset_tag(session, org_id, prefix)
@@ -284,6 +295,7 @@ async def update_asset(
     if data.serial_no is not None:
         asset.serial_no = data.serial_no
     if data.vendor_account_id is not None:
+        await _require_vendor_account(session, org_id, data.vendor_account_id)
         asset.vendor_account_id = data.vendor_account_id
     if data.expires_at is not None:
         asset.expires_at = data.expires_at

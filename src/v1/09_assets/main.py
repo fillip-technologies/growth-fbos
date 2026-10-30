@@ -2,8 +2,10 @@ from contextlib import asynccontextmanager
 from typing import AsyncIterator
 
 from fastapi import FastAPI
+import httpx
 
 import models  # Ensure all SQLAlchemy models are registered on Base.metadata
+from config import settings
 from database.base import Base
 from database.session import dispose_engine, engine
 from router import router
@@ -12,11 +14,13 @@ from services.identity_client import IdentityClient
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
-    identity = IdentityClient()
-    app.state.identity_client = identity
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
-    yield
+    async with httpx.AsyncClient(
+        base_url=settings.identity_service_url, timeout=settings.identity_timeout_seconds
+    ) as http:
+        app.state.identity_client = IdentityClient(http, settings.internal_service_token)
+        yield
     await dispose_engine()
 
 

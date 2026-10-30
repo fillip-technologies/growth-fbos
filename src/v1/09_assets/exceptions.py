@@ -2,6 +2,27 @@ from typing import Optional
 from fastapi import HTTPException, status
 
 
+class AssetsServiceError(HTTPException):
+    """An error with a status and code relayed from another service (e.g. identity)."""
+
+    def __init__(self, status_code: int, code: str, message: str) -> None:
+        super().__init__(
+            status_code=status_code,
+            detail={"code": code, "message": message, "status": status_code},
+        )
+
+
+class AuthServiceUnavailableError(AssetsServiceError):
+    """503: Identity could not be reached to authenticate the request."""
+
+    def __init__(self) -> None:
+        super().__init__(
+            status.HTTP_503_SERVICE_UNAVAILABLE,
+            "AUTH_SERVICE_UNAVAILABLE",
+            "Sign-in could not be checked right now. Try again shortly.",
+        )
+
+
 class AuthenticationRequiredError(HTTPException):
     def __init__(self) -> None:
         super().__init__(
