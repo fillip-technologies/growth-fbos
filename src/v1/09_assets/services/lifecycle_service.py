@@ -18,6 +18,7 @@ from exceptions import (
     AssetNotFoundError,
     InvalidStateTransitionError,
     PreconditionRequiredError,
+    ValidationFailedError,
     VersionConflictError,
 )
 from models.asset import (
@@ -74,6 +75,8 @@ async def schedule_or_log_maintenance(
     data: MaintenanceRecordCreate,
 ) -> MaintenanceRecordResponse:
     asset = await _get_asset(session, org_id, asset_id)
+    if asset.status in ("disposed", "in_use"):
+        raise InvalidStateTransitionError(asset.status, "maintain (return the asset from custody first)" if asset.status == "in_use" else "maintain")
 
     cost_val = float(data.cost.amount) if data.cost else None
 
@@ -130,6 +133,8 @@ async def complete_maintenance(
     record = res.scalars().first()
     if not record:
         raise AssetNotFoundError(f"Maintenance record {record_id} not found")
+    if record.completed_on is not None:
+        raise InvalidStateTransitionError("completed", "complete maintenance")
 
     completed_date = data.completed_on or date.today()
     record.completed_on = completed_date
@@ -151,8 +156,16 @@ async def complete_maintenance(
     if data.notes:
         record.notes = (record.notes + "\n" + data.notes) if record.notes else data.notes
 
-    # Transition asset status back to in_stock
-    asset.status = "in_stock"
+    # Back to stock only when nothing else is still open and the asset wasn't moved on meanwhile.
+    await session.flush()
+    still_open = await session.execute(
+        select(func.count(MaintenanceRecord.id)).where(
+            MaintenanceRecord.asset_id == asset_id,
+            MaintenanceRecord.completed_on.is_(None),
+        )
+    )
+    if asset.status == "in_maintenance" and still_open.scalar_one() == 0:
+        asset.status = "in_stock"
     asset.version += 1
 
     await session.flush()
@@ -228,6 +241,8 @@ async def decide_renewal(
     renewal = res.scalars().first()
     if not renewal:
         raise AssetNotFoundError(f"Renewal {renewal_id} not found")
+    if renewal.status != "pending":
+        raise InvalidStateTransitionError(renewal.status, "decide renewal")
 
     renewal.status = data.status
     renewal.decided_by = decided_by_user_id
@@ -268,6 +283,8 @@ async def dispose_asset(
     asset = await _get_asset(session, org_id, asset_id)
     _check_if_match(if_match, asset.version)
 
+    if asset.status == "disposed":
+        raise InvalidStateTransitionError(asset.status, "dispose")
     if asset.status == "in_use":
         raise InvalidStateTransitionError(asset.status, "dispose (must return asset from active custody first)")
 
@@ -306,12 +323,12 @@ async def get_disposal(
     org_id: uuid.UUID,
     asset_id: uuid.UUID,
 ) -> Optional[AssetDisposalResponse]:
-    await _get_asset(session, org_id, asset_id)
+    asset = await _get_asset(session, org_id, asset_id)
     res = await session.execute(select(AssetDisposal).where(AssetDisposal.asset_id == asset_id))
     disp = res.scalars().first()
     if not disp:
         return None
-    val_money = Money(amount=float(disp.value_realised), currency="INR") if disp.value_realised is not None else None
+    val_money = Money(amount=float(disp.value_realised), currency=asset.currency or "INR") if disp.value_realised is not None else None
     return AssetDisposalResponse(
         id=disp.id,
         asset_id=disp.asset_id,
@@ -411,6 +428,8 @@ async def create_relationship(
     asset_id: uuid.UUID,
     data: AssetRelationshipCreate,
 ) -> AssetRelationshipResponse:
+    if data.related_asset_id == asset_id:
+        raise ValidationFailedError("related_asset_id", "An asset cannot be related to itself")
     await _get_asset(session, org_id, asset_id)
     await _get_asset(session, org_id, data.related_asset_id)
 

@@ -10,51 +10,22 @@ from services.identity_client import Actor, IdentityClient
 
 
 def get_identity_client(request: Request) -> IdentityClient:
-    return getattr(request.app.state, "identity_client", None) or IdentityClient()
+    return request.app.state.identity_client
 
 
 async def get_actor(
     identity: Annotated[IdentityClient, Depends(get_identity_client)],
     authorization: Optional[str] = Header(None),
     x_organization_id: Optional[uuid.UUID] = Header(None, alias="X-Organization-Id"),
-    x_fbos_org_id: Optional[str] = Header(None, alias="X-FBOS-Org-Id"),
-    x_fbos_user_id: Optional[str] = Header(None, alias="X-FBOS-User-Id"),
 ) -> Actor:
-    """Resolve caller identity and current organization."""
-    target_org = x_organization_id
-    if not target_org and x_fbos_org_id:
-        try:
-            target_org = uuid.UUID(x_fbos_org_id)
-        except ValueError:
-            pass
-
-    if authorization and authorization.lower().startswith("bearer "):
-        return await identity.resolve_actor(authorization, target_org)
-
-    # Dev fallback support with X-FBOS headers
-    target_user = uuid.UUID("0191f3a2-0015-7015-8093-000000218f0d")
-    if x_fbos_user_id:
-        try:
-            target_user = uuid.UUID(x_fbos_user_id)
-        except ValueError:
-            pass
-
-    return Actor(
-        user_id=target_user,
-        organization_id=target_org or uuid.UUID("0191f3a2-0011-7011-8077-0000001b2aa9"),
-        user_type="admin",
-        name="Dev User",
-        is_superuser=True,
-        permissions=frozenset([
-            "assets.asset.read",
-            "assets.asset.write",
-            "assets.asset.assign",
-            "assets.asset.maintain",
-            "assets.asset.dispose",
-            "assets.setup.manage",
-            "assets.credential.reveal",
-        ]),
-    )
+    """
+    Who is calling and which organization they act in, as decided by identity. A client
+    admin may target any organization of their client via `X-Organization-Id`; everyone
+    else acts in their own.
+    """
+    if not authorization or not authorization.lower().startswith("bearer "):
+        raise AuthenticationRequiredError()
+    return await identity.resolve_actor(authorization, x_organization_id)
 
 
 CurrentActor = Annotated[Actor, Depends(get_actor)]
