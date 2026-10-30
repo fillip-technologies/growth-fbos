@@ -4,6 +4,8 @@ from typing import Any, List, Optional
 
 from pydantic import BaseModel, ConfigDict, EmailStr, Field
 
+from schemas.common import PageMeta
+
 
 class WorkerBase(BaseModel):
     first_name: str = Field(..., min_length=1, max_length=100)
@@ -64,6 +66,7 @@ class WorkerUpdate(BaseModel):
     emergency_contact_relation: Optional[str] = None
     emergency_contact_phone: Optional[str] = None
 
+    worker_code: Optional[str] = Field(None, max_length=50, description="Employee code; blank clears it")
     unit_id: Optional[uuid.UUID] = None
     designation: Optional[str] = None
     job_title: Optional[str] = None
@@ -110,7 +113,7 @@ class WorkerResponse(WorkerBase):
 
     id: uuid.UUID
     organization_id: uuid.UUID
-    worker_code: str
+    worker_code: Optional[str] = None
     user_id: Optional[uuid.UUID] = None
     name: str = ""
     created_at: datetime
@@ -121,7 +124,7 @@ class ManagerRef(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
     id: uuid.UUID
-    worker_code: str
+    worker_code: Optional[str] = None
     name: str
     designation: Optional[str] = None
 
@@ -130,3 +133,44 @@ class WorkerDetailResponse(WorkerResponse):
     manager: Optional[ManagerRef] = None
     direct_reports_count: int = 0
     timeline: List[TimelineEventResponse] = []
+
+
+class ImportableUser(BaseModel):
+    """An active employee user of identity who has no worker record yet."""
+
+    user_id: uuid.UUID
+    name: str
+    email: str
+    phone: Optional[str] = None
+    employee_code: Optional[str] = None
+    unit_id: Optional[uuid.UUID] = None
+    manager_user_id: Optional[uuid.UUID] = None
+
+
+class ImportableUsersResponse(BaseModel):
+    data: List[ImportableUser]
+    page: PageMeta
+
+
+class WorkerImportItem(BaseModel):
+    user_id: uuid.UUID
+    # Identity does not hold these, so HR supplies them.
+    designation: str = Field(..., min_length=1, max_length=255)
+    date_of_joining: date
+    employment_type: str = "full_time"
+    # Left empty it falls back to the user's employee code in identity, and to none if that is empty or taken.
+    worker_code: Optional[str] = Field(None, max_length=50)
+
+
+class WorkerImportRequest(BaseModel):
+    users: List[WorkerImportItem] = Field(..., min_length=1, max_length=100)
+
+
+class WorkerImportSkipped(BaseModel):
+    user_id: uuid.UUID
+    reason: str
+
+
+class WorkerImportResult(BaseModel):
+    created: List[WorkerResponse]
+    skipped: List[WorkerImportSkipped]

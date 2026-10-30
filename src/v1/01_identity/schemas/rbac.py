@@ -159,3 +159,22 @@ class PeopleResponse(BaseModel):
     data: list[PersonRef]
     # More people matched than one answer carries; the caller should narrow its question.
     has_more: bool = False
+
+
+class EmployeeRef(BaseModel):
+    """An active employee-type user, with what another service needs to give them a record of its own."""
+
+    id: uuid.UUID
+    name: str
+    email: str
+    phone: Optional[str] = None
+    employee_code: Optional[str] = None
+    manager_user_id: Optional[uuid.UUID] = None
+    home_unit_id: Optional[uuid.UUID] = None
+
+
+class EmployeesResponse(BaseModel):
+    """A page of an organization's active employee users (internal)."""
+
+    data: list[EmployeeRef]
+    has_more: bool = False

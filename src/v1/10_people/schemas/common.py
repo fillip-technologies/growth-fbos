@@ -61,7 +61,7 @@ class WorkerRef(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
     id: uuid.UUID
-    worker_code: str
+    worker_code: Optional[str] = None
     name: str
     work_email: Optional[str] = None
     designation: Optional[str] = None
