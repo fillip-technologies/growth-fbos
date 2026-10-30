@@ -142,3 +142,23 @@ class BankAccountNotFoundError(HTTPException):
             status_code=status.HTTP_404_NOT_FOUND,
             detail={"code": "BANK_ACCOUNT_NOT_FOUND", "message": "Bank account not found", "status": 404},
         )
+
+
+class RoleChangeNotFoundError(HTTPException):
+    def __init__(self) -> None:
+        super().__init__(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={"code": "ROLE_CHANGE_NOT_FOUND", "message": "Role change not found", "status": 404},
+        )
+
+
+class SelfApprovalError(HTTPException):
+    def __init__(self) -> None:
+        super().__init__(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail={
+                "code": "SELF_APPROVAL_FORBIDDEN",
+                "message": "A role change must be approved by someone other than the person who requested it",
+                "status": 403,
+            },
+        )

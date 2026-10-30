@@ -40,6 +40,15 @@ class Settings(BaseSettings):
     # empty or invalid the service still runs; only saving or revealing those numbers answers 503.
     field_encryption_key: str = ""
 
+    # Approved role changes take effect on their date; this worker applies the ones that are due.
+    # Run it on one server only (it is off by default).
+    role_change_worker_enabled: bool = False
+    role_change_worker_interval_seconds: int = 900
+
+    # In-app notifications go to the communication service's /internal/notifications.
+    notifications_enabled: bool = False
+    notification_timeout_seconds: float = 3.0
+
     identity_service_url: str = "http://identity:8000"
     internal_service_token: str = ""
     identity_timeout_seconds: float = 5.0

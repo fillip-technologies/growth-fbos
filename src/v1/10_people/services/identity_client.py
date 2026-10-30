@@ -32,6 +32,7 @@ ALL_PEOPLE_PERMISSIONS: frozenset[str] = frozenset([
     "people.compensation.read",
     "people.compensation.manage",
     "people.separation.manage",
+    "people.role_change.approve",
 ])
 
 
