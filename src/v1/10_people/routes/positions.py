@@ -1,9 +1,10 @@
 import uuid
 from typing import List, Optional
 
-from fastapi import APIRouter, Query, status
+from fastapi import APIRouter, Depends, Query, status
 
-from dependencies import CurrentActor, DatabaseSession, OrgId
+from dependencies import CurrentActor, DatabaseSession, OrgId, require_any_permission
+import permissions
 from schemas.common import PageResponse
 from schemas.position import (
     JobProfileCreate,
@@ -18,7 +19,7 @@ import services.position_service as service
 router = APIRouter(tags=["positions"])
 
 
-@router.post("/pay-bands", response_model=PayBandResponse, status_code=status.HTTP_201_CREATED)
+@router.post("/pay-bands", response_model=PayBandResponse, status_code=status.HTTP_201_CREATED, dependencies=[Depends(require_any_permission(permissions.EMPLOYEE_MANAGE, permissions.RECRUITMENT_MANAGE))])
 async def create_pay_band(
     session: DatabaseSession,
     org_id: OrgId,
@@ -31,7 +32,7 @@ async def create_pay_band(
     return band
 
 
-@router.get("/pay-bands", response_model=List[PayBandResponse])
+@router.get("/pay-bands", response_model=List[PayBandResponse], dependencies=[Depends(require_any_permission(permissions.EMPLOYEE_READ, permissions.RECRUITMENT_READ))])
 async def list_pay_bands(
     session: DatabaseSession,
     org_id: OrgId,
@@ -41,7 +42,7 @@ async def list_pay_bands(
     return await service.list_pay_bands(session, org_id)
 
 
-@router.post("/job-profiles", response_model=JobProfileResponse, status_code=status.HTTP_201_CREATED)
+@router.post("/job-profiles", response_model=JobProfileResponse, status_code=status.HTTP_201_CREATED, dependencies=[Depends(require_any_permission(permissions.EMPLOYEE_MANAGE, permissions.RECRUITMENT_MANAGE))])
 async def create_job_profile(
     session: DatabaseSession,
     org_id: OrgId,
@@ -54,7 +55,7 @@ async def create_job_profile(
     return profile
 
 
-@router.get("/job-profiles", response_model=List[JobProfileResponse])
+@router.get("/job-profiles", response_model=List[JobProfileResponse], dependencies=[Depends(require_any_permission(permissions.EMPLOYEE_READ, permissions.RECRUITMENT_READ))])
 async def list_job_profiles(
     session: DatabaseSession,
     org_id: OrgId,
@@ -64,7 +65,7 @@ async def list_job_profiles(
     return await service.list_job_profiles(session, org_id)
 
 
-@router.post("/positions", response_model=PositionResponse, status_code=status.HTTP_201_CREATED)
+@router.post("/positions", response_model=PositionResponse, status_code=status.HTTP_201_CREATED, dependencies=[Depends(require_any_permission(permissions.EMPLOYEE_MANAGE, permissions.RECRUITMENT_MANAGE))])
 async def create_position(
     session: DatabaseSession,
     org_id: OrgId,
@@ -77,7 +78,7 @@ async def create_position(
     return pos
 
 
-@router.get("/positions", response_model=PageResponse[PositionResponse])
+@router.get("/positions", response_model=PageResponse[PositionResponse], dependencies=[Depends(require_any_permission(permissions.EMPLOYEE_READ, permissions.RECRUITMENT_READ))])
 async def list_positions(
     session: DatabaseSession,
     org_id: OrgId,

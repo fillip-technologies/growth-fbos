@@ -36,6 +36,19 @@ async def initiate_separation(
     if not worker or worker.organization_id != organization_id:
         raise WorkerNotFoundError("Worker not found")
 
+    if worker.status == "exited":
+        raise ConflictError("Worker has already exited")
+
+    open_case = await session.execute(
+        select(SeparationCase.id).where(
+            SeparationCase.organization_id == organization_id,
+            SeparationCase.worker_id == data.worker_id,
+            SeparationCase.status != "exited",
+        )
+    )
+    if open_case.first():
+        raise ConflictError("Worker already has an open separation case")
+
     sep_code = await next_separation_code(session, organization_id)
     sep = SeparationCase(
         organization_id=organization_id,
@@ -166,10 +179,13 @@ async def calculate_fnf_settlement(
     separation_id: uuid.UUID,
 ) -> FullAndFinalSettlement:
     sep = await get_separation_case(session, organization_id, separation_id)
-    worker = await session.get(Worker, sep.worker_id)
+    if sep.status not in ("clearance_completed", "settled"):
+        raise ConflictError("All department clearances must be completed before settlement")
+
     struct = await get_worker_salary_structure(session, organization_id, sep.worker_id)
 
-    daily_basic = (struct.basic_salary / Decimal("30.0")) if struct else Decimal("100.0")
+    # Without a salary structure there is no rate to price leave or notice days with.
+    daily_basic = (struct.basic_salary / Decimal("30.0")) if struct else Decimal("0.0")
 
     # Calculate encashable leave amount
     encashable_days = Decimal("0.0")
@@ -238,6 +254,9 @@ async def finalize_exit(
     separation_id: uuid.UUID,
 ) -> SeparationCase:
     sep = await get_separation_case(session, organization_id, separation_id)
+    if sep.status != "settled":
+        raise ConflictError("Full-and-final settlement must be calculated before the exit is finalized")
+
     worker = await session.get(Worker, sep.worker_id)
     if not worker or worker.organization_id != organization_id:
         raise WorkerNotFoundError("Worker not found")

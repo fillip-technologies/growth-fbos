@@ -480,6 +480,13 @@ async def test_full_hire_to_retire_mock_simulation(async_client: httpx.AsyncClie
     sep_after_clear = await async_client.get(f"/v1/separations/{sep_id}")
     assert sep_after_clear.json()["status"] == "clearance_completed"
 
+    # Bob needs a salary structure so leave encashment can be priced
+    bob_salary_res = await async_client.post(
+        "/v1/salary-structures",
+        json={**salary_payload, "worker_id": bob_id, "effective_from": "2026-07-01"},
+    )
+    assert bob_salary_res.status_code == 201
+
     # Calculate Full & Final settlement (includes 25 days encashable leave payout)
     fnf_res = await async_client.post(f"/v1/separations/{sep_id}/settlement")
     assert fnf_res.status_code == 201

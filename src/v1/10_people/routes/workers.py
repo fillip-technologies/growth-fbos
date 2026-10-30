@@ -1,7 +1,7 @@
 import uuid
 from typing import Optional
 
-from fastapi import APIRouter, Query, status
+from fastapi import APIRouter, Depends, Query, status
 
 from dependencies import CurrentActor, DatabaseSession, OrgId, require_permission
 import permissions
@@ -19,7 +19,7 @@ import services.worker_service as service
 router = APIRouter(prefix="/workers", tags=["workers"])
 
 
-@router.get("", response_model=PageResponse[WorkerResponse])
+@router.get("", response_model=PageResponse[WorkerResponse], dependencies=[Depends(require_permission(permissions.EMPLOYEE_READ))])
 async def list_workers(
     session: DatabaseSession,
     org_id: OrgId,
@@ -39,7 +39,7 @@ async def list_workers(
     return PageResponse(data=rows, page=page)
 
 
-@router.post("", response_model=WorkerResponse, status_code=status.HTTP_201_CREATED)
+@router.post("", response_model=WorkerResponse, status_code=status.HTTP_201_CREATED, dependencies=[Depends(require_permission(permissions.EMPLOYEE_MANAGE))])
 async def create_worker(
     session: DatabaseSession,
     org_id: OrgId,
@@ -55,7 +55,7 @@ async def create_worker(
     return data
 
 
-@router.get("/{worker_id}", response_model=WorkerDetailResponse)
+@router.get("/{worker_id}", response_model=WorkerDetailResponse, dependencies=[Depends(require_permission(permissions.EMPLOYEE_READ))])
 async def get_worker_detail(
     session: DatabaseSession,
     org_id: OrgId,
@@ -68,7 +68,7 @@ async def get_worker_detail(
     return await service.get_worker_detail(session, org_id, worker_id)
 
 
-@router.patch("/{worker_id}", response_model=WorkerResponse)
+@router.patch("/{worker_id}", response_model=WorkerResponse, dependencies=[Depends(require_permission(permissions.EMPLOYEE_MANAGE))])
 async def update_worker(
     session: DatabaseSession,
     org_id: OrgId,
@@ -84,7 +84,7 @@ async def update_worker(
     return service._worker_to_response(worker)
 
 
-@router.post("/{worker_id}/timeline", response_model=TimelineEventResponse, status_code=status.HTTP_201_CREATED)
+@router.post("/{worker_id}/timeline", response_model=TimelineEventResponse, status_code=status.HTTP_201_CREATED, dependencies=[Depends(require_permission(permissions.EMPLOYEE_MANAGE))])
 async def add_timeline_event(
     session: DatabaseSession,
     org_id: OrgId,

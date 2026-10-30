@@ -207,7 +207,18 @@ async def approve_leave_request(
     if not leave_req or leave_req.organization_id != organization_id:
         raise WorkerNotFoundError("Leave request not found")
 
+    if leave_req.status != "pending":
+        raise ConflictError(f"Leave request is already {leave_req.status}")
+
     if approved:
+        current_balance = await get_leave_balance(
+            session, organization_id, leave_req.worker_id, leave_req.leave_plan_id
+        )
+        if current_balance < leave_req.days_count:
+            raise ValidationFailedError(
+                "days_count",
+                f"Insufficient leave balance: requested {leave_req.days_count} days, available {current_balance} days",
+            )
         leave_req.status = "approved"
         leave_req.approved_by = approver_id
         # Post double-entry deduction to ledger

@@ -46,6 +46,8 @@ async def accept_and_onboard_candidate(
 
     if offer.status == "converted":
         raise ConflictError("This candidate has already been onboarded")
+    if offer.status != "sent":
+        raise ConflictError(f"Offer is {offer.status} and cannot be accepted")
 
     candidate_res = await session.execute(
         select(Candidate).where(
@@ -59,8 +61,20 @@ async def accept_and_onboard_candidate(
 
     # 2. Determine worker code & dates
     worker_code = data.custom_worker_code
-    if not worker_code:
+    if worker_code:
+        code_taken = await session.execute(
+            select(Worker.id).where(Worker.organization_id == organization_id, Worker.worker_code == worker_code)
+        )
+        if code_taken.first():
+            raise ConflictError(f"Worker code '{worker_code}' is already assigned")
+    else:
         worker_code = await next_worker_code(session, organization_id)
+
+    email_taken = await session.execute(
+        select(Worker.id).where(Worker.organization_id == organization_id, Worker.work_email == data.work_email)
+    )
+    if email_taken.first():
+        raise ConflictError(f"Worker with work email '{data.work_email}' already exists")
 
     joining_date = data.date_of_joining or offer.expected_start_date or date.today()
 
@@ -76,6 +90,8 @@ async def accept_and_onboard_candidate(
         )
         position = pos_res.scalar_one_or_none()
         if position:
+            if position.hiring_status == "filled":
+                raise ConflictError("The position for this offer is already filled")
             designation = position.title
 
     # 3. Create Worker

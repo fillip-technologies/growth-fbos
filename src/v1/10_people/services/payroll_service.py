@@ -19,6 +19,7 @@ from models.payroll import (
     SalaryStructure,
 )
 from models.platform import Outbox
+from models.progression import BonusDisbursement
 from models.worker import Worker
 from schemas.payroll import (
     PayrollRunCreate,
@@ -26,6 +27,10 @@ from schemas.payroll import (
     SalaryStructureCreate,
 )
 from services.codes import next_claim_code, next_payroll_code
+
+
+# Everyone still employed is paid, including probationers and those serving notice.
+PAYABLE_WORKER_STATUSES = ("active", "probation", "on_leave", "noticed")
 
 
 async def create_salary_structure(
@@ -140,6 +145,9 @@ async def approve_reimbursement(
     if not claim or claim.organization_id != organization_id:
         raise WorkerNotFoundError("Reimbursement claim not found")
 
+    if claim.status != "submitted":
+        raise ConflictError(f"Reimbursement claim is already {claim.status}")
+
     claim.status = "approved" if approved else "rejected"
     claim.approved_by = approver_id
     await session.flush()
@@ -192,7 +200,7 @@ async def calculate_payroll_run(
     workers_res = await session.execute(
         select(Worker).where(
             Worker.organization_id == organization_id,
-            Worker.status == "active",
+            Worker.status.in_(PAYABLE_WORKER_STATUSES),
         )
     )
     workers = workers_res.scalars().all()
@@ -256,8 +264,22 @@ async def calculate_payroll_run(
             claim.settled_in_payroll_run_id = payroll_run.id
             claim.status = "settled"
 
+        # Approved bonuses due this month
+        bonus_res = await session.execute(
+            select(BonusDisbursement).where(
+                BonusDisbursement.organization_id == organization_id,
+                BonusDisbursement.worker_id == worker.id,
+                BonusDisbursement.status == "approved",
+                BonusDisbursement.payout_month == f"{data.year}-{data.month:02d}",
+            )
+        )
+        bonus_pay = Decimal("0.0")
+        for bonus in bonus_res.scalars().all():
+            bonus_pay += bonus.amount
+            bonus.status = "paid"
+
         worker_deductions = struct.pf_deduction + struct.pt_deduction + struct.tds_tax
-        gross_earned = basic_earned + allowances_earned + overtime_pay + reimbursements_pay
+        gross_earned = basic_earned + allowances_earned + overtime_pay + reimbursements_pay + bonus_pay
         net_payable = max(gross_earned - worker_deductions, Decimal("0.0"))
 
         payslip = Payslip(
@@ -272,7 +294,7 @@ async def calculate_payroll_run(
             allowances_earned=allowances_earned.quantize(Decimal("0.01")),
             overtime_pay=overtime_pay.quantize(Decimal("0.01")),
             reimbursements_pay=reimbursements_pay.quantize(Decimal("0.01")),
-            bonus_pay=Decimal("0.0"),
+            bonus_pay=bonus_pay.quantize(Decimal("0.01")),
             gross_earned=gross_earned.quantize(Decimal("0.01")),
             total_deductions=worker_deductions.quantize(Decimal("0.01")),
             net_payable=net_payable.quantize(Decimal("0.01")),
@@ -334,6 +356,8 @@ async def disburse_payroll_run(
     run_id: uuid.UUID,
 ) -> PayrollRun:
     run = await get_payroll_run(session, organization_id, run_id)
+    if run.status != "calculated":
+        raise ConflictError(f"Payroll run is already {run.status}")
     run.status = "disbursed"
     for slip in run.payslips:
         slip.status = "paid"

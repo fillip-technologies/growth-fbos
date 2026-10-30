@@ -113,7 +113,8 @@ def upgrade() -> None:
     sa.PrimaryKeyConstraint('id')
     )
     op.create_index(op.f('ix_payroll_runs_organization_id'), 'payroll_runs', ['organization_id'], unique=False)
-    op.create_index(op.f('ix_payroll_runs_payroll_code'), 'payroll_runs', ['payroll_code'], unique=True)
+    op.create_index(op.f('ix_payroll_runs_payroll_code'), 'payroll_runs', ['payroll_code'], unique=False)
+    op.create_unique_constraint('uq_payroll_runs_org_code', 'payroll_runs', ['organization_id', 'payroll_code'])
     op.create_index(op.f('ix_payroll_runs_status'), 'payroll_runs', ['status'], unique=False)
     op.create_table('processed_events',
     sa.Column('consumer', sa.String(length=100), nullable=False),
@@ -357,7 +358,8 @@ def upgrade() -> None:
     sa.ForeignKeyConstraint(['worker_id'], ['workers.id'], ),
     sa.PrimaryKeyConstraint('id')
     )
-    op.create_index(op.f('ix_reimbursement_claims_claim_code'), 'reimbursement_claims', ['claim_code'], unique=True)
+    op.create_index(op.f('ix_reimbursement_claims_claim_code'), 'reimbursement_claims', ['claim_code'], unique=False)
+    op.create_unique_constraint('uq_reimbursement_claims_org_code', 'reimbursement_claims', ['organization_id', 'claim_code'])
     op.create_index(op.f('ix_reimbursement_claims_organization_id'), 'reimbursement_claims', ['organization_id'], unique=False)
     op.create_index(op.f('ix_reimbursement_claims_status'), 'reimbursement_claims', ['status'], unique=False)
     op.create_index(op.f('ix_reimbursement_claims_worker_id'), 'reimbursement_claims', ['worker_id'], unique=False)
@@ -401,7 +403,8 @@ def upgrade() -> None:
     sa.PrimaryKeyConstraint('id')
     )
     op.create_index(op.f('ix_separation_cases_organization_id'), 'separation_cases', ['organization_id'], unique=False)
-    op.create_index(op.f('ix_separation_cases_separation_code'), 'separation_cases', ['separation_code'], unique=True)
+    op.create_index(op.f('ix_separation_cases_separation_code'), 'separation_cases', ['separation_code'], unique=False)
+    op.create_unique_constraint('uq_separation_cases_org_code', 'separation_cases', ['organization_id', 'separation_code'])
     op.create_index(op.f('ix_separation_cases_status'), 'separation_cases', ['status'], unique=False)
     op.create_index(op.f('ix_separation_cases_worker_id'), 'separation_cases', ['worker_id'], unique=False)
     op.create_table('worker_documents',
@@ -597,7 +600,8 @@ def upgrade() -> None:
     )
     op.create_index(op.f('ix_job_requisitions_organization_id'), 'job_requisitions', ['organization_id'], unique=False)
     op.create_index(op.f('ix_job_requisitions_position_id'), 'job_requisitions', ['position_id'], unique=False)
-    op.create_index(op.f('ix_job_requisitions_requisition_code'), 'job_requisitions', ['requisition_code'], unique=True)
+    op.create_index(op.f('ix_job_requisitions_requisition_code'), 'job_requisitions', ['requisition_code'], unique=False)
+    op.create_unique_constraint('uq_job_requisitions_org_code', 'job_requisitions', ['organization_id', 'requisition_code'])
     op.create_index(op.f('ix_job_requisitions_status'), 'job_requisitions', ['status'], unique=False)
     op.create_table('position_assignments',
     sa.Column('id', database.types.UUIDType(length=36), nullable=False),
@@ -707,6 +711,7 @@ def downgrade() -> None:
     op.drop_index(op.f('ix_position_assignments_organization_id'), table_name='position_assignments')
     op.drop_table('position_assignments')
     op.drop_index(op.f('ix_job_requisitions_status'), table_name='job_requisitions')
+    op.drop_constraint('uq_job_requisitions_org_code', 'job_requisitions', type_='unique')
     op.drop_index(op.f('ix_job_requisitions_requisition_code'), table_name='job_requisitions')
     op.drop_index(op.f('ix_job_requisitions_position_id'), table_name='job_requisitions')
     op.drop_index(op.f('ix_job_requisitions_organization_id'), table_name='job_requisitions')
@@ -754,6 +759,7 @@ def downgrade() -> None:
     op.drop_table('worker_documents')
     op.drop_index(op.f('ix_separation_cases_worker_id'), table_name='separation_cases')
     op.drop_index(op.f('ix_separation_cases_status'), table_name='separation_cases')
+    op.drop_constraint('uq_separation_cases_org_code', 'separation_cases', type_='unique')
     op.drop_index(op.f('ix_separation_cases_separation_code'), table_name='separation_cases')
     op.drop_index(op.f('ix_separation_cases_organization_id'), table_name='separation_cases')
     op.drop_table('separation_cases')
@@ -763,6 +769,7 @@ def downgrade() -> None:
     op.drop_index(op.f('ix_reimbursement_claims_worker_id'), table_name='reimbursement_claims')
     op.drop_index(op.f('ix_reimbursement_claims_status'), table_name='reimbursement_claims')
     op.drop_index(op.f('ix_reimbursement_claims_organization_id'), table_name='reimbursement_claims')
+    op.drop_constraint('uq_reimbursement_claims_org_code', 'reimbursement_claims', type_='unique')
     op.drop_index(op.f('ix_reimbursement_claims_claim_code'), table_name='reimbursement_claims')
     op.drop_table('reimbursement_claims')
     op.drop_index(op.f('ix_payslips_worker_id'), table_name='payslips')
@@ -812,6 +819,7 @@ def downgrade() -> None:
     op.drop_table('work_shifts')
     op.drop_table('processed_events')
     op.drop_index(op.f('ix_payroll_runs_status'), table_name='payroll_runs')
+    op.drop_constraint('uq_payroll_runs_org_code', 'payroll_runs', type_='unique')
     op.drop_index(op.f('ix_payroll_runs_payroll_code'), table_name='payroll_runs')
     op.drop_index(op.f('ix_payroll_runs_organization_id'), table_name='payroll_runs')
     op.drop_table('payroll_runs')

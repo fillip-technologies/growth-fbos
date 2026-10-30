@@ -44,9 +44,17 @@ def calculate_overtime(shift: WorkShift, clock_out: datetime) -> Tuple[int, Deci
     if raw_minutes < shift.min_overtime_threshold_minutes:
         return max(raw_minutes, 0), Decimal("0.0")
 
-    quarter_hours = round(raw_minutes / float(shift.overtime_rounding_interval_minutes))
-    rounded_hours = Decimal(str(quarter_hours * 0.25))
+    interval = shift.overtime_rounding_interval_minutes
+    intervals = round(raw_minutes / float(interval))
+    rounded_hours = (Decimal(intervals * interval) / Decimal(60)).quantize(Decimal("0.01"))
     return raw_minutes, rounded_hours
+
+
+async def _require_worker(session: AsyncSession, organization_id: uuid.UUID, worker_id: uuid.UUID) -> Worker:
+    worker = await session.get(Worker, worker_id)
+    if not worker or worker.organization_id != organization_id:
+        raise WorkerNotFoundError("Worker not found")
+    return worker
 
 
 
@@ -111,10 +119,7 @@ async def clock_in(
     organization_id: uuid.UUID,
     data: ClockInRequest,
 ) -> DailyAttendance:
-    # Verify worker
-    worker = await session.get(Worker, data.worker_id)
-    if not worker or worker.organization_id != organization_id:
-        raise WorkerNotFoundError("Worker not found")
+    await _require_worker(session, organization_id, data.worker_id)
 
     clock_in_dt = data.clock_in_time or datetime.now(timezone.utc)
     work_date = clock_in_dt.date()
@@ -170,6 +175,8 @@ async def clock_out(
     organization_id: uuid.UUID,
     data: ClockOutRequest,
 ) -> DailyAttendance:
+    await _require_worker(session, organization_id, data.worker_id)
+
     clock_out_dt = data.clock_out_time or datetime.now(timezone.utc)
     work_date = clock_out_dt.date()
 
@@ -215,7 +222,20 @@ async def clock_out(
         if shift:
             # Overtime computation
             raw_ot, ot_hours = calculate_overtime(shift, att.clock_out_time)
-            if ot_hours > Decimal("0.0"):
+            await session.flush()
+            existing_ot = await session.execute(
+                select(OvertimeRecord).where(
+                    OvertimeRecord.organization_id == organization_id,
+                    OvertimeRecord.daily_attendance_id == att.id,
+                    OvertimeRecord.compensation_type == "cash_overtime",
+                    OvertimeRecord.reason.is_(None),
+                )
+            )
+            ot_record = existing_ot.scalars().first()
+            if ot_record and ot_record.status == "pending":
+                ot_record.raw_extra_minutes = raw_ot
+                ot_record.rounded_overtime_hours = ot_hours
+            elif not ot_record and ot_hours > Decimal("0.0"):
                 ot_record = OvertimeRecord(
                     organization_id=organization_id,
                     worker_id=att.worker_id,
@@ -242,6 +262,8 @@ async def create_attendance_record(
     """
     Direct attendance creation enabling back-dating and historical imports.
     """
+    await _require_worker(session, organization_id, data.worker_id)
+
     # Check if record already exists for worker on this date
     existing = await session.execute(
         select(DailyAttendance).where(
@@ -306,9 +328,7 @@ async def claim_overtime(
     organization_id: uuid.UUID,
     data: OvertimeClaimCreate,
 ) -> OvertimeRecord:
-    worker = await session.get(Worker, data.worker_id)
-    if not worker or worker.organization_id != organization_id:
-        raise WorkerNotFoundError("Worker not found")
+    await _require_worker(session, organization_id, data.worker_id)
 
     raw_mins = data.raw_extra_minutes or 0
     rounded_hours = data.rounded_overtime_hours or Decimal("0.0")
@@ -348,6 +368,9 @@ async def approve_overtime(
     if not ot or ot.organization_id != organization_id:
         raise WorkerNotFoundError("Overtime record not found")
 
+    if ot.status != "pending":
+        raise ConflictError(f"Overtime record is already {ot.status}")
+
     ot.status = "approved" if approved else "rejected"
     ot.approved_by = approver_id
     await session.flush()
@@ -360,6 +383,8 @@ async def create_regularization(
     organization_id: uuid.UUID,
     data: AttendanceRegularizationCreate,
 ) -> AttendanceRegularization:
+    await _require_worker(session, organization_id, data.worker_id)
+
     reg = AttendanceRegularization(
         organization_id=organization_id,
         worker_id=data.worker_id,
@@ -387,6 +412,9 @@ async def approve_regularization(
     if not reg or reg.organization_id != organization_id:
         raise WorkerNotFoundError("Regularization request not found")
 
+    if reg.status != "pending":
+        raise ConflictError(f"Regularization request is already {reg.status}")
+
     reg.status = "approved" if approved else "rejected"
     reg.approved_by = approver_id
 
@@ -395,6 +423,8 @@ async def approve_regularization(
         att = None
         if reg.attendance_id:
             att = await session.get(DailyAttendance, reg.attendance_id)
+            if att and att.organization_id != organization_id:
+                att = None
         if not att:
             result = await session.execute(
                 select(DailyAttendance).where(

@@ -4,6 +4,7 @@ import uuid
 from datetime import date, datetime
 
 from sqlalchemy import (
+    UniqueConstraint,
     Boolean,
     Column,
     Date,
@@ -23,10 +24,11 @@ from database.types import JSONType, UUIDType
 
 class JobRequisition(Base):
     __tablename__ = "job_requisitions"
+    __table_args__ = (UniqueConstraint("organization_id", "requisition_code", name="uq_job_requisitions_org_code"),)
 
     id = Column(UUIDType, primary_key=True, default=uuid.uuid4)
     organization_id = Column(UUIDType, nullable=False, index=True)
-    requisition_code = Column(String(64), nullable=False, unique=True, index=True)
+    requisition_code = Column(String(64), nullable=False, index=True)
     position_id = Column(UUIDType, ForeignKey("positions.id"), nullable=True, index=True)
     title = Column(String(255), nullable=False)
     department = Column(String(128), nullable=True)

@@ -4,6 +4,7 @@ import uuid
 from datetime import date, datetime
 
 from sqlalchemy import (
+    UniqueConstraint,
     Boolean,
     Column,
     Date,
@@ -51,10 +52,11 @@ class SalaryStructure(Base):
 
 class PayrollRun(Base):
     __tablename__ = "payroll_runs"
+    __table_args__ = (UniqueConstraint("organization_id", "payroll_code", name="uq_payroll_runs_org_code"),)
 
     id = Column(UUIDType, primary_key=True, default=uuid.uuid4)
     organization_id = Column(UUIDType, nullable=False, index=True)
-    payroll_code = Column(String(64), nullable=False, unique=True, index=True)
+    payroll_code = Column(String(64), nullable=False, index=True)
     year = Column(Integer, nullable=False)
     month = Column(Integer, nullable=False)  # 1 to 12
     total_workers = Column(Integer, nullable=False, default=0)
@@ -103,11 +105,12 @@ class Payslip(Base):
 
 class ReimbursementClaim(Base):
     __tablename__ = "reimbursement_claims"
+    __table_args__ = (UniqueConstraint("organization_id", "claim_code", name="uq_reimbursement_claims_org_code"),)
 
     id = Column(UUIDType, primary_key=True, default=uuid.uuid4)
     organization_id = Column(UUIDType, nullable=False, index=True)
     worker_id = Column(UUIDType, ForeignKey("workers.id"), nullable=False, index=True)
-    claim_code = Column(String(64), nullable=False, unique=True, index=True)
+    claim_code = Column(String(64), nullable=False, index=True)
     category = Column(String(64), nullable=False)  # travel, food, broadband, medical, office_supplies, other
     amount = Column(Numeric(14, 2), nullable=False)
     currency = Column(String(3), nullable=False, default="USD")

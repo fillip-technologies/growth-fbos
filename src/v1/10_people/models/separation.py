@@ -4,6 +4,7 @@ import uuid
 from datetime import date, datetime
 
 from sqlalchemy import (
+    UniqueConstraint,
     Column,
     Date,
     DateTime,
@@ -26,10 +27,11 @@ class SeparationCase(Base):
     `resignation_date` and `agreed_lwd` allow back-dated entries for historical employee exits.
     """
     __tablename__ = "separation_cases"
+    __table_args__ = (UniqueConstraint("organization_id", "separation_code", name="uq_separation_cases_org_code"),)
 
     id = Column(UUIDType, primary_key=True, default=uuid.uuid4)
     organization_id = Column(UUIDType, nullable=False, index=True)
-    separation_code = Column(String(64), nullable=False, unique=True, index=True)
+    separation_code = Column(String(64), nullable=False, index=True)
     worker_id = Column(UUIDType, ForeignKey("workers.id"), nullable=False, index=True)
     separation_type = Column(String(64), nullable=False, default="resignation")  # resignation, termination, mutual_separation, retirement
     resignation_date = Column(Date, nullable=False)  # Allows past dates

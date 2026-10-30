@@ -301,6 +301,9 @@ async def create_offer(
     if not application:
         raise WorkerNotFoundError("Job application not found")
 
+    if application.status in ("rejected", "hired"):
+        raise ConflictError(f"Cannot issue an offer on a {application.status} application")
+
     is_out_of_band = False
     out_of_band_reason = data.out_of_band_reason
 
@@ -331,7 +334,7 @@ async def create_offer(
     offer = JobOffer(
         organization_id=organization_id,
         application_id=application_id,
-        candidate_id=data.candidate_id,
+        candidate_id=application.candidate_id,
         position_id=data.position_id,
         base_annual_salary=data.base_annual_salary,
         sign_on_bonus=data.sign_on_bonus,
