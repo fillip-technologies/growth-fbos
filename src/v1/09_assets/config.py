@@ -36,7 +36,7 @@ class Settings(BaseSettings):
             )
         return self
 
-    identity_service_url: str = "http://localhost:8001"
+    identity_service_url: str = "http://identity:8000"
     internal_service_token: str = ""
     identity_timeout_seconds: float = 5.0
 
