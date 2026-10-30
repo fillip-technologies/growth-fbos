@@ -36,6 +36,7 @@ from models.separation import (
     FullAndFinalSettlement,
     SeparationCase,
 )
+from models.role_change import RoleChange
 from models.worker import (
     PositionAssignment,
     Worker,
@@ -61,6 +62,7 @@ __all__ = [
     "Worker",
     "PositionAssignment",
     "WorkerTimelineEvent",
+    "RoleChange",
     "OnboardingRequirement",
     "SensitiveAccessLog",
     "WorkerBankAccount",

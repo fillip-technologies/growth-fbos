@@ -201,20 +201,14 @@ async def update_worker(
         if not manager:
             raise ValidationFailedError("manager_id", f"Manager '{update_dict['manager_id']}' not found in organization")
 
-    # Check for designation change to record timeline event
+    # A new designation is a promotion, demotion or correction: it goes through a role change so
+    # that someone else approves it and the record of it is kept.
     if "designation" in update_dict and update_dict["designation"] != worker.designation:
-        prev_desig = worker.designation
-        new_desig = update_dict["designation"]
-        timeline_event = WorkerTimelineEvent(
-            organization_id=organization_id,
-            worker_id=worker.id,
-            event_category="promotion",
-            title=f"Role changed from {prev_desig} to {new_desig}",
-            effective_date=date.today(),
-            previous_state={"designation": prev_desig},
-            new_state={"designation": new_desig},
+        raise ConflictError(
+            "Change the designation with a role change, so it is approved and recorded",
+            code="ROLE_CHANGE_REQUIRED",
         )
-        session.add(timeline_event)
+    update_dict.pop("designation", None)
 
     for field, val in update_dict.items():
         setattr(worker, field, val)

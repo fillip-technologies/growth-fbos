@@ -1,3 +1,4 @@
+import asyncio
 import logging
 import uuid
 from contextlib import asynccontextmanager
@@ -15,6 +16,8 @@ from database.base import Base
 from database.session import dispose_engine, engine
 from router import router
 from services.identity_client import IdentityClient
+from services.notification_client import notification_client
+from services.role_change_worker import run_forever
 
 logger = logging.getLogger("people.service")
 
@@ -25,9 +28,18 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         await conn.run_sync(Base.metadata.create_all)
     async with httpx.AsyncClient(
         base_url=settings.identity_service_url, timeout=settings.identity_timeout_seconds
-    ) as http:
+    ) as http, httpx.AsyncClient(
+        base_url=settings.communication_service_url, timeout=settings.notification_timeout_seconds
+    ) as communication_http:
         app.state.identity_client = IdentityClient(http, settings.internal_service_token)
+        if settings.notifications_enabled:
+            notification_client.start(communication_http, settings.internal_service_token)
+        worker_task = asyncio.create_task(run_forever()) if settings.role_change_worker_enabled else None
         yield
+        if worker_task is not None:
+            worker_task.cancel()
+        notification_client.stop()
+        await notification_client.drain()
     await dispose_engine()
 
 

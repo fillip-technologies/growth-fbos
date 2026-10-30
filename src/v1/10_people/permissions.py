@@ -22,5 +22,9 @@ LEAVE_APPROVE = "people.leave.approve"
 COMPENSATION_READ = "people.compensation.read"
 COMPENSATION_MANAGE = "people.compensation.manage"
 
+# Promotions, demotions and transfers: anyone who manages employees may request one;
+# approving needs this separate permission (and never the requester).
+ROLE_CHANGE_APPROVE = "people.role_change.approve"
+
 # Separation & Offboarding
 SEPARATION_MANAGE = "people.separation.manage"
