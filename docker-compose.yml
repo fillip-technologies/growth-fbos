@@ -238,6 +238,28 @@ services:
       timeout: 5s
       retries: 3
 
+  # ---------------------------------------------------------------------------
+  # 10 — People Service (HCM & ATS)  →  http://localhost:8010
+  # ---------------------------------------------------------------------------
+  people:
+    build:
+      context: ./src/v1/10_people
+    ports:
+      - "8010:8000"
+    env_file: ./src/v1/10_people/.env
+    environment:
+      # Service-to-service URL inside the compose network (overrides the .env's localhost default)
+      IDENTITY_SERVICE_URL: http://identity:8000
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: on-failure
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
 # ---------------------------------------------------------------------------
 # Volumes
 # ---------------------------------------------------------------------------

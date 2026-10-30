@@ -46,3 +46,4 @@ services:
   management:    { restart: always, ports: !reset [], depends_on: !reset {} }
   insight:       { restart: always, ports: !reset [], depends_on: !reset {} }
   assets:        { restart: always, ports: !reset [], depends_on: !reset {} }
+  people:        { restart: always, ports: !reset [], depends_on: !reset {} }
