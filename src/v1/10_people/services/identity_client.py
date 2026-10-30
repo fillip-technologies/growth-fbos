@@ -17,6 +17,7 @@ import httpx
 from exceptions import AuthServiceUnavailableError, PeopleServiceError, PermissionDeniedError
 
 ACTOR_PATH = "/api/identity/v1/internal/authz/actor"
+EMPLOYEES_PATH = "/api/identity/v1/internal/people/employees"
 
 
 ALL_PEOPLE_PERMISSIONS: frozenset[str] = frozenset([
@@ -56,6 +57,25 @@ class Actor:
             raise PermissionDeniedError(permission)
 
 
+@dataclass(frozen=True)
+class IdentityEmployee:
+    """An active employee user in identity."""
+
+    id: uuid.UUID
+    name: str
+    email: str
+    phone: Optional[str] = None
+    employee_code: Optional[str] = None
+    manager_user_id: Optional[uuid.UUID] = None
+    home_unit_id: Optional[uuid.UUID] = None
+
+
+@dataclass(frozen=True)
+class IdentityEmployeePage:
+    data: list[IdentityEmployee]
+    has_more: bool
+
+
 class IdentityClient:
     def __init__(self, http: httpx.AsyncClient, internal_token: str) -> None:
         self._http = http
@@ -68,18 +88,7 @@ class IdentityClient:
         if self._internal_token:
             headers["X-FBOS-Internal-Token"] = self._internal_token
 
-        try:
-            response = await self._http.get(ACTOR_PATH, headers=headers)
-        except httpx.HTTPError as exc:
-            raise AuthServiceUnavailableError() from exc
-
-        if response.status_code >= 400:
-            # A rejection without an error code (a 5xx, or a 404 from an identity that
-            # predates this endpoint) means identity couldn't answer, not that the caller is wrong.
-            relayed = _relayed_error(response) if response.status_code < 500 else None
-            raise relayed or AuthServiceUnavailableError()
-
-        body = response.json()
+        body = await self._get_json(ACTOR_PATH, headers=headers)
         return Actor(
             user_id=uuid.UUID(body["user_id"]),
             organization_id=uuid.UUID(body["organization_id"]),
@@ -91,6 +100,53 @@ class IdentityClient:
             unit_scopes={k: frozenset(uuid.UUID(u) for u in v) for k, v in (body.get("unit_scopes") or {}).items()},
             member_unit_ids=frozenset(uuid.UUID(u) for u in (body.get("member_unit_ids") or [])),
         )
+
+    async def list_employees(
+        self,
+        organization_id: uuid.UUID,
+        *,
+        search: Optional[str] = None,
+        user_ids: Optional[list[uuid.UUID]] = None,
+        limit: int = 50,
+        offset: int = 0,
+    ) -> IdentityEmployeePage:
+        """Active employee users of the organization, optionally narrowed to `user_ids` or a search."""
+        params: dict[str, Any] = {"organization_id": str(organization_id), "limit": limit, "offset": offset}
+        if search:
+            params["search"] = search
+        if user_ids:
+            params["user_id"] = [str(user_id) for user_id in user_ids]
+        headers = {"X-FBOS-Internal-Token": self._internal_token} if self._internal_token else {}
+
+        body = await self._get_json(EMPLOYEES_PATH, headers=headers, params=params)
+        return IdentityEmployeePage(
+            data=[
+                IdentityEmployee(
+                    id=uuid.UUID(row["id"]),
+                    name=row["name"],
+                    email=row["email"],
+                    phone=row.get("phone"),
+                    employee_code=row.get("employee_code"),
+                    manager_user_id=uuid.UUID(row["manager_user_id"]) if row.get("manager_user_id") else None,
+                    home_unit_id=uuid.UUID(row["home_unit_id"]) if row.get("home_unit_id") else None,
+                )
+                for row in body["data"]
+            ],
+            has_more=body["has_more"],
+        )
+
+    async def _get_json(self, path: str, *, headers: dict[str, str], params: Optional[dict[str, Any]] = None) -> Any:
+        try:
+            response = await self._http.get(path, headers=headers, params=params)
+        except httpx.HTTPError as exc:
+            raise AuthServiceUnavailableError() from exc
+
+        if response.status_code >= 400:
+            # A rejection without an error code (a 5xx, or a 404 from an identity that
+            # predates this endpoint) means identity couldn't answer, not that the caller is wrong.
+            relayed = _relayed_error(response) if response.status_code < 500 else None
+            raise relayed or AuthServiceUnavailableError()
+        return response.json()
 
 
 def _relayed_error(response: httpx.Response) -> Optional[PeopleServiceError]:

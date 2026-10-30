@@ -10,6 +10,7 @@ from exceptions import PreconditionRequiredError
 from schemas.common import PaginatedResponse
 from schemas.rbac import (
     ActorResponse,
+    EmployeesResponse,
     GrantsResponse,
     PeopleResponse,
     PermissionResponse,
@@ -21,6 +22,7 @@ from schemas.rbac import (
     UnitHeadsResponse,
 )
 from services.access_control import Actor
+from services.employee_directory import active_employees
 from services.auth_cache import auth_cache
 from services.rbac_service import rbac_service
 from services.unit_members import active_people, unit_heads, units_at_or_below, units_belonged_to
@@ -29,6 +31,8 @@ from schemas.calendar import WorkCalendarsResponse
 
 # The most people one /internal/people answer carries.
 PEOPLE_LIMIT = 1000
+# The most employees one /internal/people/employees page carries.
+EMPLOYEES_PAGE_LIMIT = 100
 
 roles_router = APIRouter()
 permissions_router = APIRouter()
@@ -306,6 +310,29 @@ async def list_people(
     """
     verify_internal_caller(x_fbos_internal_token)
     return await active_people(db, organization_id, unit_id, user_id, PEOPLE_LIMIT)
+
+
+@internal_router.get(
+    "/people/employees",
+    response_model=EmployeesResponse,
+    status_code=status.HTTP_200_OK,
+    summary="Active employee users of an organization, with contact and placement details (internal)",
+)
+async def list_employees(
+    organization_id: uuid.UUID = Query(..., description="The organization the caller acts in"),
+    search: Optional[str] = Query(None, description="Matches name, email or employee code"),
+    user_id: Optional[list[uuid.UUID]] = Query(None, description="Only these users: answers which of them qualify"),
+    limit: int = Query(50, ge=1, le=EMPLOYEES_PAGE_LIMIT),
+    offset: int = Query(0, ge=0),
+    x_fbos_internal_token: Optional[str] = Header(None, alias="X-FBOS-Internal-Token"),
+    db: AsyncSession = Depends(get_db_session),
+) -> EmployeesResponse:
+    """
+    People (HR) asks who it may create employee records for. The caller already checked the
+    signed-in user's permission; only active users of type `employee` are ever answered.
+    """
+    verify_internal_caller(x_fbos_internal_token)
+    return await active_employees(db, organization_id, search, user_id, limit, offset)
 
 
 @internal_router.get(

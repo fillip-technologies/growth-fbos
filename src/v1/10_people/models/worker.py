@@ -7,6 +7,7 @@ from sqlalchemy import (
     Date,
     DateTime,
     ForeignKey,
+    Index,
     JSON,
     Numeric,
     String,
@@ -29,11 +30,14 @@ class Worker(Base):
     __tablename__ = "workers"
     __table_args__ = (
         UniqueConstraint("organization_id", "worker_code", name="uq_workers_org_code"),
+        # One worker per identity user. Workers without a login (user_id NULL) are not constrained.
+        Index("uq_workers_org_user", "organization_id", "user_id", unique=True),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(UUIDType, primary_key=True, default=uuid.uuid4)
     organization_id: Mapped[uuid.UUID] = mapped_column(UUIDType, nullable=False, index=True)
-    worker_code: Mapped[str] = mapped_column(String(50), nullable=False, index=True)  # EMP-YYYY-XXXX
+    # EMP-YYYY-XXXX; may be left empty and filled in later (NULLs do not collide in the unique constraint).
+    worker_code: Mapped[Optional[str]] = mapped_column(String(50), nullable=True, index=True)
     user_id: Mapped[Optional[uuid.UUID]] = mapped_column(UUIDType, nullable=True, index=True)
 
     # Personal Information

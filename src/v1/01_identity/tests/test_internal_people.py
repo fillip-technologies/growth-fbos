@@ -183,3 +183,57 @@ async def test_unit_heads_need_the_internal_token_when_configured(async_client, 
     params = {"organization_id": str(TEST_ORG_ID), "unit_id": structure["inside"]}
     assert (await async_client.get(UNIT_HEADS, params=params)).status_code == 403
     assert (await async_client.get(UNIT_HEADS, params=params, headers={"X-FBOS-Internal-Token": "s3cret"})).status_code == 200
+
+
+EMPLOYEES = f"{API}/internal/people/employees"
+# The test organization already holds "Test User"; narrowing by this domain leaves only the people a test adds.
+ADDED = {"search": "@example.com", "limit": 100}
+
+
+async def employees(client, **params) -> dict:
+    res = await client.get(EMPLOYEES, params={"organization_id": str(TEST_ORG_ID), **ADDED, **params})
+    assert res.status_code == 200, res.text
+    return res.json()
+
+
+def employee_names(body: dict) -> list[str]:
+    return [e["name"] for e in body["data"] if e["email"] != "test@example.com"]
+
+
+@pytest.mark.asyncio
+async def test_employees_are_only_active_employee_users(async_client, db_session):
+    await make_person(db_session, "Asha")
+    await make_person(db_session, "Bina", status="deactivated")
+    admin = await make_person(db_session, "Chetan")
+    admin.user_type = "client_admin"
+    await db_session.commit()
+
+    body = await employees(async_client)
+    assert employee_names(body) == ["Asha"]
+    asha = next(e for e in body["data"] if e["name"] == "Asha")
+    assert asha["email"] == "asha@example.com"
+    assert body["has_more"] is False
+
+
+@pytest.mark.asyncio
+async def test_employees_can_be_searched_asked_for_by_id_and_paged(async_client, db_session):
+    asha = await make_person(db_session, "Asha")
+    await make_person(db_session, "Bina")
+    await make_person(db_session, "Chetan")
+    await db_session.commit()
+
+    assert employee_names(await employees(async_client, search="bina")) == ["Bina"]
+    assert employee_names(await employees(async_client, user_id=str(asha.id))) == ["Asha"]
+
+    first = await employees(async_client, limit=2)
+    assert [e["name"] for e in first["data"]] == ["Asha", "Bina"] and first["has_more"] is True
+    # The fixture's own "Test User" sorts last.
+    second = await employees(async_client, limit=2, offset=2)
+    assert [e["name"] for e in second["data"]] == ["Chetan", "Test User"] and second["has_more"] is False
+
+
+@pytest.mark.asyncio
+async def test_employees_of_another_organization_are_not_answered(async_client, db_session):
+    await make_person(db_session, "Asha")
+    await db_session.commit()
+    assert (await employees(async_client, organization_id=str(uuid.uuid4())))["data"] == []

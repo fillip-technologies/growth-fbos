@@ -3,19 +3,24 @@ from datetime import date
 from typing import Optional
 
 from sqlalchemy import func, or_, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from exceptions import ConflictError, ValidationFailedError, WorkerNotFoundError
 from models.worker import Worker, WorkerDocument, WorkerTimelineEvent
 from schemas.common import PageMeta
 from schemas.worker import (
+    ImportableUser,
     TimelineEventCreate,
     WorkerCreate,
     WorkerDetailResponse,
+    WorkerImportItem,
+    WorkerImportSkipped,
     WorkerResponse,
     WorkerUpdate,
 )
 from services.codes import next_worker_code
+from services.identity_client import IdentityClient, IdentityEmployee
 from services.pagination import paginate
 
 
@@ -169,6 +174,13 @@ async def update_worker(
 
     update_dict = data.model_dump(exclude_unset=True)
 
+    # The employee code can be filled in later; a blank one clears it.
+    if "worker_code" in update_dict:
+        update_dict["worker_code"] = (update_dict["worker_code"] or "").strip() or None
+        new_code = update_dict["worker_code"]
+        if new_code and new_code != worker.worker_code and await _worker_code_taken(session, organization_id, new_code):
+            raise ConflictError(f"Worker code '{new_code}' is already assigned")
+
     # Validate work email uniqueness if updated
     if "work_email" in update_dict and update_dict["work_email"] != worker.work_email:
         existing_email = (
@@ -248,7 +260,7 @@ async def list_workers(
         )
 
     rows, page = await paginate(
-        session, stmt, Worker, limit=limit, cursor=cursor, order_by=Worker.worker_code, descending=False
+        session, stmt, Worker, limit=limit, cursor=cursor, order_by=Worker.created_at, descending=False
     )
     return [_worker_to_response(w) for w in rows], page
 
@@ -345,3 +357,228 @@ async def add_timeline_event(
     session.add(event)
     await session.flush()
     return event
+
+
+# --- Creating workers from identity users -------------------------------------------------------
+
+IDENTITY_FETCH_SIZE = 100
+# Pages of identity users read for one importable list; most may already be linked.
+MAX_IDENTITY_FETCHES = 5
+
+SKIP_NOT_ACTIVE_EMPLOYEE = "not_an_active_employee"
+SKIP_ALREADY_LINKED = "already_linked"
+SKIP_DUPLICATE_IN_REQUEST = "duplicate_in_request"
+SKIP_EMAIL_TAKEN = "work_email_taken"
+SKIP_CODE_TAKEN = "worker_code_taken"
+
+
+async def _worker_code_taken(session: AsyncSession, organization_id: uuid.UUID, code: str) -> bool:
+    found = await session.execute(
+        select(Worker.id).where(Worker.organization_id == organization_id, Worker.worker_code == code)
+    )
+    return found.first() is not None
+
+
+async def _linked_user_ids(session: AsyncSession, organization_id: uuid.UUID, user_ids: list[uuid.UUID]) -> set[uuid.UUID]:
+    if not user_ids:
+        return set()
+    rows = await session.execute(
+        select(Worker.user_id).where(Worker.organization_id == organization_id, Worker.user_id.in_(user_ids))
+    )
+    return set(rows.scalars().all())
+
+
+def _to_importable(employee: IdentityEmployee) -> ImportableUser:
+    return ImportableUser(
+        user_id=employee.id,
+        name=employee.name,
+        email=employee.email,
+        phone=employee.phone,
+        employee_code=employee.employee_code,
+        unit_id=employee.home_unit_id,
+        manager_user_id=employee.manager_user_id,
+    )
+
+
+def _parse_offset(cursor: Optional[str]) -> int:
+    try:
+        offset = int(cursor) if cursor else 0
+    except ValueError:
+        raise ValidationFailedError("cursor", "Malformed cursor") from None
+    if offset < 0:
+        raise ValidationFailedError("cursor", "Malformed cursor")
+    return offset
+
+
+async def list_importable_users(
+    session: AsyncSession,
+    identity: IdentityClient,
+    organization_id: uuid.UUID,
+    search: Optional[str],
+    limit: int,
+    cursor: Optional[str],
+) -> tuple[list[ImportableUser], PageMeta]:
+    """
+    Identity's active employee users that have no worker yet. Identity pages the users; the ones
+    already linked are dropped here, so several identity pages may be read to fill one answer.
+    The cursor is the position in identity's list.
+    """
+    next_offset = _parse_offset(cursor)
+    rows: list[ImportableUser] = []
+
+    for _ in range(MAX_IDENTITY_FETCHES):
+        page = await identity.list_employees(
+            organization_id, search=search, limit=IDENTITY_FETCH_SIZE, offset=next_offset
+        )
+        linked = await _linked_user_ids(session, organization_id, [employee.id for employee in page.data])
+        for position, employee in enumerate(page.data, start=1):
+            if employee.id in linked:
+                continue
+            rows.append(_to_importable(employee))
+            if len(rows) == limit:
+                has_more = position < len(page.data) or page.has_more
+                return rows, _page_meta(next_offset + position, has_more, limit)
+        next_offset += len(page.data)
+        if not page.has_more:
+            return rows, _page_meta(next_offset, False, limit)
+
+    return rows, _page_meta(next_offset, True, limit)
+
+
+def _page_meta(next_offset: int, has_more: bool, limit: int) -> PageMeta:
+    return PageMeta(next_cursor=str(next_offset) if has_more else None, has_more=has_more, limit=limit)
+
+
+def _split_name(name: str) -> tuple[str, str]:
+    first, _, last = name.strip().partition(" ")
+    return first, last.strip()
+
+
+async def import_workers_from_users(
+    session: AsyncSession,
+    identity: IdentityClient,
+    organization_id: uuid.UUID,
+    items: list[WorkerImportItem],
+) -> tuple[list[Worker], list[WorkerImportSkipped]]:
+    """
+    Create a worker for each requested identity user. Every user is checked with identity again
+    (active, employee type, this organization), so the ids sent by the client are never trusted.
+    Users that cannot be imported are reported with a reason; the rest still are.
+    """
+    skipped: list[WorkerImportSkipped] = []
+    unique_items: dict[uuid.UUID, WorkerImportItem] = {}
+    for item in items:
+        if item.user_id in unique_items:
+            skipped.append(WorkerImportSkipped(user_id=item.user_id, reason=SKIP_DUPLICATE_IN_REQUEST))
+        else:
+            unique_items[item.user_id] = item
+
+    page = await identity.list_employees(
+        organization_id, user_ids=list(unique_items), limit=len(unique_items)
+    )
+    employees = {employee.id: employee for employee in page.data}
+    linked = await _linked_user_ids(session, organization_id, list(unique_items))
+
+    created: list[Worker] = []
+    for user_id, item in unique_items.items():
+        employee = employees.get(user_id)
+        if employee is None:
+            skipped.append(WorkerImportSkipped(user_id=user_id, reason=SKIP_NOT_ACTIVE_EMPLOYEE))
+        elif user_id in linked:
+            skipped.append(WorkerImportSkipped(user_id=user_id, reason=SKIP_ALREADY_LINKED))
+        elif reason := await _import_one(session, organization_id, employee, item, created):
+            skipped.append(WorkerImportSkipped(user_id=user_id, reason=reason))
+
+    await _link_managers(session, organization_id, created, employees)
+    return created, skipped
+
+
+async def _import_one(
+    session: AsyncSession,
+    organization_id: uuid.UUID,
+    employee: IdentityEmployee,
+    item: WorkerImportItem,
+    created: list[Worker],
+) -> Optional[str]:
+    """Create one worker and append it to `created`; the reason it was skipped, if it was."""
+    email_taken = await session.execute(
+        select(Worker.id).where(Worker.organization_id == organization_id, Worker.work_email == employee.email)
+    )
+    if email_taken.first():
+        return SKIP_EMAIL_TAKEN
+
+    explicit_code = (item.worker_code or "").strip() or None
+    worker_code = explicit_code or (employee.employee_code or "").strip() or None
+    if worker_code and await _worker_code_taken(session, organization_id, worker_code):
+        if explicit_code:
+            return SKIP_CODE_TAKEN
+        worker_code = None  # identity's own code collides; the code can be filled in later
+
+    first_name, last_name = _split_name(employee.name)
+    worker = Worker(
+        organization_id=organization_id,
+        worker_code=worker_code,
+        user_id=employee.id,
+        first_name=first_name,
+        last_name=last_name,
+        work_email=employee.email,
+        phone=employee.phone,
+        unit_id=employee.home_unit_id,
+        designation=item.designation.strip(),
+        employment_type=item.employment_type,
+        status="active",
+        date_of_joining=item.date_of_joining,
+    )
+    try:
+        async with session.begin_nested():
+            session.add(worker)
+            await session.flush()
+    except IntegrityError:
+        return SKIP_ALREADY_LINKED  # a concurrent import linked this user first
+
+    session.add(
+        WorkerTimelineEvent(
+            organization_id=organization_id,
+            worker_id=worker.id,
+            event_category="hire",
+            title=f"Joined as {worker.designation}",
+            description="Created from an existing user",
+            effective_date=worker.date_of_joining,
+            new_state={
+                "designation": worker.designation,
+                "unit_id": str(worker.unit_id) if worker.unit_id else None,
+                "source": "identity_import",
+            },
+        )
+    )
+    created.append(worker)
+    return None
+
+
+async def _link_managers(
+    session: AsyncSession,
+    organization_id: uuid.UUID,
+    created: list[Worker],
+    employees: dict[uuid.UUID, IdentityEmployee],
+) -> None:
+    """Point each new worker at their manager's worker, when the manager (a user) has one."""
+    manager_user_ids = {
+        employees[worker.user_id].manager_user_id
+        for worker in created
+        if worker.user_id and employees[worker.user_id].manager_user_id
+    }
+    if not manager_user_ids:
+        return
+    rows = await session.execute(
+        select(Worker.user_id, Worker.id).where(
+            Worker.organization_id == organization_id, Worker.user_id.in_(manager_user_ids)
+        )
+    )
+    worker_by_user = {user_id: worker_id for user_id, worker_id in rows.all()}
+    for worker in created:
+        manager_user_id = employees[worker.user_id].manager_user_id if worker.user_id else None
+        manager_worker_id = worker_by_user.get(manager_user_id) if manager_user_id else None
+        if manager_worker_id and manager_worker_id != worker.id:
+            worker.manager_id = manager_worker_id
+            await session.flush()
+            await session.refresh(worker)  # the update refreshed `updated_at` server-side
