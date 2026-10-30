@@ -112,6 +112,14 @@ services:
       APP_ENV: production
       DEBUG: "false"
 
+  people:
+    restart: always
+    ports:
+      - "127.0.0.1:8010:8000"
+    environment:
+      APP_ENV: production
+      DEBUG: "false"
+
   db:
     restart: always
 
