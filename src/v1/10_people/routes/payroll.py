@@ -50,7 +50,9 @@ async def create_salary_structure_endpoint(
     Supports historical back-dated effective dates for existing workforce import.
     """
     actor.require_permission(COMPENSATION_MANAGE)
-    return await create_salary_structure(session, org_id, data)
+    result = await create_salary_structure(session, org_id, data)
+    await session.commit()
+    return result
 
 
 @router.get("/salary-structures/{worker_id}", response_model=Optional[SalaryStructureResponse])
@@ -79,7 +81,9 @@ async def submit_reimbursement_endpoint(
     data: ReimbursementClaimCreate,
 ):
     actor.require_permission(COMPENSATION_READ)
-    return await submit_reimbursement(session, org_id, data)
+    result = await submit_reimbursement(session, org_id, data)
+    await session.commit()
+    return result
 
 
 @router.get("/reimbursements", response_model=List[ReimbursementClaimResponse])
@@ -104,7 +108,9 @@ async def approve_reimbursement_endpoint(
     approved: bool = Query(True),
 ):
     actor.require_permission(COMPENSATION_MANAGE)
-    return await approve_reimbursement(session, org_id, id, user_id, approved)
+    result = await approve_reimbursement(session, org_id, id, user_id, approved)
+    await session.commit()
+    return result
 
 
 # ---------------------------------------------------------
@@ -123,7 +129,9 @@ async def calculate_payroll_run_endpoint(
     data: PayrollRunCreate,
 ):
     actor.require_permission(COMPENSATION_MANAGE)
-    return await calculate_payroll_run(session, org_id, user_id, data)
+    result = await calculate_payroll_run(session, org_id, user_id, data)
+    await session.commit()
+    return result
 
 
 @router.get("/payroll/runs", response_model=List[PayrollRunResponse])
@@ -155,4 +163,6 @@ async def disburse_payroll_run_endpoint(
     actor: CurrentActor,
 ):
     actor.require_permission(COMPENSATION_MANAGE)
-    return await disburse_payroll_run(session, org_id, id)
+    result = await disburse_payroll_run(session, org_id, id)
+    await session.commit()
+    return result

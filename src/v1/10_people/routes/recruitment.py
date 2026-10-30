@@ -58,7 +58,9 @@ async def create_requisition_endpoint(
     data: JobRequisitionCreate,
 ):
     actor.require_permission(RECRUITMENT_MANAGE)
-    return await create_requisition(session, org_id, data)
+    result = await create_requisition(session, org_id, data)
+    await session.commit()
+    return result
 
 
 @router.get("/requisitions", response_model=List[JobRequisitionResponse])
@@ -93,7 +95,9 @@ async def update_requisition_endpoint(
     actor: CurrentActor,
 ):
     actor.require_permission(RECRUITMENT_MANAGE)
-    return await update_requisition(session, org_id, id, data)
+    result = await update_requisition(session, org_id, id, data)
+    await session.commit()
+    return result
 
 
 # ---------------------------------------------------------
@@ -111,7 +115,9 @@ async def create_candidate_endpoint(
     data: CandidateCreate,
 ):
     actor.require_permission(RECRUITMENT_MANAGE)
-    return await create_candidate(session, org_id, data)
+    result = await create_candidate(session, org_id, data)
+    await session.commit()
+    return result
 
 
 @router.get("/candidates", response_model=List[CandidateResponse])
@@ -151,7 +157,9 @@ async def apply_for_job_endpoint(
     data: JobApplicationCreate,
 ):
     actor.require_permission(RECRUITMENT_MANAGE)
-    return await apply_for_job(session, org_id, data.candidate_id, data.requisition_id)
+    result = await apply_for_job(session, org_id, data.candidate_id, data.requisition_id)
+    await session.commit()
+    return result
 
 
 @router.get("/applications", response_model=List[JobApplicationResponse])
@@ -175,7 +183,9 @@ async def transition_stage_endpoint(
     actor: CurrentActor,
 ):
     actor.require_permission(RECRUITMENT_MANAGE)
-    return await transition_application_stage(session, org_id, id, data.stage, data.rejection_reason)
+    result = await transition_application_stage(session, org_id, id, data.stage, data.rejection_reason)
+    await session.commit()
+    return result
 
 
 # ---------------------------------------------------------
@@ -194,7 +204,9 @@ async def submit_scorecard_endpoint(
     actor: CurrentActor,
 ):
     actor.require_permission(RECRUITMENT_MANAGE)
-    return await submit_scorecard(session, org_id, id, data)
+    result = await submit_scorecard(session, org_id, id, data)
+    await session.commit()
+    return result
 
 
 @router.get("/applications/{id}/scorecards", response_model=List[ScorecardResponse])
@@ -224,7 +236,9 @@ async def create_offer_endpoint(
     actor: CurrentActor,
 ):
     actor.require_permission(RECRUITMENT_MANAGE)
-    return await create_offer(session, org_id, id, data)
+    result = await create_offer(session, org_id, id, data)
+    await session.commit()
+    return result
 
 
 @router.post(
@@ -240,5 +254,7 @@ async def accept_and_onboard_endpoint(
     actor: CurrentActor,
 ):
     actor.require_permission(RECRUITMENT_MANAGE)
-    return await accept_and_onboard_candidate(session, org_id, id, data)
+    result = await accept_and_onboard_candidate(session, org_id, id, data)
+    await session.commit()
+    return result
 

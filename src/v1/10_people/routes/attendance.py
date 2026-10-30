@@ -47,7 +47,9 @@ async def create_shift_endpoint(
     data: WorkShiftCreate,
 ):
     actor.require_permission(ATTENDANCE_MANAGE)
-    return await create_shift(session, org_id, data)
+    result = await create_shift(session, org_id, data)
+    await session.commit()
+    return result
 
 
 @router.get("/shifts", response_model=List[WorkShiftResponse])
@@ -71,7 +73,9 @@ async def clock_in_endpoint(
     data: ClockInRequest,
 ):
     actor.require_permission(ATTENDANCE_READ)
-    return await clock_in(session, org_id, data)
+    result = await clock_in(session, org_id, data)
+    await session.commit()
+    return result
 
 
 @router.post("/attendance/clock-out", response_model=DailyAttendanceResponse)
@@ -82,7 +86,9 @@ async def clock_out_endpoint(
     data: ClockOutRequest,
 ):
     actor.require_permission(ATTENDANCE_READ)
-    return await clock_out(session, org_id, data)
+    result = await clock_out(session, org_id, data)
+    await session.commit()
+    return result
 
 
 @router.post(
@@ -98,7 +104,9 @@ async def create_attendance_record_endpoint(
 ):
     """Direct attendance entry for historical back-dating and existing employee data import."""
     actor.require_permission(ATTENDANCE_MANAGE)
-    return await create_attendance_record(session, org_id, data)
+    result = await create_attendance_record(session, org_id, data)
+    await session.commit()
+    return result
 
 
 @router.get("/attendance", response_model=List[DailyAttendanceResponse])
@@ -133,7 +141,9 @@ async def claim_overtime_endpoint(
     data: OvertimeClaimCreate,
 ):
     actor.require_permission(ATTENDANCE_READ)
-    return await claim_overtime(session, org_id, data)
+    result = await claim_overtime(session, org_id, data)
+    await session.commit()
+    return result
 
 
 @router.patch("/overtime/claims/{id}/approve", response_model=OvertimeResponse)
@@ -146,7 +156,9 @@ async def approve_overtime_endpoint(
     approved: bool = Query(True),
 ):
     actor.require_permission(ATTENDANCE_MANAGE)
-    return await approve_overtime(session, org_id, id, user_id, approved)
+    result = await approve_overtime(session, org_id, id, user_id, approved)
+    await session.commit()
+    return result
 
 
 # ---------------------------------------------------------
@@ -164,7 +176,9 @@ async def create_regularization_endpoint(
     data: AttendanceRegularizationCreate,
 ):
     actor.require_permission(ATTENDANCE_READ)
-    return await create_regularization(session, org_id, data)
+    result = await create_regularization(session, org_id, data)
+    await session.commit()
+    return result
 
 
 @router.patch(
@@ -180,4 +194,6 @@ async def approve_regularization_endpoint(
     approved: bool = Query(True),
 ):
     actor.require_permission(ATTENDANCE_MANAGE)
-    return await approve_regularization(session, org_id, id, user_id, approved)
+    result = await approve_regularization(session, org_id, id, user_id, approved)
+    await session.commit()
+    return result

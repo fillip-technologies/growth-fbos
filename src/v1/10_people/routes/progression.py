@@ -44,7 +44,9 @@ async def record_compensation_revision_endpoint(
     data: CompensationRevisionCreate,
 ):
     actor.require_permission(COMPENSATION_MANAGE)
-    return await record_compensation_revision(session, org_id, id, user_id, data)
+    result = await record_compensation_revision(session, org_id, id, user_id, data)
+    await session.commit()
+    return result
 
 
 @router.get(
@@ -78,7 +80,9 @@ async def record_promotion_endpoint(
     data: PromotionCreate,
 ):
     actor.require_permission(EMPLOYEE_MANAGE)
-    return await record_promotion(session, org_id, id, user_id, data)
+    result = await record_promotion(session, org_id, id, user_id, data)
+    await session.commit()
+    return result
 
 
 @router.get(
@@ -112,7 +116,9 @@ async def award_bonus_endpoint(
     data: BonusDisbursementCreate,
 ):
     actor.require_permission(COMPENSATION_MANAGE)
-    return await award_bonus(session, org_id, id, user_id, data)
+    result = await award_bonus(session, org_id, id, user_id, data)
+    await session.commit()
+    return result
 
 
 @router.get(
