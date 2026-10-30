@@ -24,6 +24,7 @@ DEFAULT_CATEGORIES = [
     ("invoice", "Invoice PDF", "internal"),
     ("report", "Report", "internal"),
     ("policy", "Policy Document", "internal"),
+    ("employee_record", "Employee Record", "restricted"),
 ]
 
 
