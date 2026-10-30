@@ -77,12 +77,6 @@ class Worker(Base):
     resignation_date: Mapped[Optional[date]] = mapped_column(Date, nullable=True)
     last_working_date: Mapped[Optional[date]] = mapped_column(Date, nullable=True)
 
-    # Financial & Compliance Metadata
-    bank_name: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
-    bank_account_no: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
-    ifsc_code: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
-    tax_id: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)  # PAN, SSN, Tax ID
-
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
@@ -141,21 +135,90 @@ class WorkerTimelineEvent(Base):
 
 class WorkerDocument(Base):
     """
-    Compliance and personal documents attached to a worker (vaulted in 05_documents).
+    One document of an employee's file (PAN, Aadhaar, contract, ...): its ID number (encrypted),
+    dates, the scanned file (kept in 05_documents) and where it stands in verification.
     """
 
     __tablename__ = "worker_documents"
+    __table_args__ = (
+        UniqueConstraint("organization_id", "worker_id", "document_type", name="uq_worker_documents_type"),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(UUIDType, primary_key=True, default=uuid.uuid4)
     organization_id: Mapped[uuid.UUID] = mapped_column(UUIDType, nullable=False, index=True)
     worker_id: Mapped[uuid.UUID] = mapped_column(
         UUIDType, ForeignKey("workers.id", ondelete="CASCADE"), nullable=False, index=True
     )
-    document_type: Mapped[str] = mapped_column(
-        String(50), nullable=False, index=True
-    )  # id_proof, address_proof, degree, offer_letter, signed_contract, nda, tax_doc
-    document_id: Mapped[uuid.UUID] = mapped_column(UUIDType, nullable=False, index=True)  # in 05_documents
-    file_name: Mapped[str] = mapped_column(String(255), nullable=False)
+    document_type: Mapped[str] = mapped_column(String(50), nullable=False, index=True)  # see services/document_catalog.py
+    number_encrypted: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    number_last4: Mapped[Optional[str]] = mapped_column(String(8), nullable=True)
+    name_on_document: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    issued_on: Mapped[Optional[date]] = mapped_column(Date, nullable=True)
+    expires_on: Mapped[Optional[date]] = mapped_column(Date, nullable=True)
+    issuing_authority: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    document_id: Mapped[Optional[uuid.UUID]] = mapped_column(UUIDType, nullable=True, index=True)  # in 05_documents
+    file_name: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    status: Mapped[str] = mapped_column(String(20), nullable=False, default="pending", index=True)  # pending, uploaded, verified, rejected
+    rejection_reason: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     verified: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     verified_by: Mapped[Optional[uuid.UUID]] = mapped_column(UUIDType, nullable=True)
     verified_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False
+    )
+
+
+class WorkerBankAccount(Base):
+    """A bank account an employee can be paid into. The account number is encrypted."""
+
+    __tablename__ = "worker_bank_accounts"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUIDType, primary_key=True, default=uuid.uuid4)
+    organization_id: Mapped[uuid.UUID] = mapped_column(UUIDType, nullable=False, index=True)
+    worker_id: Mapped[uuid.UUID] = mapped_column(
+        UUIDType, ForeignKey("workers.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    account_holder_name: Mapped[str] = mapped_column(String(255), nullable=False)
+    bank_name: Mapped[str] = mapped_column(String(150), nullable=False)
+    branch: Mapped[Optional[str]] = mapped_column(String(150), nullable=True)
+    account_number_encrypted: Mapped[str] = mapped_column(Text, nullable=False)
+    account_last4: Mapped[str] = mapped_column(String(8), nullable=False)
+    ifsc: Mapped[str] = mapped_column(String(11), nullable=False)
+    account_type: Mapped[str] = mapped_column(String(20), nullable=False, default="savings")  # savings, current
+    upi_id: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    is_primary: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    status: Mapped[str] = mapped_column(String(20), nullable=False, default="pending", index=True)  # pending, verified, inactive
+    proof_document_id: Mapped[Optional[uuid.UUID]] = mapped_column(UUIDType, nullable=True)  # in 05_documents
+    verified_by: Mapped[Optional[uuid.UUID]] = mapped_column(UUIDType, nullable=True)
+    verified_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False
+    )
+
+
+class OnboardingRequirement(Base):
+    """Whether a company requires an onboarding item (a document type, or the bank account)."""
+
+    __tablename__ = "onboarding_requirements"
+    __table_args__ = (UniqueConstraint("organization_id", "item_code", name="uq_onboarding_requirement"),)
+
+    id: Mapped[uuid.UUID] = mapped_column(UUIDType, primary_key=True, default=uuid.uuid4)
+    organization_id: Mapped[uuid.UUID] = mapped_column(UUIDType, nullable=False, index=True)
+    item_code: Mapped[str] = mapped_column(String(50), nullable=False)
+    is_required: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+
+
+class SensitiveAccessLog(Base):
+    """Who revealed, changed or verified an employee's ID or bank numbers, and when."""
+
+    __tablename__ = "sensitive_access_log"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUIDType, primary_key=True, default=uuid.uuid4)
+    organization_id: Mapped[uuid.UUID] = mapped_column(UUIDType, nullable=False, index=True)
+    worker_id: Mapped[uuid.UUID] = mapped_column(UUIDType, nullable=False, index=True)
+    actor_user_id: Mapped[uuid.UUID] = mapped_column(UUIDType, nullable=False)
+    action: Mapped[str] = mapped_column(String(30), nullable=False)  # reveal, update, verify, reject
+    target: Mapped[str] = mapped_column(String(100), nullable=False)  # "document:pan", "bank_account:<id>"
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)

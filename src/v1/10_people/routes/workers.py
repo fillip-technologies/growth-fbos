@@ -37,14 +37,6 @@ WORKER_PICKER_PERMISSIONS = (
     permissions.COMPENSATION_READ,
     permissions.SEPARATION_MANAGE,
 )
-SENSITIVE_WORKER_FIELDS = ("bank_name", "bank_account_no", "ifsc_code", "tax_id")
-
-
-def _redact_sensitive(actor, row: dict) -> dict:
-    """Banking and tax identifiers are only for those who manage employees or read compensation."""
-    if actor.has(permissions.EMPLOYEE_MANAGE) or actor.has(permissions.COMPENSATION_READ):
-        return row
-    return {**row, **{field: None for field in SENSITIVE_WORKER_FIELDS}}
 
 
 @router.get(
@@ -68,7 +60,7 @@ async def list_workers(
     rows, page = await service.list_workers(
         session, org_id, unit_id=unit_id, status=status, search=search, limit=limit, cursor=cursor
     )
-    return PageResponse(data=[_redact_sensitive(actor, row) for row in rows], page=page)
+    return PageResponse(data=rows, page=page)
 
 
 @router.get(
@@ -138,7 +130,7 @@ async def get_worker_detail(
     """
     Retrieve full 360° employee profile with reporting line, direct reports count, and career timeline.
     """
-    return _redact_sensitive(actor, await service.get_worker_detail(session, org_id, worker_id))
+    return await service.get_worker_detail(session, org_id, worker_id)
 
 
 @router.patch("/{worker_id}", response_model=WorkerResponse, dependencies=[Depends(require_permission(permissions.EMPLOYEE_MANAGE))])

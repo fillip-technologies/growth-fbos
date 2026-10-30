@@ -112,3 +112,33 @@ class ConflictError(HTTPException):
             status_code=status.HTTP_409_CONFLICT,
             detail={"code": code, "message": message, "status": 409},
         )
+
+
+class EncryptionUnavailableError(HTTPException):
+    """503: ID and bank numbers cannot be stored or read until FIELD_ENCRYPTION_KEY is set."""
+
+    def __init__(self) -> None:
+        super().__init__(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail={
+                "code": "ENCRYPTION_UNAVAILABLE",
+                "message": "ID and bank numbers cannot be saved or shown right now. Ask an administrator to set up field encryption.",
+                "status": 503,
+            },
+        )
+
+
+class WorkerDocumentNotFoundError(HTTPException):
+    def __init__(self, document_type: str) -> None:
+        super().__init__(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={"code": "WORKER_DOCUMENT_NOT_FOUND", "message": f"No '{document_type}' record for this employee", "status": 404},
+        )
+
+
+class BankAccountNotFoundError(HTTPException):
+    def __init__(self) -> None:
+        super().__init__(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={"code": "BANK_ACCOUNT_NOT_FOUND", "message": "Bank account not found", "status": 404},
+        )

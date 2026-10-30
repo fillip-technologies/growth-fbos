@@ -39,12 +39,6 @@ class WorkerBase(BaseModel):
     last_working_date: Optional[date] = None
 
 
-    # Banking & Tax Details
-    bank_name: Optional[str] = None
-    bank_account_no: Optional[str] = None
-    ifsc_code: Optional[str] = None
-    tax_id: Optional[str] = None
-
 
 class WorkerCreate(WorkerBase):
     user_id: Optional[uuid.UUID] = None  # Link to existing user in 01_identity if already created
@@ -79,11 +73,6 @@ class WorkerUpdate(BaseModel):
     confirmation_date: Optional[date] = None
     resignation_date: Optional[date] = None
     last_working_date: Optional[date] = None
-
-    bank_name: Optional[str] = None
-    bank_account_no: Optional[str] = None
-    ifsc_code: Optional[str] = None
-    tax_id: Optional[str] = None
 
 
 class TimelineEventCreate(BaseModel):

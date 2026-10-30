@@ -148,7 +148,7 @@ services:
     environment:
       # Service-to-service URLs inside the compose network (override the .env's localhost defaults)
       IDENTITY_SERVICE_URL: http://identity:8000
-      SUBJECT_SERVICES: '{"revenue": "http://revenue:8000/api/revenue/v1", "delivery": "http://delivery:8000/api/delivery/v1"}'
+      SUBJECT_SERVICES: '{"revenue": "http://revenue:8000/api/revenue/v1", "delivery": "http://delivery:8000/api/delivery/v1", "people": "http://people:8000/api/people/v1"}'
     depends_on:
       db:
         condition: service_healthy

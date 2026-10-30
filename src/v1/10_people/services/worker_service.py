@@ -54,11 +54,6 @@ def _worker_to_response(w: Worker) -> dict:
         "confirmation_date": w.confirmation_date,
         "resignation_date": w.resignation_date,
         "last_working_date": w.last_working_date,
-        "bank_name": w.bank_name,
-
-        "bank_account_no": w.bank_account_no,
-        "ifsc_code": w.ifsc_code,
-        "tax_id": w.tax_id,
         "created_at": w.created_at,
         "updated_at": w.updated_at,
     }
@@ -134,10 +129,6 @@ async def create_worker(
         date_of_joining=data.date_of_joining,  # Fully supports past back-dated joining dates
         probation_end_date=data.probation_end_date,
         confirmation_date=data.confirmation_date,
-        bank_name=data.bank_name,
-        bank_account_no=data.bank_account_no,
-        ifsc_code=data.ifsc_code,
-        tax_id=data.tax_id,
     )
     session.add(worker)
     await session.flush()

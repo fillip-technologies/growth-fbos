@@ -36,6 +36,10 @@ class Settings(BaseSettings):
             )
         return self
 
+    # Fernet key (urlsafe base64, 32 bytes) that encrypts ID and bank account numbers. While it is
+    # empty or invalid the service still runs; only saving or revealing those numbers answers 503.
+    field_encryption_key: str = ""
+
     identity_service_url: str = "http://identity:8000"
     internal_service_token: str = ""
     identity_timeout_seconds: float = 5.0

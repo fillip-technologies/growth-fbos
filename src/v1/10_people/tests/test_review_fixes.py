@@ -187,11 +187,8 @@ async def test_exit_requires_clearance_and_settlement_in_order(async_client):
 
 
 @pytest.mark.asyncio
-async def test_worker_directory_hides_banking_details_from_pickers(async_client):
+async def test_worker_pickers_get_no_id_or_bank_data(async_client):
     worker_id = await _worker(async_client, "banked@company.com")
-    await async_client.patch(
-        f"/v1/workers/{worker_id}", json={"bank_account_no": "1234567890", "tax_id": "ABCDE1234F"}
-    )
 
     app.dependency_overrides[get_actor] = lambda: Actor(
         user_id=uuid.uuid4(),
@@ -201,6 +198,8 @@ async def test_worker_directory_hides_banking_details_from_pickers(async_client)
         permissions=frozenset(["people.attendance.read"]),
     )
     listed = (await async_client.get("/v1/workers")).json()["data"]
-    assert listed and listed[0]["bank_account_no"] is None and listed[0]["tax_id"] is None
-    # ...but the full profile still needs employee.read
+    assert listed and not {"bank_account_no", "tax_id", "ifsc_code", "bank_name"} & set(listed[0])
+    # ...the full profile, the document checklist and bank accounts still need their permissions
     assert (await async_client.get(f"/v1/workers/{worker_id}")).status_code == 403
+    assert (await async_client.get(f"/v1/workers/{worker_id}/onboarding")).status_code == 403
+    assert (await async_client.get(f"/v1/workers/{worker_id}/bank-accounts")).status_code == 403

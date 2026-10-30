@@ -1,9 +1,11 @@
+import secrets
 import uuid
 from typing import Annotated, Awaitable, Callable, Optional
 
 from fastapi import Depends, Header, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from config import settings
 from database.session import get_db
 from exceptions import AuthenticationRequiredError, PermissionDeniedError
 from services.identity_client import Actor, IdentityClient
@@ -61,6 +63,19 @@ async def get_current_user_id(actor: CurrentActor) -> uuid.UUID:
     return actor.user_id
 
 
+def verify_internal_caller(
+    x_fbos_internal_token: Optional[str] = Header(None, alias="X-FBOS-Internal-Token"),
+) -> None:
+    """Guard for /internal/* endpoints: only other FBOS services may call them."""
+    expected = settings.internal_service_token
+    if not expected:
+        if settings.app_env == "development":
+            return
+        raise PermissionDeniedError("internal")
+    if not x_fbos_internal_token or not secrets.compare_digest(x_fbos_internal_token, expected):
+        raise PermissionDeniedError("internal")
+
+
 DatabaseSession = Annotated[AsyncSession, Depends(get_db)]
 OrgId = Annotated[uuid.UUID, Depends(get_organization_id)]
 UserId = Annotated[uuid.UUID, Depends(get_current_user_id)]
@@ -72,4 +87,5 @@ __all__ = [
     "UserId",
     "require_permission",
     "require_any_permission",
+    "verify_internal_caller",
 ]
