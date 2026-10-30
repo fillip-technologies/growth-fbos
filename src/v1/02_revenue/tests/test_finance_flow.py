@@ -393,7 +393,7 @@ async def test_debit_notes_are_payable_and_write_offs_change_no_tax(async_client
 
 
 async def test_staged_billing_with_partial_payment_and_tds(async_client: httpx.AsyncClient, fake_documents):
-    """docs/tax-and-finance-research.md §7.8: bill each stage, GST on what is billed, TDS tracked."""
+    """tax-and-finance-research.md §7.8 (git show 2522df7:docs/tax-and-finance-research.md): bill each stage, GST on what is billed, TDS tracked."""
     contract = await accepted_contract(async_client, fake_documents, [
         {"seq": 1, "trigger_type": "advance", "percent": 50},
         {"seq": 2, "trigger_type": "on_completion", "percent": 50},
