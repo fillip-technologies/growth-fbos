@@ -22,7 +22,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        service: [01_identity, 02_revenue, 03_delivery, 04_control, 05_documents, 06_communication, 09_assets]
+        service: [01_identity, 02_revenue, 03_delivery, 04_control, 05_documents, 06_communication, 09_assets, 10_people]
     defaults:
       run:
         working-directory: src/v1/${{ matrix.service }}
