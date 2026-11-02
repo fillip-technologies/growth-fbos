@@ -212,6 +212,8 @@ async def apply_declaration(
         )
         return EmploymentSyncResponse(user_id=user.id, status=user.status, applied=applied, problems=problems)
 
+    if user.people_managed_at is None:
+        user.people_managed_at = datetime.now(timezone.utc)  # their roles come from their job from now on
     await _apply_profile(session, user, declaration, applied, problems)
     await _apply_placement(session, user, declaration, applied, problems)
     if declaration.managed_roles is not None:
@@ -280,6 +282,8 @@ async def adopt_roles(
     later promotion replaces them. Nothing is granted or removed. Repeating it changes nothing.
     """
     user = await _load_employee(session, organization_id, user_id)
+    if user.people_managed_at is None:
+        user.people_managed_at = datetime.now(timezone.utc)
     codes = {c.lower() for c in request.role_codes}
     held = (
         await session.execute(

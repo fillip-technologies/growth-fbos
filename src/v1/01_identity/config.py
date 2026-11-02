@@ -49,6 +49,10 @@ class Settings(BaseSettings):
     # The caller's address is the entry just before theirs; anything further left the caller wrote.
     trusted_proxy_count: int = 2
 
+    # Access given by hand to someone whose roles come from their job in People is extra access: it must end,
+    # at most this many days after it is given.
+    extra_access_max_days: int = 90
+
     # Database
     database_url: str = ""
     db_ssl: bool = False

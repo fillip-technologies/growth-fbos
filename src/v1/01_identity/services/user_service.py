@@ -117,6 +117,7 @@ class UserService:
             teams=teams,
             manager=manager_ref,
             mfa_enabled=bool(cred and cred.otp_enabled),
+            managed_by_people=user.people_managed_at is not None,
             last_login_at=iso_utc(user.last_login_at),
             version=user.version,
             created_at=iso_utc(user.created_at),

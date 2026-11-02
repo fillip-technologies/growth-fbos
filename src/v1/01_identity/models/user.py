@@ -31,3 +31,6 @@ class User(Base):
     last_login_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=datetime.utcnow)
     version: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    # Since when People keeps this user's job (an employee record): their roles then come from their posts,
+    # and access given by hand is extra access, with an end date.
+    people_managed_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)

@@ -426,6 +426,7 @@ class RbacService:
             )],
         )
         user_permission_service.assert_can_grant(actor, grants)
+        user_permission_service.assert_extra_access_ends(user, grants, presets)
         already = (
             await session.execute(
                 select(RoleAssignment.id).where(

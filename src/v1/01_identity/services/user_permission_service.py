@@ -6,7 +6,7 @@ reads roles to make an access decision.
 """
 
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 import logging
 from typing import Optional
 import uuid
@@ -14,7 +14,8 @@ import uuid
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from exceptions import PermissionDeniedError, ValidationFailedError
+from config import settings
+from exceptions import ExtraAccessNeedsEndDateError, PermissionDeniedError, ValidationFailedError
 from models.org_unit import OrgUnit
 from models.rbac import PEOPLE_SOURCE, Permission, Role, RoleAssignment
 from models.user import User
@@ -298,6 +299,28 @@ class UserPermissionService:
                 source_ref=source_ref,
             ))
 
+    def assert_extra_access_ends(
+        self, user: User, grants: list[ResolvedGrant], presets: list[ResolvedPreset], now: Optional[datetime] = None
+    ) -> None:
+        """
+        Someone whose roles come from their job in People gets roles there, through an approved role change.
+        Access given to them by hand is extra access: each grant or preset added or changed needs an end date,
+        no later than `extra_access_max_days` from now. Taking access away is always allowed.
+        """
+        if user.people_managed_at is None:
+            return
+        now = now or datetime.now(timezone.utc)
+        latest = now + timedelta(days=settings.extra_access_max_days)
+        errors = [
+            {"field": f"{kind}.{code}.valid_to", "issue": "Extra access needs an end date"
+             if valid_to is None else f"Must end within {settings.extra_access_max_days} days"}
+            for kind, code, valid_to in [("permissions", g.code, g.valid_to) for g in grants]
+            + [("role_assignments", p.role.code, p.valid_to) for p in presets]
+            if valid_to is None or _as_utc(valid_to) > latest
+        ]
+        if errors:
+            raise ExtraAccessNeedsEndDateError(settings.extra_access_max_days, errors)
+
     async def replace_for_user(
         self,
         session: AsyncSession,
@@ -336,6 +359,7 @@ class UserPermissionService:
             )
 
         self.assert_can_grant(actor, added + changed)
+        self.assert_extra_access_ends(user, added + changed, [])
         for row in removed_rows + [current[g.key] for g in changed]:
             if not actor.can_grant(row_as_grant(row)):
                 raise PermissionDeniedError(
@@ -383,6 +407,7 @@ class UserPermissionService:
             role_codes = {rp.permission_code for rp in assignment.role.role_permissions} if assignment.role else set()
             if not role_codes or any((code, assignment.scope_unit_id) not in wanted for code in role_codes):
                 await session.delete(assignment)
+        self.assert_extra_access_ends(user, [], new_presets)
         await session.flush()
         self.add_to_user(session, actor.user_id, user, added, new_presets, reason)
         return sorted({g.code for g in added + changed}), sorted({r.permission_code for r in removed_rows})
