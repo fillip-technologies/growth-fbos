@@ -6,11 +6,11 @@ import pytest
 
 from dependencies import get_actor, get_identity_client
 from main import app
-from services.identity_client import Actor, IdentityEmployee, IdentityEmployeePage
+from services.identity_client import Actor, EmployeeRole, IdentityEmployee, IdentityEmployeePage
 from tests.conftest import TEST_ORG_ID
 
 
-def employee(name: str, *, code: Optional[str] = None, manager: Optional[uuid.UUID] = None) -> IdentityEmployee:
+def employee(name: str, *, code: Optional[str] = None, manager: Optional[uuid.UUID] = None, roles: tuple = ()) -> IdentityEmployee:
     return IdentityEmployee(
         id=uuid.uuid4(),
         name=name,
@@ -19,6 +19,7 @@ def employee(name: str, *, code: Optional[str] = None, manager: Optional[uuid.UU
         employee_code=code,
         manager_user_id=manager,
         home_unit_id=uuid.uuid4(),
+        roles=tuple(EmployeeRole(code=code_, name=role_name) for code_, role_name in roles),
     )
 
 
@@ -205,3 +206,56 @@ async def test_importing_needs_the_employee_manage_permission(async_client, iden
     assert (await async_client.post("/v1/workers/import-from-users", json={"users": []})).status_code in (403, 422)
     asha, *_ = identity.employees
     assert (await async_client.post("/v1/workers/import-from-users", json={"users": [item(asha)]})).status_code == 403
+
+
+def without_designation(user: IdentityEmployee, **extra) -> dict:
+    return {"user_id": str(user.id), "date_of_joining": "2024-01-15", **extra}
+
+
+@pytest.fixture
+def identity_with_roles():
+    people = [
+        employee("Asha Rao", roles=(("sales_manager", "Sales Manager"),)),
+        employee("Bina Shah", roles=(("member", "Member"), ("trainer", "Trainer"))),
+        employee("Chetan Iyer"),  # no role in Identity yet
+    ]
+    fake = FakeIdentity(people)
+    app.dependency_overrides[get_identity_client] = lambda: fake
+    yield fake
+    app.dependency_overrides.pop(get_identity_client, None)
+
+
+@pytest.mark.asyncio
+async def test_the_designation_is_the_users_role_in_identity(async_client, identity_with_roles):
+    asha, bina, chetan = identity_with_roles.employees
+    listed = {u["name"]: u for u in (await async_client.get("/v1/workers/importable-users")).json()["data"]}
+    assert listed["Asha Rao"]["designation"] == "Sales Manager" and listed["Asha Rao"]["roles"] == ["Sales Manager"]
+    assert listed["Bina Shah"]["designation"] == "Member / Trainer"
+    assert listed["Chetan Iyer"]["designation"] is None and listed["Chetan Iyer"]["roles"] == []
+
+    res = await async_client.post("/v1/workers/import-from-users", json={"users": [without_designation(asha), without_designation(bina)]})
+    assert res.status_code == 201, res.text
+    assert sorted(w["designation"] for w in res.json()["created"]) == ["Member / Trainer", "Sales Manager"]
+    # The primary post and the hire entry say the same
+    worker = res.json()["created"][0]
+    posts = (await async_client.get(f"/v1/workers/{worker['id']}/posts")).json()["data"]
+    assert posts[0]["title"] == worker["designation"]
+    timeline = (await async_client.get(f"/v1/workers/{worker['id']}")).json()["timeline"]
+    assert timeline[0]["title"] == f"Joined as {worker['designation']}"
+
+
+@pytest.mark.asyncio
+async def test_a_user_with_no_role_is_skipped_until_they_have_one(async_client, identity_with_roles):
+    asha, bina, chetan = identity_with_roles.employees
+    res = await async_client.post("/v1/workers/import-from-users", json={"users": [without_designation(chetan), without_designation(asha)]})
+    assert res.status_code == 201
+    assert [w["designation"] for w in res.json()["created"]] == ["Sales Manager"]
+    assert res.json()["skipped"] == [{"user_id": str(chetan.id), "reason": "no_role"}]
+    assert (await async_client.get("/v1/workers", params={"search": "Chetan"})).json()["data"] == []
+
+
+@pytest.mark.asyncio
+async def test_a_designation_sent_by_an_api_caller_still_wins(async_client, identity_with_roles):
+    asha = identity_with_roles.employees[0]
+    res = await async_client.post("/v1/workers/import-from-users", json={"users": [without_designation(asha, designation="Head of Sales")]})
+    assert [w["designation"] for w in res.json()["created"]] == ["Head of Sales"]

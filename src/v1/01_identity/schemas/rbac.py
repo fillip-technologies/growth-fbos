@@ -161,6 +161,13 @@ class PeopleResponse(BaseModel):
     has_more: bool = False
 
 
+class EmployeeRole(BaseModel):
+    """A role preset applied to the user (hand-granted ones; the access People adds for a job is not a role of theirs)."""
+
+    code: str
+    name: str
+
+
 class EmployeeRef(BaseModel):
     """An active employee-type user, with what another service needs to give them a record of its own."""
 
@@ -171,6 +178,8 @@ class EmployeeRef(BaseModel):
     employee_code: Optional[str] = None
     manager_user_id: Optional[uuid.UUID] = None
     home_unit_id: Optional[uuid.UUID] = None
+    # In the order they were applied, so the first is the user's main role.
+    roles: list[EmployeeRole] = []
 
 
 class EmployeesResponse(BaseModel):
