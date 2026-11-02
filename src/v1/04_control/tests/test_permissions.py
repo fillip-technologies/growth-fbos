@@ -7,7 +7,7 @@ only their own records sees just the requests they raised or are asked to decide
 from typing import AsyncGenerator, Callable
 import uuid
 
-from fastapi.routing import APIRoute
+from fastapi.routing import APIRoute, iter_route_contexts
 import httpx
 import pytest
 import pytest_asyncio
@@ -83,13 +83,25 @@ async def raise_request(client_as: ClientAs, requester: uuid.UUID, title: str) -
     return res.json()
 
 
+def _api_routes() -> list:
+    """Each route as mounted. FastAPI 0.143 keeps an included router as one entry in app.routes, so
+    walking app.routes alone sees no route at all: walk the effective routes instead."""
+    return [c for c in iter_route_contexts(app.routes) if isinstance(c.original_route, APIRoute)]
+
+
+async def test_routes_are_found():
+    assert len(_api_routes()) >= 30
+
+
 async def test_every_route_is_guarded_unless_meant_to_be_open():
+    def guarded(route) -> bool:
+        names = [getattr(dep.dependency, "__name__", "") for dep in route.original_route.dependencies]
+        return any(name.startswith("require_") or name == "verify_internal_caller" for name in names)
+
     unguarded = sorted(
         f"{sorted(route.methods)} {route.path}"
-        for route in app.routes
-        if isinstance(route, APIRoute)
-        and route.path not in OPEN_PATHS
-        and not any(getattr(dep.dependency, "__name__", "").startswith("require_") for dep in route.dependencies)
+        for route in _api_routes()
+        if route.path not in OPEN_PATHS and not guarded(route)
     )
     assert unguarded == []
 
@@ -155,3 +167,9 @@ async def test_own_records_only_shows_just_your_requests(client_as):
     assert {r["id"] for r in (await everyone.get(f"{BASE}/approvals/requests")).json()["data"]} == {
         mine["id"], someone_elses["id"],
     }
+
+
+async def test_the_home_summary_needs_approval_read(client_as):
+    assert_denied(await client_as(uuid.uuid4()).get(f"{BASE}/approval-requests/summary"), "PERMISSION_DENIED", permissions.APPROVAL_READ)
+    ok = await client_as(uuid.uuid4(), permissions.APPROVAL_READ).get(f"{BASE}/approval-requests/summary")
+    assert ok.status_code == 200 and set(ok.json()) == {"approvals_pending", "escalations_open"}

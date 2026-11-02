@@ -471,3 +471,22 @@ async def test_monthly_terms_spread_the_contract_over_its_months(async_client: h
     [schedule] = (await async_client.get(f"{BASE}/billing-schedules", params={"contract_id": contract["id"]})).json()
     amounts = [amount(line["amount"]) for line in schedule["lines"]]
     assert amounts == ["33333.33", "33333.33", "33333.34"]
+
+
+async def test_internal_revenue_actuals_lists_confirmed_payments_of_the_window(async_client: httpx.AsyncClient):
+    customer_id = await customer(async_client)
+    invoice = await issue(async_client, await draft(async_client, customer_id, price=1000))
+    paid = await pay(async_client, customer_id, 500, invoice["id"])
+    assert paid.status_code == 201, paid.json()
+
+    from tests.conftest import TEST_ORG_ID
+
+    url = f"{BASE}/internal/revenue-actuals"
+    window = {"organization_id": str(TEST_ORG_ID), "from": TODAY.isoformat(), "to": TODAY.isoformat()}
+    rows = (await async_client.get(url, params=window)).json()["data"]
+    assert [(r["occurred_on"], r["amount"], r["currency"]) for r in rows] == [(TODAY.isoformat(), 500.0, "INR")]
+
+    yesterday = (TODAY - timedelta(days=1)).isoformat()
+    assert (await async_client.get(url, params={**window, "from": yesterday, "to": yesterday})).json()["data"] == []
+    assert (await async_client.get(url, params={**window, "organization_id": str(uuid.uuid4())})).json()["data"] == []
+    assert (await async_client.get(url, params={**window, "from": TODAY.isoformat(), "to": yesterday})).status_code == 422

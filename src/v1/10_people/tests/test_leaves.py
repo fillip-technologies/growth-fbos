@@ -2,6 +2,7 @@ import uuid
 from datetime import date
 from decimal import Decimal
 import pytest
+from tests.conftest import TEST_ORG_ID
 from httpx import AsyncClient
 
 
@@ -101,3 +102,42 @@ async def test_double_entry_leave_ledger_and_approvals(async_client: AsyncClient
     assert bal_res2.status_code == 200
     bals2 = bal_res2.json()
     assert float(bals2[0]["current_balance"]) == 15.0
+
+
+@pytest.mark.asyncio
+async def test_internal_absences_lists_only_approved_leave_of_linked_workers(async_client):
+    client = async_client
+    org = str(TEST_ORG_ID)
+    linked_user = str(uuid.uuid4())
+    plan = (await client.post("/api/people/v1/leave-plans", json={"code": "ANNUAL", "name": "Annual", "annual_quota": 18.0})).json()["id"]
+
+    async def request_leave(email: str, user_id, start: str, end: str, days: float, approve: bool) -> None:
+        extra = {"user_id": user_id} if user_id else {}
+        worker = (await client.post("/api/people/v1/workers", json={
+            "first_name": "A", "last_name": "B", "work_email": email, "designation": "Engineer",
+            "date_of_joining": "2021-06-01", **extra,
+        })).json()["id"]
+        await client.post("/api/people/v1/leaves/adjust-balance", json={
+            "worker_id": worker, "leave_plan_id": plan, "transaction_type": "opening_balance",
+            "units_days": 18.0, "effective_date": "2021-06-01"})
+        req = (await client.post("/api/people/v1/leaves/requests", json={
+            "worker_id": worker, "leave_plan_id": plan, "start_date": start, "end_date": end,
+            "days_count": days, "reason": "x"})).json()["id"]
+        if approve:
+            await client.patch(f"/api/people/v1/leaves/requests/{req}/approve?approved=true")
+
+    await request_leave("a@x.com", linked_user, "2026-04-06", "2026-04-08", 3.0, True)
+    await request_leave("b@x.com", str(uuid.uuid4()), "2026-04-07", "2026-04-07", 0.5, True)
+    await request_leave("c@x.com", str(uuid.uuid4()), "2026-04-07", "2026-04-07", 1.0, False)  # still pending
+    await request_leave("d@x.com", None, "2026-04-07", "2026-04-07", 1.0, True)  # no login
+    await request_leave("e@x.com", str(uuid.uuid4()), "2026-06-01", "2026-06-02", 2.0, True)  # outside window
+
+    res = await client.get("/api/people/v1/internal/absences", params={"organization_id": org, "from": "2026-04-01", "to": "2026-04-30"})
+    assert res.status_code == 200, res.text
+    rows = res.json()["data"]
+    assert len(rows) == 2
+    assert {r["half_day"] for r in rows} == {False, True}
+    assert linked_user in {r["user_id"] for r in rows}
+
+    bad = await client.get("/api/people/v1/internal/absences", params={"organization_id": org, "from": "2026-04-30", "to": "2026-04-01"})
+    assert bad.status_code == 422

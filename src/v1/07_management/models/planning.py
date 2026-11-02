@@ -1,8 +1,8 @@
 import uuid
-from datetime import date
+from datetime import date, datetime, timezone
 from typing import Optional
 
-from sqlalchemy import Date, ForeignKey, Integer, Numeric, String, Text, UniqueConstraint
+from sqlalchemy import Date, DateTime, ForeignKey, Integer, Numeric, String, Text, UniqueConstraint, func
 from sqlalchemy.orm import Mapped, mapped_column
 
 from database.base import Base
@@ -242,3 +242,32 @@ class BudgetAllocation(Base):
     target_type: Mapped[str] = mapped_column(String(100), nullable=False, index=True)
     target_id: Mapped[uuid.UUID] = mapped_column(UUIDType, nullable=False, index=True)
     amount: Mapped[float] = mapped_column(Numeric(14, 2), nullable=False)
+
+
+class GoalCheckIn(Base):
+    """
+    An owner's forward-looking check-in on a goal or an initiative: confidence (0.00-1.00), their
+    own colour and the story behind it. Append-only: a new check-in each cadence, never an edit.
+    The owner's colour may disagree with the computed one; that disagreement is the signal.
+    """
+
+    __tablename__ = "goal_check_ins"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUIDType, primary_key=True, default=uuid.uuid4)
+    organization_id: Mapped[uuid.UUID] = mapped_column(UUIDType, nullable=False, index=True)
+    goal_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUIDType, ForeignKey("strategic_goals.id", ondelete="CASCADE"), nullable=True, index=True
+    )
+    initiative_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUIDType, ForeignKey("initiatives.id", ondelete="CASCADE"), nullable=True, index=True
+    )
+    period_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUIDType, ForeignKey("planning_periods.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    confidence: Mapped[float] = mapped_column(Numeric(3, 2), nullable=False)
+    rag: Mapped[str] = mapped_column(String(10), nullable=False)  # green | amber | red
+    narrative: Mapped[str] = mapped_column(Text, nullable=False)
+    author_user_id: Mapped[uuid.UUID] = mapped_column(UUIDType, nullable=False, index=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), server_default=func.now(), nullable=False
+    )

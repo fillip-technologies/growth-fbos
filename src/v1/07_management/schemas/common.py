@@ -19,6 +19,12 @@ class PageResponse(BaseModel, Generic[T]):
     page: PageMeta
 
 
+class ListResponse(BaseModel, Generic[T]):
+    """An unpaginated list (a record's children, a computed report)."""
+
+    data: List[T]
+
+
 class SubjectRefInput(BaseModel):
     type: str
     id: uuid.UUID
@@ -32,13 +38,13 @@ class SubjectRef(BaseModel):
 
 class UserRef(BaseModel):
     id: uuid.UUID
-    name: str
+    name: Optional[str] = None  # None when identity couldn't name them
     avatar_url: Optional[str] = None
 
 
 class UnitRef(BaseModel):
     id: uuid.UUID
-    name: str
+    name: Optional[str] = None
     unit_type: Optional[str] = None
 
 

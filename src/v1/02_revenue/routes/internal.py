@@ -1,9 +1,14 @@
+from datetime import date, datetime, time, timedelta
 from typing import Literal
 import uuid
 
 from fastapi import APIRouter, Depends, Query, Response, status
+from sqlalchemy import select
 
 from dependencies import CurrentActor, DatabaseSession, verify_internal_caller
+from exceptions import InvalidDateRangeError
+from models.payment import Payment
+from schemas.revenue_feed import RevenueActualListResponse, RevenueActualRow
 from schemas.activity import ActivityResponse, InternalActivityCreate
 from schemas.subject_access import SubjectAccessResponse
 from services.activity_service import log_from_source
@@ -49,3 +54,41 @@ async def log_activity_from_source(payload: InternalActivityCreate, session: Dat
         return activity
     await session.commit()
     return activity
+
+
+@router.get(
+    "/revenue-actuals",
+    response_model=RevenueActualListResponse,
+    summary="Confirmed payments received in a window (internal)",
+    description=(
+        "Read by the management service to mirror realized revenue against its budgets. One row per "
+        "confirmed payment, dated by the day it was received; the payment id never changes, so the "
+        "reader can ask for the same window again without double-counting."
+    ),
+)
+async def list_revenue_actuals(
+    session: DatabaseSession,
+    organization_id: uuid.UUID = Query(...),
+    from_date: date = Query(..., alias="from"),
+    to_date: date = Query(..., alias="to"),
+) -> RevenueActualListResponse:
+    if to_date < from_date:
+        raise InvalidDateRangeError("'to' must be on or after 'from'")
+    payments = (
+        await session.execute(
+            select(Payment)
+            .where(
+                Payment.organization_id == organization_id,
+                Payment.status == "confirmed",
+                Payment.received_at >= datetime.combine(from_date, time.min),
+                Payment.received_at < datetime.combine(to_date + timedelta(days=1), time.min),
+            )
+            .order_by(Payment.received_at, Payment.id)
+        )
+    ).scalars().all()
+    return RevenueActualListResponse(
+        data=[
+            RevenueActualRow(id=p.id, occurred_on=p.received_at.date(), amount=float(p.amount), currency=p.currency)
+            for p in payments
+        ]
+    )

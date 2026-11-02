@@ -7,7 +7,7 @@ from datetime import date
 from typing import AsyncGenerator, Callable, Optional
 import uuid
 
-from fastapi.routing import APIRoute
+from fastapi.routing import APIRoute, iter_route_contexts
 import httpx
 import pytest
 import pytest_asyncio
@@ -93,13 +93,25 @@ def assert_denied(res: httpx.Response, code: str, required_permission: Optional[
         assert res.json()["detail"]["meta"] == {"required_permission": required_permission}
 
 
+def _api_routes() -> list:
+    """Each route as mounted. FastAPI 0.143 keeps an included router as one entry in app.routes, so
+    walking app.routes alone sees no route at all: walk the effective routes instead."""
+    return [c for c in iter_route_contexts(app.routes) if isinstance(c.original_route, APIRoute)]
+
+
+async def test_routes_are_found():
+    assert len(_api_routes()) >= 100
+
+
 async def test_every_route_is_guarded_unless_meant_to_be_open():
+    def guarded(route) -> bool:
+        names = [getattr(dep.dependency, "__name__", "") for dep in route.original_route.dependencies]
+        return any(name.startswith("require_") or name == "verify_internal_caller" for name in names)
+
     unguarded = sorted(
         f"{sorted(route.methods)} {route.path}"
-        for route in app.routes
-        if isinstance(route, APIRoute)
-        and route.path not in OPEN_PATHS
-        and not any(getattr(dep.dependency, "__name__", "").startswith("require_") for dep in route.dependencies)
+        for route in _api_routes()
+        if route.path not in OPEN_PATHS and not guarded(route)
     )
     assert unguarded == []
 

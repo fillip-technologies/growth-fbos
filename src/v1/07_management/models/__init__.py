@@ -16,6 +16,7 @@ from models.planning import (
     BudgetAllocation,
     BudgetLine,
     FiscalYear,
+    GoalCheckIn,
     Initiative,
     InitiativeMilestone,
     PlanningPeriod,
@@ -48,7 +49,8 @@ __all__ = [
     "Allocation",
     "AllocationHistory",
     "CapacityGap",
-    # Planning Models (12)
+    # Planning Models (13)
+    "GoalCheckIn",
     "FiscalYear",
     "PlanningPeriod",
     "StrategicGoal",
