@@ -26,6 +26,12 @@ from schemas.worker import (
 )
 from services.identity_client import IdentityClient
 import services.worker_service as service
+import services.bank_accounts as banks
+import services.worker_documents as worker_docs
+from exceptions import WorkerNotFoundError
+from schemas.worker_documents import BankAccountResponse, OnboardingResponse
+from sqlalchemy import select
+from models.worker import Worker
 
 router = APIRouter(prefix="/workers", tags=["workers"])
 
@@ -118,6 +124,41 @@ async def create_worker(
     await session.commit()
     data = service._worker_to_response(worker)
     return data
+
+
+# --- "My record": the signed-in user's own employee file, view only. -------------------------
+# Declared before "/{worker_id}" so "me" is not parsed as an id. No employee permission is
+# needed: the record is found by the caller's own user id, so nobody can reach anyone else's.
+
+
+async def _own_worker_id(session, actor) -> uuid.UUID:
+    worker_id = (
+        await session.execute(
+            select(Worker.id).where(Worker.organization_id == actor.organization_id, Worker.user_id == actor.user_id)
+        )
+    ).scalar_one_or_none()
+    if worker_id is None:
+        raise WorkerNotFoundError()
+    return worker_id
+
+
+@router.get("/me", response_model=WorkerDetailResponse)
+async def get_my_worker(session: DatabaseSession, actor: CurrentActor):
+    """The caller's own employee profile (404 when they have no employee record)."""
+    return await service.get_worker_detail(session, actor.organization_id, await _own_worker_id(session, actor))
+
+
+@router.get("/me/onboarding", response_model=OnboardingResponse)
+async def get_my_onboarding(session: DatabaseSession, actor: CurrentActor):
+    """The caller's own document checklist; ID numbers stay masked unless they hold the usual rights."""
+    return await worker_docs.get_onboarding(session, actor, await _own_worker_id(session, actor))
+
+
+@router.get("/me/bank-accounts", response_model=list[BankAccountResponse])
+async def list_my_bank_accounts(session: DatabaseSession, actor: CurrentActor):
+    """The caller's own bank accounts, account numbers masked."""
+    accounts = await banks.list_accounts(session, actor.organization_id, await _own_worker_id(session, actor))
+    return [banks.to_response(a) for a in accounts]
 
 
 @router.get("/{worker_id}", response_model=WorkerDetailResponse, dependencies=[Depends(require_permission(permissions.EMPLOYEE_READ))])

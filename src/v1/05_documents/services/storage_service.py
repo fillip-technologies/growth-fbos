@@ -88,6 +88,7 @@ class StorageService:
         self,
         object_key: str,
         expires_seconds: int = 60,
+        original: bool = False,
     ) -> tuple[str, datetime]:
         """Signed URL for a private file, valid for `expires_seconds`."""
         expires_at = datetime.now(timezone.utc) + timedelta(seconds=expires_seconds)
@@ -106,6 +107,8 @@ class StorageService:
             src=src,
             signed=True,
             expires_in=expires_seconds,
+            # ImageKit re-encodes images by default, which changes their byte size.
+            transformation=[{"raw": "orig-true"}] if original else None,
         )
         return url, expires_at
 
@@ -121,7 +124,7 @@ class StorageService:
 
         # A HEAD on a short-lived signed URL is read-after-write consistent, unlike the
         # search-backed list API.
-        url, _ = self.generate_download_url(object_key, expires_seconds=60)
+        url, _ = self.generate_download_url(object_key, expires_seconds=60, original=True)
         async with httpx.AsyncClient(timeout=10.0) as client:
             response = await client.head(url)
 

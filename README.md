@@ -22,7 +22,7 @@ The platform consists of **10 specialized microservices** plus a shared MySQL da
 | **8009** | **09_assets** | `src/v1/09_assets` | Asset tracking, Vendor accounts, Credential vault |
 | **3307** | **db (MySQL 8.0)** | `docker/init.sql` | 9 isolated databases (`fbos_identity`, `fbos_revenue`, etc.) |
 
-> 📖 **Frontend Developers**: Check out the comprehensive [Frontend Integration & API Guide](docs/FRONTEND_INTEGRATION_GUIDE.md) for full endpoint specifications, request/response models, authentication flows, and a ready-to-use TypeScript/Axios client.
+> 📖 **Frontend Developers**: the API conventions (gateway routing, headers, pagination, error shape, auth and token refresh) and the project's build phases and decisions are in [docs/PROJECT_BUILD_PHASES.md](docs/PROJECT_BUILD_PHASES.md). Each service serves Swagger UI at its own `/docs`.
 
 ---
 

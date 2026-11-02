@@ -228,3 +228,31 @@ async def test_documents_service_can_check_access_to_an_employee(async_client):
     assert (
         await async_client.get(f"/v1/internal/subject-access/people.employee/{worker_id}", params={"action": "attach"})
     ).status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_employee_sees_only_own_record_through_me_endpoints(async_client):
+    from tests.conftest import TEST_USER_ID
+
+    res = await async_client.get("/v1/workers/me")
+    assert res.status_code == 404  # no employee record for this user yet
+
+    created = await async_client.post(
+        "/v1/workers",
+        json={
+            "first_name": "Me", "last_name": "Self", "work_email": "me.self@company.com", "user_id": str(TEST_USER_ID),
+            "designation": "Engineer", "date_of_joining": "2024-01-01",
+        },
+    )
+    assert created.status_code == 201, created.text
+    act_as()  # no permissions at all
+    app.dependency_overrides[get_actor] = lambda: Actor(
+        user_id=TEST_USER_ID, organization_id=TEST_ORG_ID, user_type="employee", name="Me", permissions=frozenset(),
+    )
+    mine = await async_client.get("/v1/workers/me")
+    assert mine.status_code == 200, mine.text
+    assert mine.json()["work_email"] == "me.self@company.com"
+    assert (await async_client.get("/v1/workers/me/onboarding")).status_code == 200
+    assert (await async_client.get("/v1/workers/me/bank-accounts")).status_code == 200
+    # Other people's files still need the permission.
+    assert (await async_client.get(f"/v1/workers/{mine.json()['id']}")).status_code == 403

@@ -3,7 +3,7 @@
 # document dated before the change shows the old section and one dated after shows the new
 # section and payment code. Old section numbers stay searchable as aliases.
 #
-# Rates and thresholds come from secondary sources (see docs/tax-and-finance-research.md §3)
+# Rates and thresholds come from secondary sources (see tax-and-finance-research.md §3, summarised in docs/PROJECT_BUILD_PHASES.md Phase 2; original: git show 2522df7:docs/tax-and-finance-research.md)
 # and MUST be confirmed by a chartered accountant before they are relied on.
 pack: in_itd
 version: 1

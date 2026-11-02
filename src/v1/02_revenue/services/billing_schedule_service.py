@@ -1,5 +1,5 @@
 """
-Contract billing schedules (staged invoicing, docs/tax-and-finance-research.md §7.8).
+Contract billing schedules (staged invoicing, tax-and-finance-research.md §7.8; see docs/PROJECT_BUILD_PHASES.md Phase 2).
 
 Activating a contract builds its schedule from the payment terms (finance/billing/strategies.py),
 per the organization's billing mode. Each line is invoiced on its own when it falls due (or its
