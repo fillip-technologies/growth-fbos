@@ -33,6 +33,7 @@ from services.recruitment_service import (
     get_requisition,
     list_applications,
     list_candidates,
+    list_offers,
     list_requisitions,
     list_scorecards,
     submit_scorecard,
@@ -239,6 +240,17 @@ async def create_offer_endpoint(
     result = await create_offer(session, org_id, id, data)
     await session.commit()
     return result
+
+
+@router.get("/applications/{id}/offers", response_model=List[JobOfferResponse])
+async def list_offers_endpoint(
+    id: uuid.UUID,
+    session: DatabaseSession,
+    org_id: OrgId,
+    actor: CurrentActor,
+):
+    actor.require_permission(RECRUITMENT_READ)
+    return await list_offers(session, org_id, id)
 
 
 @router.post(
