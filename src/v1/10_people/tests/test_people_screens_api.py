@@ -44,23 +44,22 @@ async def test_a_preview_shows_the_route_and_saves_nothing(async_client, identit
 async def test_the_access_impact_names_the_roles_a_change_adds_and_removes(async_client):
     worker_id = await make_worker(async_client, user_id=new_user(), unit_id=str(UNIT_A))
     await map_role(async_client, "engineer", "engineer_access")
-    await map_role(async_client, "senior engineer", "senior_access", scope="company")
-
-    promo = await preview(async_client, worker_id, change_type="promotion", new_designation="Senior Engineer",
-                          effective_date="2025-06-01", reason="Strong year")
-    impact = promo.json()["access_impact"]
-    assert impact["has_login"] is True
-    assert impact["added"] == [{"role_code": "senior_access", "scope_unit_id": None}]
-    assert impact["removed"] == [{"role_code": "engineer_access", "scope_unit_id": str(UNIT_A)}]
+    await map_role(async_client, "trainer", "trainer_access", scope="company")
 
     moved = await preview(async_client, worker_id, change_type="transfer", new_unit_id=str(UNIT_B),
                           effective_date="2025-06-01", reason="Move")
-    assert moved.json()["access_impact"]["added"] == [{"role_code": "engineer_access", "scope_unit_id": str(UNIT_B)}]
-    assert moved.json()["access_impact"]["removed"] == [{"role_code": "engineer_access", "scope_unit_id": str(UNIT_A)}]
+    impact = moved.json()["access_impact"]
+    assert impact["has_login"] is True
+    assert impact["added"] == [{"role_code": "engineer_access", "scope_unit_id": str(UNIT_B)}]
+    assert impact["removed"] == [{"role_code": "engineer_access", "scope_unit_id": str(UNIT_A)}]
 
-    same = await preview(async_client, worker_id, change_type="add_post", post_type="acting", new_designation="Acting Head",
-                         new_unit_id=str(UNIT_B), effective_date="2025-06-01", reason="Cover")
-    assert same.json()["access_impact"]["added"] == [] and same.json()["access_impact"]["removed"] == []
+    trainer = await preview(async_client, worker_id, **new_post_body(new_designation="Trainer", new_time_share=30))
+    assert trainer.json()["access_impact"]["added"] == [{"role_code": "trainer_access", "scope_unit_id": None}]
+    assert trainer.json()["access_impact"]["removed"] == []
+
+    acting = await preview(async_client, worker_id, change_type="add_post", post_type="acting", new_designation="Acting Head",
+                           new_unit_id=str(UNIT_B), effective_date="2025-06-01", reason="Cover")
+    assert acting.json()["access_impact"]["added"] == [] and acting.json()["access_impact"]["removed"] == []
 
 
 @pytest.mark.asyncio
@@ -75,9 +74,8 @@ async def test_someone_without_a_login_has_no_access_to_change(async_client):
 async def test_a_waiting_change_carries_its_access_impact_for_the_approver(async_client):
     worker_id = await make_worker(async_client, user_id=new_user(), unit_id=str(UNIT_A))
     await map_role(async_client, "engineer", "engineer_access")
-    await map_role(async_client, "lead", "lead_access")
-    change = (await request(async_client, worker_id, new_designation="Lead")).json()
-    assert change["access_impact"]["added"] == [{"role_code": "lead_access", "scope_unit_id": str(UNIT_A)}]
+    change = (await request(async_client, worker_id, change_type="transfer", new_unit_id=str(UNIT_B))).json()
+    assert change["access_impact"]["added"] == [{"role_code": "engineer_access", "scope_unit_id": str(UNIT_B)}]
     assert change["access_impact"]["removed"] == [{"role_code": "engineer_access", "scope_unit_id": str(UNIT_A)}]
 
     as_approver()

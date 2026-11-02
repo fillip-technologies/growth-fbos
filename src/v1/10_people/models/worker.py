@@ -77,6 +77,9 @@ class Worker(Base):
     resignation_date: Mapped[Optional[date]] = mapped_column(Date, nullable=True)
     last_working_date: Mapped[Optional[date]] = mapped_column(Date, nullable=True)
 
+    # For an employee with a login the designation is their role in Identity; when it was last compared.
+    designation_checked_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True, index=True)
+
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )

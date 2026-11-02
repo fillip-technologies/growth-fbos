@@ -19,7 +19,15 @@ from dependencies import get_actor, get_identity_client
 from main import app
 import models  # noqa: F401 — registers every ORM class on Base.metadata
 from exceptions import AuthServiceUnavailableError
-from services.identity_client import ALL_PEOPLE_PERMISSIONS, Actor, EmploymentOutcome, EmploymentState, UnitHead
+from services.identity_client import (
+    ALL_PEOPLE_PERMISSIONS,
+    Actor,
+    EmploymentOutcome,
+    EmploymentState,
+    IdentityEmployee,
+    IdentityEmployeePage,
+    UnitHead,
+)
 
 TEST_ORG_ID = uuid.UUID("0191f3a2-0011-7011-8077-0000001b2aa9")
 TEST_USER_ID = uuid.UUID("0191f3a2-0015-7015-8093-000000218f0d")
@@ -34,6 +42,15 @@ class FakeIdentity:
         self.down = False  # Identity cannot be reached
         self.problems: list[str] = []  # what Identity says it could not apply
         self.states: dict[uuid.UUID, EmploymentState] = {}  # what Identity holds, for the drift check
+        self.employees: dict[uuid.UUID, IdentityEmployee] = {}  # active employee users, by user id (roles included)
+        self.employee_calls = 0  # how often People asked for employees
+
+    async def list_employees(self, organization_id, *, search=None, user_ids=None, limit=50, offset=0):
+        self.employee_calls += 1
+        if self.down:
+            raise AuthServiceUnavailableError()
+        rows = [e for uid, e in self.employees.items() if not user_ids or uid in user_ids]
+        return IdentityEmployeePage(data=rows[offset : offset + limit], has_more=len(rows) > offset + limit)
 
     async def declare_employment(self, organization_id: uuid.UUID, user_id: uuid.UUID, declaration: dict) -> EmploymentOutcome:
         if self.down:

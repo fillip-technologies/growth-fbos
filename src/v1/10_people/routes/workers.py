@@ -1,5 +1,5 @@
 import uuid
-from typing import Optional
+from typing import Annotated, Optional
 
 from fastapi import APIRouter, Depends, Query, status
 
@@ -55,6 +55,7 @@ async def list_workers(
     session: DatabaseSession,
     org_id: OrgId,
     actor: CurrentActor,
+    identity: Annotated[IdentityClient, Depends(get_identity_client)],
     unit_id: Optional[uuid.UUID] = Query(None),
     status: Optional[str] = Query(None),
     search: Optional[str] = Query(None),
@@ -66,8 +67,10 @@ async def list_workers(
     List employee directory with keyset pagination, unit filtering, and full-text search.
     """
     rows, page = await service.list_workers(
-        session, org_id, unit_id=unit_id, status=status, search=search, limit=limit, cursor=cursor, user_id=user_id
+        session, org_id, unit_id=unit_id, status=status, search=search, limit=limit, cursor=cursor, user_id=user_id,
+        identity=identity,
     )
+    await session.commit()  # a designation that followed a changed role in Identity
     return PageResponse(data=rows, page=page)
 
 
@@ -168,12 +171,15 @@ async def get_worker_detail(
     session: DatabaseSession,
     org_id: OrgId,
     actor: CurrentActor,
+    identity: Annotated[IdentityClient, Depends(get_identity_client)],
     worker_id: uuid.UUID,
 ):
     """
     Retrieve full 360° employee profile with reporting line, direct reports count, and career timeline.
     """
-    return await service.get_worker_detail(session, org_id, worker_id)
+    detail = await service.get_worker_detail(session, org_id, worker_id, identity=identity)
+    await session.commit()  # a designation that followed a changed role in Identity
+    return detail
 
 
 @router.patch("/{worker_id}", response_model=WorkerResponse, dependencies=[Depends(require_permission(permissions.EMPLOYEE_MANAGE))])

@@ -2,6 +2,7 @@
 Background work for People, run inside the service when ROLE_CHANGE_WORKER_ENABLED:
 
 - applies approved role changes when their date comes, ends posts past their end date, escalates stalled approvals;
+- keeps each employee's designation equal to their role in Identity;
 - queues the login of everyone whose last working day has come, and (IDENTITY_SYNC_ENABLED) delivers the
   waiting changes to Identity and runs the drift check.
 """
@@ -14,6 +15,7 @@ from sqlalchemy.exc import SQLAlchemyError
 
 from config import settings
 from database.session import AsyncSessionLocal
+import services.designation as designation
 import services.identity_sync as identity_sync
 import services.posts as posts
 import services.role_changes as role_changes
@@ -41,6 +43,14 @@ async def run_once() -> int:
         return len(applied)
 
 
+async def refresh_designations(identity: IdentityClient) -> int:
+    """Employees' designations follow their roles in Identity; this checks the ones looked at longest ago."""
+    async with AsyncSessionLocal() as session:
+        changed = await designation.sweep(session, identity, datetime.now(timezone.utc))
+        await session.commit()
+        return changed
+
+
 async def sync_identity(identity: IdentityClient) -> tuple[int, int]:
     """Deliver the waiting changes to Identity, then check the employees not checked lately. Returns (delivered, checked)."""
     async with AsyncSessionLocal() as session:
@@ -58,6 +68,9 @@ async def run_forever(identity: IdentityClient) -> None:
             count = await run_once()
             if count:
                 logger.info("Applied %s role change(s)", count)
+            changed = await refresh_designations(identity)
+            if changed:
+                logger.info("%s designation(s) now follow their role in Identity", changed)
             if settings.identity_sync_enabled:
                 delivered, checked = await sync_identity(identity)
                 if delivered or checked:

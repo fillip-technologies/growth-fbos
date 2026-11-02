@@ -37,6 +37,7 @@ from models.worker_post import WorkerPost
 from schemas.progression import CompensationRevisionCreate
 from schemas.role_change import RoleChangeCreate
 from services.identity_client import Actor, IdentityClient
+import services.designation as designation
 import services.identity_sync as identity_sync
 import services.role_change_routing as routing
 from services.notification_client import notification_client
@@ -307,6 +308,12 @@ async def _check_post_action(session: AsyncSession, change: RoleChange, worker: 
         return
 
     # make_primary
+    if designation.designation_comes_from_identity(worker):
+        raise ConflictError(
+            "Their designation is their role in Identity, so another post cannot become their primary post. "
+            "Change their role under Users instead",
+            code=designation.FROM_IDENTITY,
+        )
     if target.post_type != posts.CONCURRENT:
         raise ConflictError("Only a concurrent post can become the primary post", code="POST_NOT_CONCURRENT")
     posts.check_rules(_swapped_posts(live, target))
@@ -315,6 +322,11 @@ async def _check_post_action(session: AsyncSession, change: RoleChange, worker: 
 async def _check_post_change(session: AsyncSession, change: RoleChange, worker: Worker, live: list[WorkerPost]) -> None:
     """Promote, demote, transfer or correct one post."""
     target = _target_post(live, change)
+    if change.new_designation is not None and target.post_type == posts.PRIMARY:
+        if designation.designation_comes_from_identity(worker):
+            raise ValidationFailedError(
+                "new_designation", "Their designation is their role in Identity. Change their role under Users instead"
+            )
     if change.new_designation is not None and change.new_designation == target.title:
         raise ValidationFailedError("new_designation", "Same as the current designation")
     if change.new_unit_id is not None and change.new_unit_id == target.unit_id:

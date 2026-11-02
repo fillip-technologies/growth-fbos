@@ -21,6 +21,7 @@ from schemas.worker import (
 )
 from services.codes import next_worker_code
 from services.identity_client import IdentityClient, IdentityEmployee
+from services.designation import designation_from_roles, refresh_designations
 from services.identity_sync import queue_sync
 from services.pagination import paginate
 from services.posts import extra_post_counts, start_primary_post, sync_primary_post
@@ -234,6 +235,7 @@ async def list_workers(
     limit: int = 25,
     cursor: Optional[str] = None,
     user_id: Optional[uuid.UUID] = None,
+    identity: Optional[IdentityClient] = None,
 ) -> tuple[list[dict], PageMeta]:
     stmt = select(Worker).where(Worker.organization_id == organization_id)
     if user_id:
@@ -257,12 +259,14 @@ async def list_workers(
     rows, page = await paginate(
         session, stmt, Worker, limit=limit, cursor=cursor, order_by=Worker.created_at, descending=False
     )
+    if identity is not None:
+        await refresh_designations(session, identity, rows)  # their role in Identity is their designation
     extra_posts = await extra_post_counts(session, [w.id for w in rows])
     return [{**_worker_to_response(w), "extra_post_count": extra_posts.get(w.id, 0)} for w in rows], page
 
 
 async def get_worker_detail(
-    session: AsyncSession, organization_id: uuid.UUID, worker_id: uuid.UUID
+    session: AsyncSession, organization_id: uuid.UUID, worker_id: uuid.UUID, identity: Optional[IdentityClient] = None
 ) -> dict:
     worker = (
         await session.execute(
@@ -274,6 +278,8 @@ async def get_worker_detail(
     ).scalar_one_or_none()
     if not worker:
         raise WorkerNotFoundError(str(worker_id))
+    if identity is not None:
+        await refresh_designations(session, identity, [worker])
 
     data = _worker_to_response(worker)
     data["extra_post_count"] = (await extra_post_counts(session, [worker.id])).get(worker.id, 0)
@@ -396,14 +402,8 @@ def _to_importable(employee: IdentityEmployee) -> ImportableUser:
         unit_id=employee.home_unit_id,
         manager_user_id=employee.manager_user_id,
         roles=[role.name for role in employee.roles],
-        designation=_designation_from_roles(employee),
+        designation=designation_from_roles(employee),
     )
-
-
-def _designation_from_roles(employee: IdentityEmployee) -> Optional[str]:
-    """The designation a user's Identity role gives: its name, or the names joined when they have several."""
-    names = [(role.name or role.code).strip() for role in employee.roles]
-    return " / ".join(name for name in names if name)[:255] or None
 
 
 def _parse_offset(cursor: Optional[str]) -> int:
@@ -507,7 +507,7 @@ async def _import_one(
     created: list[Worker],
 ) -> Optional[str]:
     """Create one worker and append it to `created`; the reason it was skipped, if it was."""
-    designation = (item.designation or "").strip() or _designation_from_roles(employee)
+    designation = (item.designation or "").strip() or designation_from_roles(employee)
     if designation is None:
         return SKIP_NO_ROLE
     email_taken = await session.execute(
@@ -534,6 +534,7 @@ async def _import_one(
         phone=employee.phone,
         unit_id=employee.home_unit_id,
         designation=designation,
+        designation_checked_at=datetime.now(timezone.utc),
         employment_type=item.employment_type,
         status="active",
         date_of_joining=item.date_of_joining,
