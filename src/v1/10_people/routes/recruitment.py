@@ -5,11 +5,16 @@ from typing import List, Optional
 
 from fastapi import APIRouter, Query, status
 
+from exceptions import PermissionDeniedError
 from dependencies import CurrentActor, DatabaseSession, OrgId, require_permission
-from permissions import RECRUITMENT_MANAGE, RECRUITMENT_READ
+from permissions import RECRUITMENT_INTERVIEW, RECRUITMENT_MANAGE, RECRUITMENT_READ
 from schemas.recruitment import (
     CandidateCreate,
     CandidateResponse,
+    InterviewCreate,
+    InterviewFeedback,
+    InterviewResponse,
+    InterviewUpdate,
     JobApplicationCreate,
     JobApplicationResponse,
     JobOfferCreate,
@@ -23,6 +28,7 @@ from schemas.recruitment import (
     StageTransitionRequest,
 )
 from schemas.worker import WorkerResponse
+import services.interviews as interviews
 from services.onboarding_service import accept_and_onboard_candidate
 from services.recruitment_service import (
     apply_for_job,
@@ -218,7 +224,11 @@ async def list_scorecards_endpoint(
     actor: CurrentActor,
 ):
     actor.require_permission(RECRUITMENT_READ)
-    return await list_scorecards(session, org_id, id)
+    cards = await list_scorecards(session, org_id, id)
+    if actor.has(RECRUITMENT_MANAGE):
+        return cards
+    # Others' blinded feedback stays hidden so interviewers don't sway each other.
+    return [c for c in cards if not c.is_blinded or c.interviewer_id == actor.user_id]
 
 
 # ---------------------------------------------------------
@@ -270,3 +280,88 @@ async def accept_and_onboard_endpoint(
     await session.commit()
     return result
 
+
+
+# ---------------------------------------------------------
+# Interviews
+# ---------------------------------------------------------
+def _require_interviewer_or_manager(actor: CurrentActor) -> None:
+    if not (actor.has(RECRUITMENT_INTERVIEW) or actor.has(RECRUITMENT_MANAGE)):
+        raise PermissionDeniedError(RECRUITMENT_INTERVIEW)
+
+
+@router.post(
+    "/applications/{id}/interviews",
+    response_model=InterviewResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+async def schedule_interview_endpoint(
+    id: uuid.UUID,
+    data: InterviewCreate,
+    session: DatabaseSession,
+    actor: CurrentActor,
+):
+    """Assign an employee to interview the candidate; they are notified."""
+    actor.require_permission(RECRUITMENT_MANAGE)
+    interview = await interviews.schedule_interview(session, actor, id, data)
+    candidate_name = await interviews.candidate_name_for(session, id)
+    await session.commit()
+    interviews.notify_assigned(interview, actor, candidate_name)
+    return (await interviews.describe(session, [interview]))[0]
+
+
+@router.get("/applications/{id}/interviews", response_model=List[InterviewResponse])
+async def list_application_interviews_endpoint(
+    id: uuid.UUID,
+    session: DatabaseSession,
+    org_id: OrgId,
+    actor: CurrentActor,
+):
+    actor.require_permission(RECRUITMENT_READ)
+    return await interviews.list_for_application(session, org_id, id)
+
+
+@router.get("/interviews/mine", response_model=List[InterviewResponse])
+async def list_my_interviews_endpoint(
+    session: DatabaseSession,
+    actor: CurrentActor,
+    status: Optional[str] = Query(None, pattern="^(scheduled|completed|cancelled)$"),
+):
+    """Interviews assigned to the caller."""
+    _require_interviewer_or_manager(actor)
+    return await interviews.list_mine(session, actor, status)
+
+
+@router.patch("/interviews/{id}", response_model=InterviewResponse)
+async def update_interview_endpoint(
+    id: uuid.UUID,
+    data: InterviewUpdate,
+    session: DatabaseSession,
+    actor: CurrentActor,
+):
+    """Reschedule or cancel a scheduled interview."""
+    actor.require_permission(RECRUITMENT_MANAGE)
+    interview = await interviews.update_interview(session, actor, id, data)
+    await session.commit()
+    return (await interviews.describe(session, [interview]))[0]
+
+
+@router.post(
+    "/interviews/{id}/feedback",
+    response_model=ScorecardResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+async def submit_interview_feedback_endpoint(
+    id: uuid.UUID,
+    data: InterviewFeedback,
+    session: DatabaseSession,
+    actor: CurrentActor,
+):
+    """The assigned interviewer's feedback; completes the interview."""
+    _require_interviewer_or_manager(actor)
+    scorecard = await interviews.submit_feedback(session, actor, id, data)
+    interview = await interviews.get_interview(session, actor.organization_id, id)
+    candidate_name = await interviews.candidate_name_for(session, interview.application_id)
+    await session.commit()
+    interviews.notify_feedback_given(interview, candidate_name)
+    return scorecard

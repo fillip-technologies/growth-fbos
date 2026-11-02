@@ -26,6 +26,7 @@ from models.progression import (
 )
 from models.recruitment import (
     Candidate,
+    Interview,
     JobApplication,
     JobOffer,
     JobRequisition,
@@ -72,6 +73,7 @@ __all__ = [
     "Candidate",
     "JobApplication",
     "ScorecardSubmission",
+    "Interview",
     "JobOffer",
     # Attendance & Overtime
     "WorkShift",

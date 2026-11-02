@@ -42,6 +42,7 @@ WORKER_PICKER_PERMISSIONS = (
     permissions.LEAVE_APPROVE,
     permissions.COMPENSATION_READ,
     permissions.SEPARATION_MANAGE,
+    permissions.RECRUITMENT_MANAGE,  # recruiters pick interviewers
 )
 
 
