@@ -2,7 +2,7 @@ import uuid
 
 from fastapi import APIRouter, Depends
 
-from dependencies import CurrentActor, DatabaseSession, require_any_permission, require_permission
+from dependencies import CurrentActor, DatabaseSession, require_any_permission, require_permission, worker_in_reach
 import permissions
 from schemas.worker_documents import (
     BankAccountCreate,
@@ -25,6 +25,11 @@ CAN_MANAGE = Depends(require_permission(permissions.EMPLOYEE_MANAGE))
 # Bank details and revealing numbers are for those who manage employees or read compensation.
 CAN_SEE_BANK = Depends(require_any_permission(permissions.EMPLOYEE_MANAGE, permissions.COMPENSATION_READ))
 CAN_REVEAL = Depends(require_permission(permissions.COMPENSATION_READ))
+# The employee must be inside the caller's reach for the same codes (Identity's unit / own-record limits).
+IN_READ = Depends(worker_in_reach(permissions.EMPLOYEE_READ))
+IN_MANAGE = Depends(worker_in_reach(permissions.EMPLOYEE_MANAGE))
+IN_SEE_BANK = Depends(worker_in_reach(permissions.EMPLOYEE_MANAGE, permissions.COMPENSATION_READ))
+IN_REVEAL = Depends(worker_in_reach(permissions.COMPENSATION_READ))
 
 
 # --- Onboarding checklist ---------------------------------------------------------------------
@@ -44,7 +49,7 @@ async def set_onboarding_requirements(session: DatabaseSession, actor: CurrentAc
     return {"items": documents.requirement_items(requirements)}
 
 
-@router.get("/workers/{worker_id}/onboarding", response_model=OnboardingResponse, dependencies=[CAN_READ])
+@router.get("/workers/{worker_id}/onboarding", response_model=OnboardingResponse, dependencies=[CAN_READ, IN_READ])
 async def get_worker_onboarding(session: DatabaseSession, actor: CurrentActor, worker_id: uuid.UUID):
     """The employee's document checklist, with ID numbers masked unless the caller may see them."""
     return await documents.get_onboarding(session, actor, worker_id)
@@ -53,7 +58,7 @@ async def get_worker_onboarding(session: DatabaseSession, actor: CurrentActor, w
 # --- Documents --------------------------------------------------------------------------------
 
 
-@router.put("/workers/{worker_id}/documents/{document_type}", response_model=OnboardingResponse, dependencies=[CAN_MANAGE])
+@router.put("/workers/{worker_id}/documents/{document_type}", response_model=OnboardingResponse, dependencies=[CAN_MANAGE, IN_MANAGE])
 async def save_worker_document(
     session: DatabaseSession, actor: CurrentActor, worker_id: uuid.UUID, document_type: str, payload: DocumentUpsert
 ):
@@ -63,14 +68,14 @@ async def save_worker_document(
     return await documents.get_onboarding(session, actor, worker_id)
 
 
-@router.post("/workers/{worker_id}/documents/{document_type}/verify", response_model=OnboardingResponse, dependencies=[CAN_MANAGE])
+@router.post("/workers/{worker_id}/documents/{document_type}/verify", response_model=OnboardingResponse, dependencies=[CAN_MANAGE, IN_MANAGE])
 async def verify_worker_document(session: DatabaseSession, actor: CurrentActor, worker_id: uuid.UUID, document_type: str):
     await documents.verify_document(session, actor, worker_id, document_type)
     await session.commit()
     return await documents.get_onboarding(session, actor, worker_id)
 
 
-@router.post("/workers/{worker_id}/documents/{document_type}/reject", response_model=OnboardingResponse, dependencies=[CAN_MANAGE])
+@router.post("/workers/{worker_id}/documents/{document_type}/reject", response_model=OnboardingResponse, dependencies=[CAN_MANAGE, IN_MANAGE])
 async def reject_worker_document(
     session: DatabaseSession, actor: CurrentActor, worker_id: uuid.UUID, document_type: str, payload: DocumentReject
 ):
@@ -79,7 +84,7 @@ async def reject_worker_document(
     return await documents.get_onboarding(session, actor, worker_id)
 
 
-@router.get("/workers/{worker_id}/documents/{document_type}/number", response_model=RevealResponse, dependencies=[CAN_REVEAL])
+@router.get("/workers/{worker_id}/documents/{document_type}/number", response_model=RevealResponse, dependencies=[CAN_REVEAL, IN_REVEAL])
 async def reveal_document_number(session: DatabaseSession, actor: CurrentActor, worker_id: uuid.UUID, document_type: str):
     """The full ID number. Each call is written to the access log."""
     value = await documents.reveal_number(session, actor, worker_id, document_type)
@@ -90,19 +95,19 @@ async def reveal_document_number(session: DatabaseSession, actor: CurrentActor, 
 # --- Bank accounts ----------------------------------------------------------------------------
 
 
-@router.get("/workers/{worker_id}/bank-accounts", response_model=list[BankAccountResponse], dependencies=[CAN_SEE_BANK])
+@router.get("/workers/{worker_id}/bank-accounts", response_model=list[BankAccountResponse], dependencies=[CAN_SEE_BANK, IN_SEE_BANK])
 async def list_bank_accounts(session: DatabaseSession, actor: CurrentActor, worker_id: uuid.UUID):
     return [banks.to_response(a) for a in await banks.list_accounts(session, actor.organization_id, worker_id)]
 
 
-@router.post("/workers/{worker_id}/bank-accounts", response_model=BankAccountResponse, status_code=201, dependencies=[CAN_MANAGE])
+@router.post("/workers/{worker_id}/bank-accounts", response_model=BankAccountResponse, status_code=201, dependencies=[CAN_MANAGE, IN_MANAGE])
 async def create_bank_account(session: DatabaseSession, actor: CurrentActor, worker_id: uuid.UUID, payload: BankAccountCreate):
     account = await banks.create_account(session, actor, worker_id, payload)
     await session.commit()
     return banks.to_response(account)
 
 
-@router.patch("/workers/{worker_id}/bank-accounts/{account_id}", response_model=BankAccountResponse, dependencies=[CAN_MANAGE])
+@router.patch("/workers/{worker_id}/bank-accounts/{account_id}", response_model=BankAccountResponse, dependencies=[CAN_MANAGE, IN_MANAGE])
 async def update_bank_account(
     session: DatabaseSession, actor: CurrentActor, worker_id: uuid.UUID, account_id: uuid.UUID, payload: BankAccountUpdate
 ):
@@ -112,28 +117,28 @@ async def update_bank_account(
     return banks.to_response(account)
 
 
-@router.post("/workers/{worker_id}/bank-accounts/{account_id}/primary", response_model=BankAccountResponse, dependencies=[CAN_MANAGE])
+@router.post("/workers/{worker_id}/bank-accounts/{account_id}/primary", response_model=BankAccountResponse, dependencies=[CAN_MANAGE, IN_MANAGE])
 async def make_primary_bank_account(session: DatabaseSession, actor: CurrentActor, worker_id: uuid.UUID, account_id: uuid.UUID):
     account = await banks.set_primary(session, actor, worker_id, account_id)
     await session.commit()
     return banks.to_response(account)
 
 
-@router.post("/workers/{worker_id}/bank-accounts/{account_id}/verify", response_model=BankAccountResponse, dependencies=[CAN_MANAGE])
+@router.post("/workers/{worker_id}/bank-accounts/{account_id}/verify", response_model=BankAccountResponse, dependencies=[CAN_MANAGE, IN_MANAGE])
 async def verify_bank_account(session: DatabaseSession, actor: CurrentActor, worker_id: uuid.UUID, account_id: uuid.UUID):
     account = await banks.verify_account(session, actor, worker_id, account_id)
     await session.commit()
     return banks.to_response(account)
 
 
-@router.post("/workers/{worker_id}/bank-accounts/{account_id}/deactivate", response_model=BankAccountResponse, dependencies=[CAN_MANAGE])
+@router.post("/workers/{worker_id}/bank-accounts/{account_id}/deactivate", response_model=BankAccountResponse, dependencies=[CAN_MANAGE, IN_MANAGE])
 async def deactivate_bank_account(session: DatabaseSession, actor: CurrentActor, worker_id: uuid.UUID, account_id: uuid.UUID):
     account = await banks.deactivate_account(session, actor, worker_id, account_id)
     await session.commit()
     return banks.to_response(account)
 
 
-@router.get("/workers/{worker_id}/bank-accounts/{account_id}/number", response_model=RevealResponse, dependencies=[CAN_REVEAL])
+@router.get("/workers/{worker_id}/bank-accounts/{account_id}/number", response_model=RevealResponse, dependencies=[CAN_REVEAL, IN_REVEAL])
 async def reveal_bank_account_number(session: DatabaseSession, actor: CurrentActor, worker_id: uuid.UUID, account_id: uuid.UUID):
     """The full account number. Each call is written to the access log."""
     value = await banks.reveal_account_number(session, actor, worker_id, account_id)

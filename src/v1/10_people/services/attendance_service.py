@@ -5,7 +5,8 @@ from datetime import date, datetime, time, timezone
 from decimal import Decimal
 from typing import List, Optional, Tuple
 
-from sqlalchemy import desc, select
+from sqlalchemy import desc, select, update
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from exceptions import ConflictError, ValidationFailedError, WorkerNotFoundError
@@ -26,7 +27,7 @@ from schemas.attendance import (
 )
 
 
-def calculate_overtime(shift: WorkShift, clock_out: datetime) -> Tuple[int, Decimal]:
+def calculate_overtime(shift: WorkShift, clock_out: datetime, working_minutes: Optional[int] = None) -> Tuple[int, Decimal]:
     """
     Workday / UKG benchmarked overtime calculation:
     Gate 1: 30-minute qualification threshold.
@@ -40,6 +41,10 @@ def calculate_overtime(shift: WorkShift, clock_out: datetime) -> Tuple[int, Deci
     clock_out_naive = clock_out.replace(tzinfo=None) if clock_out.tzinfo else clock_out
     shift_end = datetime.combine(clock_out_naive.date(), shift.end_time)
     raw_minutes = int((clock_out_naive - shift_end).total_seconds() / 60)
+    if working_minutes is not None:
+        # Staying late only makes up for arriving late: overtime is time beyond a full day's work.
+        beyond_full_day = working_minutes - int(Decimal(shift.full_day_hours) * 60)
+        raw_minutes = min(raw_minutes, beyond_full_day)
 
     if raw_minutes < shift.min_overtime_threshold_minutes:
         return max(raw_minutes, 0), Decimal("0.0")
@@ -63,6 +68,13 @@ async def create_shift(
     organization_id: uuid.UUID,
     data: WorkShiftCreate,
 ) -> WorkShift:
+    if data.is_default:
+        # One default shift: the new one takes over.
+        await session.execute(
+            update(WorkShift)
+            .where(WorkShift.organization_id == organization_id, WorkShift.is_default == True)
+            .values(is_default=False)
+        )
     shift = WorkShift(
         organization_id=organization_id,
         name=data.name,
@@ -99,19 +111,14 @@ async def get_default_shift(
     session: AsyncSession,
     organization_id: uuid.UUID,
 ) -> Optional[WorkShift]:
+    # The default shift; without one, the oldest. Ordered, so the answer is the same every time.
     result = await session.execute(
-        select(WorkShift).where(
-            WorkShift.organization_id == organization_id,
-            WorkShift.is_default == True,
-        )
+        select(WorkShift)
+        .where(WorkShift.organization_id == organization_id)
+        .order_by(WorkShift.is_default.desc(), WorkShift.created_at.asc())
+        .limit(1)
     )
-    shift = result.scalar_one_or_none()
-    if not shift:
-        result = await session.execute(
-            select(WorkShift).where(WorkShift.organization_id == organization_id).limit(1)
-        )
-        shift = result.scalar_one_or_none()
-    return shift
+    return result.scalars().first()
 
 
 async def clock_in(
@@ -158,7 +165,12 @@ async def clock_in(
             late_minutes=late_minutes,
             status="present",
         )
-        session.add(att)
+        try:
+            async with session.begin_nested():
+                session.add(att)
+                await session.flush()
+        except IntegrityError:
+            raise ConflictError("Attendance for this day was recorded at the same moment; try again") from None
     else:
         att.clock_in_time = clock_in_dt
         att.is_late = is_late
@@ -221,7 +233,7 @@ async def clock_out(
 
         if shift:
             # Overtime computation
-            raw_ot, ot_hours = calculate_overtime(shift, att.clock_out_time)
+            raw_ot, ot_hours = calculate_overtime(shift, att.clock_out_time, att.working_minutes)
             await session.flush()
             existing_ot = await session.execute(
                 select(OvertimeRecord).where(
@@ -308,8 +320,12 @@ async def list_attendance(
     start_date: Optional[date] = None,
     end_date: Optional[date] = None,
     status: Optional[str] = None,
+    worker_ids=None,
 ) -> List[DailyAttendance]:
+    """`worker_ids` (a subquery) narrows the list to the employees the caller reaches."""
     query = select(DailyAttendance).where(DailyAttendance.organization_id == organization_id)
+    if worker_ids is not None:
+        query = query.where(DailyAttendance.worker_id.in_(worker_ids))
     if worker_id:
         query = query.where(DailyAttendance.worker_id == worker_id)
     if start_date:
@@ -329,6 +345,7 @@ async def claim_overtime(
     data: OvertimeClaimCreate,
 ) -> OvertimeRecord:
     await _require_worker(session, organization_id, data.worker_id)
+    await _require_own_attendance(session, organization_id, data.worker_id, data.daily_attendance_id)
 
     raw_mins = data.raw_extra_minutes or 0
     rounded_hours = data.rounded_overtime_hours or Decimal("0.0")
@@ -357,6 +374,39 @@ async def claim_overtime(
     return ot
 
 
+async def get_overtime(
+    session: AsyncSession, organization_id: uuid.UUID, overtime_id: uuid.UUID, lock: bool = False
+) -> OvertimeRecord:
+    stmt = select(OvertimeRecord).where(OvertimeRecord.id == overtime_id, OvertimeRecord.organization_id == organization_id)
+    ot = (await session.execute(stmt.with_for_update() if lock else stmt)).scalar_one_or_none()
+    if not ot:
+        raise WorkerNotFoundError("Overtime record not found")
+    return ot
+
+
+async def get_regularization(
+    session: AsyncSession, organization_id: uuid.UUID, regularization_id: uuid.UUID, lock: bool = False
+) -> AttendanceRegularization:
+    stmt = select(AttendanceRegularization).where(
+        AttendanceRegularization.id == regularization_id, AttendanceRegularization.organization_id == organization_id
+    )
+    reg = (await session.execute(stmt.with_for_update() if lock else stmt)).scalar_one_or_none()
+    if not reg:
+        raise WorkerNotFoundError("Regularization request not found")
+    return reg
+
+
+async def _require_own_attendance(
+    session: AsyncSession, organization_id: uuid.UUID, worker_id: uuid.UUID, attendance_id: Optional[uuid.UUID]
+) -> None:
+    """An attendance row named by a request must be that worker's own."""
+    if attendance_id is None:
+        return
+    att = await session.get(DailyAttendance, attendance_id)
+    if not att or att.organization_id != organization_id or att.worker_id != worker_id:
+        raise ValidationFailedError("attendance_id", "Attendance record not found for this worker")
+
+
 async def approve_overtime(
     session: AsyncSession,
     organization_id: uuid.UUID,
@@ -364,9 +414,7 @@ async def approve_overtime(
     approver_id: uuid.UUID,
     approved: bool,
 ) -> OvertimeRecord:
-    ot = await session.get(OvertimeRecord, overtime_id)
-    if not ot or ot.organization_id != organization_id:
-        raise WorkerNotFoundError("Overtime record not found")
+    ot = await get_overtime(session, organization_id, overtime_id, lock=True)
 
     if ot.status != "pending":
         raise ConflictError(f"Overtime record is already {ot.status}")
@@ -384,6 +432,7 @@ async def create_regularization(
     data: AttendanceRegularizationCreate,
 ) -> AttendanceRegularization:
     await _require_worker(session, organization_id, data.worker_id)
+    await _require_own_attendance(session, organization_id, data.worker_id, data.attendance_id)
 
     reg = AttendanceRegularization(
         organization_id=organization_id,
@@ -408,9 +457,7 @@ async def approve_regularization(
     approver_id: uuid.UUID,
     approved: bool,
 ) -> AttendanceRegularization:
-    reg = await session.get(AttendanceRegularization, regularization_id)
-    if not reg or reg.organization_id != organization_id:
-        raise WorkerNotFoundError("Regularization request not found")
+    reg = await get_regularization(session, organization_id, regularization_id, lock=True)
 
     if reg.status != "pending":
         raise ConflictError(f"Regularization request is already {reg.status}")
@@ -423,8 +470,8 @@ async def approve_regularization(
         att = None
         if reg.attendance_id:
             att = await session.get(DailyAttendance, reg.attendance_id)
-            if att and att.organization_id != organization_id:
-                att = None
+            if att and (att.organization_id != organization_id or att.worker_id != reg.worker_id):
+                att = None  # never another worker's day
         if not att:
             result = await session.execute(
                 select(DailyAttendance).where(

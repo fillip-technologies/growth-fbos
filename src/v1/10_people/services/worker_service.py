@@ -2,7 +2,7 @@ import uuid
 from datetime import date, datetime, timezone
 from typing import Optional
 
-from sqlalchemy import func, or_, select
+from sqlalchemy import ColumnElement, func, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -64,7 +64,7 @@ def _worker_to_response(w: Worker) -> dict:
 
 
 async def create_worker(
-    session: AsyncSession, organization_id: uuid.UUID, data: WorkerCreate
+    session: AsyncSession, organization_id: uuid.UUID, data: WorkerCreate, identity: Optional[IdentityClient] = None
 ) -> Worker:
     # Check email uniqueness in organization
     existing_email = (
@@ -93,6 +93,14 @@ async def create_worker(
             raise ConflictError(f"Worker code '{worker_code}' is already assigned")
     else:
         worker_code = await next_worker_code(session, organization_id)
+
+    if data.user_id and await _linked_user_ids(session, organization_id, [data.user_id]):
+        raise ConflictError("This user already has an employee record", code="USER_ALREADY_LINKED")
+    if data.user_id and identity is not None:
+        # The login is checked with Identity, never trusted: linking a record to someone else's user would
+        # show them this file and let People rewrite their department and access.
+        if not await identity.is_active_employee(organization_id, data.user_id):
+            raise ValidationFailedError("user_id", "Not an active employee user of this organization")
 
     # Validate manager if provided
     if data.manager_id:
@@ -132,6 +140,8 @@ async def create_worker(
         date_of_joining=data.date_of_joining,  # Fully supports past back-dated joining dates
         probation_end_date=data.probation_end_date,
         confirmation_date=data.confirmation_date,
+        resignation_date=data.resignation_date,
+        last_working_date=data.last_working_date,
     )
     session.add(worker)
     await session.flush()
@@ -170,6 +180,12 @@ async def update_worker(
 
     update_dict = data.model_dump(exclude_unset=True)
 
+    for field in REQUIRED_FIELDS:
+        if field in update_dict and (update_dict[field] is None or str(update_dict[field]).strip() == ""):
+            raise ValidationFailedError(field, "This field is required")
+    if update_dict.get("status") == "exited" and worker.status != "exited":
+        raise ConflictError("An exit goes through a separation case (clearances and settlement)", code="SEPARATION_REQUIRED")
+
     # The employee code can be filled in later; a blank one clears it.
     if "worker_code" in update_dict:
         update_dict["worker_code"] = (update_dict["worker_code"] or "").strip() or None
@@ -205,6 +221,8 @@ async def update_worker(
         ).scalar_one_or_none()
         if not manager:
             raise ValidationFailedError("manager_id", f"Manager '{update_dict['manager_id']}' not found in organization")
+        if await _reports_to(session, manager, worker.id):
+            raise ValidationFailedError("manager_id", "That manager reports to this worker")
 
     # A new designation is a promotion, demotion or correction: it goes through a role change so
     # that someone else approves it and the record of it is kept.
@@ -226,6 +244,23 @@ async def update_worker(
     return worker
 
 
+# Columns that cannot be emptied: a request that clears one is refused instead of failing in the database.
+REQUIRED_FIELDS = ("first_name", "last_name", "work_email", "date_of_joining", "employment_type", "status")
+MAX_REPORTING_DEPTH = 100  # longer than any real chain; stops a corrupt loop from spinning
+
+
+async def _reports_to(session: AsyncSession, manager: Worker, worker_id: uuid.UUID) -> bool:
+    """Whether `manager` is `worker_id` or somewhere below them: making them the manager would close a loop."""
+    current: Optional[Worker] = manager
+    for _ in range(MAX_REPORTING_DEPTH):
+        if current is None:
+            return False
+        if current.id == worker_id:
+            return True
+        current = await session.get(Worker, current.manager_id) if current.manager_id else None
+    return True
+
+
 async def list_workers(
     session: AsyncSession,
     organization_id: uuid.UUID,
@@ -237,8 +272,11 @@ async def list_workers(
     user_ids: Optional[list[uuid.UUID]] = None,
     has_login: Optional[bool] = None,
     identity: Optional[IdentityClient] = None,
+    scope: Optional[ColumnElement[bool]] = None,
 ) -> tuple[list[dict], PageMeta]:
     stmt = select(Worker).where(Worker.organization_id == organization_id)
+    if scope is not None:
+        stmt = stmt.where(scope)  # the caller's reach, before pagination
     if user_ids:
         stmt = stmt.where(Worker.user_id.in_(user_ids))
     if has_login is not None:

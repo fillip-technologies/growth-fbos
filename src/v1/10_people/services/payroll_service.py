@@ -6,7 +6,8 @@ from datetime import date, datetime
 from decimal import Decimal
 from typing import List, Optional
 
-from sqlalchemy import desc, func, select
+from sqlalchemy import and_, desc, func, or_, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -91,6 +92,22 @@ async def get_worker_salary_structure(
     return result.scalars().first()
 
 
+async def salary_structure_as_of(
+    session: AsyncSession, organization_id: uuid.UUID, worker_id: uuid.UUID, as_of: date
+) -> Optional[SalaryStructure]:
+    """The structure in force on `as_of`: the latest one that took effect by then (a future one waits)."""
+    result = await session.execute(
+        select(SalaryStructure)
+        .where(
+            SalaryStructure.organization_id == organization_id,
+            SalaryStructure.worker_id == worker_id,
+            SalaryStructure.effective_from <= as_of,
+        )
+        .order_by(desc(SalaryStructure.effective_from), desc(SalaryStructure.created_at))
+    )
+    return result.scalars().first()
+
+
 async def submit_reimbursement(
     session: AsyncSession,
     organization_id: uuid.UUID,
@@ -124,8 +141,12 @@ async def list_reimbursements(
     organization_id: uuid.UUID,
     worker_id: Optional[uuid.UUID] = None,
     status: Optional[str] = None,
+    worker_ids=None,
 ) -> List[ReimbursementClaim]:
+    """`worker_ids` (a subquery) narrows the list to the employees the caller reaches."""
     query = select(ReimbursementClaim).where(ReimbursementClaim.organization_id == organization_id)
+    if worker_ids is not None:
+        query = query.where(ReimbursementClaim.worker_id.in_(worker_ids))
     if worker_id:
         query = query.where(ReimbursementClaim.worker_id == worker_id)
     if status:
@@ -135,6 +156,18 @@ async def list_reimbursements(
     return list(result.scalars().all())
 
 
+async def get_reimbursement(
+    session: AsyncSession, organization_id: uuid.UUID, claim_id: uuid.UUID, lock: bool = False
+) -> ReimbursementClaim:
+    stmt = select(ReimbursementClaim).where(
+        ReimbursementClaim.id == claim_id, ReimbursementClaim.organization_id == organization_id
+    )
+    claim = (await session.execute(stmt.with_for_update() if lock else stmt)).scalar_one_or_none()
+    if not claim:
+        raise WorkerNotFoundError("Reimbursement claim not found")
+    return claim
+
+
 async def approve_reimbursement(
     session: AsyncSession,
     organization_id: uuid.UUID,
@@ -142,9 +175,7 @@ async def approve_reimbursement(
     approver_id: uuid.UUID,
     approved: bool,
 ) -> ReimbursementClaim:
-    claim = await session.get(ReimbursementClaim, claim_id)
-    if not claim or claim.organization_id != organization_id:
-        raise WorkerNotFoundError("Reimbursement claim not found")
+    claim = await get_reimbursement(session, organization_id, claim_id, lock=True)
 
     if claim.status != "submitted":
         raise ConflictError(f"Reimbursement claim is already {claim.status}")
@@ -182,8 +213,10 @@ async def calculate_payroll_run(
             PayrollRun.month == data.month,
         )
     )
-    if existing.scalar_one_or_none():
+    if existing.first():
         raise ConflictError(f"Payroll run for {data.year}-{data.month:02d} already exists")
+    if month_start > date.today():
+        raise ValidationFailedError("month", "A payroll run cannot be calculated for a month that has not started")
 
     payroll_code = await next_payroll_code(session, organization_id, data.year, data.month)
     payroll_run = PayrollRun(
@@ -194,14 +227,23 @@ async def calculate_payroll_run(
         status="calculated",
         processed_by=user_id,
     )
-    session.add(payroll_run)
-    await session.flush()
+    try:
+        async with session.begin_nested():
+            session.add(payroll_run)
+            await session.flush()
+    except IntegrityError:
+        # Another request created this month's run at the same moment.
+        raise ConflictError(f"Payroll run for {data.year}-{data.month:02d} already exists") from None
 
-    # Load all active workers
+    # Everyone employed for at least one day of the month: still employed, or left during it.
     workers_res = await session.execute(
         select(Worker).where(
             Worker.organization_id == organization_id,
-            Worker.status.in_(PAYABLE_WORKER_STATUSES),
+            Worker.date_of_joining <= month_end,
+            or_(
+                Worker.status.in_(PAYABLE_WORKER_STATUSES),
+                and_(Worker.status == "exited", Worker.last_working_date >= month_start),
+            ),
         )
     )
     workers = workers_res.scalars().all()
@@ -212,22 +254,28 @@ async def calculate_payroll_run(
     total_workers_count = 0
 
     for worker in workers:
-        struct = await get_worker_salary_structure(session, organization_id, worker.id)
+        # Only the days they were employed: from joining (if this month) to the last working day (if this month).
+        employed_from = max(month_start, worker.date_of_joining)
+        employed_to = min(month_end, worker.last_working_date) if worker.last_working_date else month_end
+        if employed_from > employed_to:
+            continue
+        struct = await salary_structure_as_of(session, organization_id, worker.id, employed_to)
         if not struct:
             continue
 
-        # Check unpaid absences in this month
+        # Unpaid absences within those days
         absences_res = await session.execute(
             select(func.count(DailyAttendance.id)).where(
                 DailyAttendance.organization_id == organization_id,
                 DailyAttendance.worker_id == worker.id,
-                DailyAttendance.work_date >= month_start,
-                DailyAttendance.work_date <= month_end,
+                DailyAttendance.work_date >= employed_from,
+                DailyAttendance.work_date <= employed_to,
                 DailyAttendance.status == "absent",
             )
         )
         unpaid_days_count = Decimal(str(absences_res.scalar_one() or 0))
-        payable_days = Decimal(str(last_day)) - unpaid_days_count
+        employed_days = Decimal((employed_to - employed_from).days + 1)
+        payable_days = max(employed_days - unpaid_days_count, Decimal("0"))
         prorate_ratio = payable_days / Decimal(str(last_day))
 
         basic_earned = struct.basic_salary * prorate_ratio
@@ -245,7 +293,7 @@ async def calculate_payroll_run(
             )
         )
         overtime_pay = Decimal("0.0")
-        hourly_rate = (struct.basic_salary / Decimal("30.0")) / Decimal("8.0")
+        hourly_rate = (struct.basic_salary / Decimal(str(last_day))) / Decimal("8.0")
         for ot in ot_res.scalars().all():
             overtime_pay += ot.rounded_overtime_hours * hourly_rate * ot.rate_multiplier
 
@@ -256,14 +304,15 @@ async def calculate_payroll_run(
                 ReimbursementClaim.worker_id == worker.id,
                 ReimbursementClaim.status == "approved",
                 ReimbursementClaim.settled_in_payroll_run_id == None,
+                ReimbursementClaim.spent_date <= month_end,  # never money spent after the month
+                ReimbursementClaim.currency == struct.currency,  # paid in the salary's currency only
             )
         )
         reimbursements_pay = Decimal("0.0")
         claims = reimb_res.scalars().all()
         for claim in claims:
             reimbursements_pay += claim.amount
-            claim.settled_in_payroll_run_id = payroll_run.id
-            claim.status = "settled"
+            claim.settled_in_payroll_run_id = payroll_run.id  # "settled" once the run is disbursed
 
         # Approved bonuses due this month
         bonus_res = await session.execute(
@@ -272,12 +321,12 @@ async def calculate_payroll_run(
                 BonusDisbursement.worker_id == worker.id,
                 BonusDisbursement.status == "approved",
                 BonusDisbursement.payout_month == f"{data.year}-{data.month:02d}",
+                BonusDisbursement.currency == struct.currency,
             )
         )
         bonus_pay = Decimal("0.0")
         for bonus in bonus_res.scalars().all():
-            bonus_pay += bonus.amount
-            bonus.status = "paid"
+            bonus_pay += bonus.amount  # "paid" once the run is disbursed
 
         # What the posts held this month pay on top (an acting or extra post), for the days each was held,
         # less the days of unpaid absence like the other allowances.
@@ -287,7 +336,8 @@ async def calculate_payroll_run(
         ]
         post_allowance_pay = sum((Decimal(line["amount"]) for line in post_lines), Decimal("0.0"))
 
-        worker_deductions = struct.pf_deduction + struct.pt_deduction + struct.tds_tax
+        # PF follows the basic actually earned; professional tax and TDS are monthly amounts.
+        worker_deductions = struct.pf_deduction * prorate_ratio + struct.pt_deduction + struct.tds_tax
         gross_earned = basic_earned + allowances_earned + overtime_pay + reimbursements_pay + bonus_pay + post_allowance_pay
         net_payable = max(gross_earned - worker_deductions, Decimal("0.0"))
 
@@ -372,6 +422,28 @@ async def disburse_payroll_run(
     run.status = "disbursed"
     for slip in run.payslips:
         slip.status = "paid"
+
+    # What the run paid out is settled now, not when it was calculated.
+    claims = await session.execute(
+        select(ReimbursementClaim).where(
+            ReimbursementClaim.organization_id == organization_id,
+            ReimbursementClaim.settled_in_payroll_run_id == run.id,
+        )
+    )
+    for claim in claims.scalars().all():
+        claim.status = "settled"
+    paid_workers = [slip.worker_id for slip in run.payslips]
+    if paid_workers:
+        bonuses = await session.execute(
+            select(BonusDisbursement).where(
+                BonusDisbursement.organization_id == organization_id,
+                BonusDisbursement.worker_id.in_(paid_workers),
+                BonusDisbursement.status == "approved",
+                BonusDisbursement.payout_month == f"{run.year}-{run.month:02d}",
+            )
+        )
+        for bonus in bonuses.scalars().all():
+            bonus.status = "paid"
 
     # Queue Outbox event
     session.add(

@@ -137,6 +137,8 @@ async def test_payroll_covers_probation_and_notice_workers_and_pays_bonuses_once
         json={"amount": 500.0, "payout_month": "2026-05", "reason": "Spot award"},
     )
     assert bonus.status_code == 201, bonus.text
+    approved = await async_client.patch(f"/v1/workers/{probation_id}/bonuses/{bonus.json()['id']}/approve")
+    assert approved.json()["status"] == "approved"  # only approved bonuses are paid
 
     run = await async_client.post("/v1/payroll/runs", json={"year": 2026, "month": 5})
     assert run.status_code == 201, run.text

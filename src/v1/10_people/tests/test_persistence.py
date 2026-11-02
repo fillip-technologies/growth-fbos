@@ -13,10 +13,10 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 
 from database.base import Base
 from database.session import get_db
-from dependencies import get_actor
+from dependencies import get_actor, get_identity_client
 from main import app
 from services.identity_client import ALL_PEOPLE_PERMISSIONS, Actor
-from tests.conftest import TEST_ORG_ID, TEST_USER_ID
+from tests.conftest import TEST_ORG_ID, TEST_USER_ID, FakeIdentity
 
 WRITE_METHODS = {"POST", "PUT", "PATCH", "DELETE"}
 # POST because they carry a body, but they only check and answer: nothing to commit.
@@ -68,6 +68,7 @@ async def per_request_client(tmp_path):
 
     app.dependency_overrides[get_db] = one_session_per_request
     app.dependency_overrides[get_actor] = actor
+    app.dependency_overrides[get_identity_client] = FakeIdentity
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
         yield client
     app.dependency_overrides.clear()

@@ -29,6 +29,9 @@ class FakeIdentity:
     def __init__(self, employees: list[IdentityEmployee]) -> None:
         self.employees = sorted(employees, key=lambda e: e.name)
 
+    async def is_active_employee(self, organization_id, user_id) -> bool:
+        return any(employee.id == user_id for employee in self.employees)
+
     async def list_employees(self, organization_id, *, search=None, user_ids=None, limit=50, offset=0):
         rows = [e for e in self.employees if (not user_ids or e.id in user_ids)]
         if search:
@@ -191,9 +194,18 @@ async def test_one_worker_per_user_is_enforced_by_the_database(async_client, ide
     }
     first = await async_client.post("/v1/workers", json={**body, "work_email": "a1@company.com"})
     assert first.status_code == 201, first.text
-    with pytest.raises(Exception) as raised:
-        await async_client.post("/v1/workers", json={**body, "work_email": "a2@company.com"})
-    assert "uq_workers_org_user" in str(raised.value) or "UNIQUE" in str(raised.value).upper()
+    second = await async_client.post("/v1/workers", json={**body, "work_email": "a2@company.com"})
+    assert second.status_code == 409 and second.json()["code"] == "USER_ALREADY_LINKED"
+
+
+@pytest.mark.asyncio
+async def test_a_record_links_only_to_an_active_employee_user_of_this_organization(async_client, identity):
+    body = {
+        "first_name": "A", "last_name": "B", "designation": "Engineer", "date_of_joining": "2023-01-01",
+        "user_id": str(uuid.uuid4()), "work_email": "nobody@company.com",
+    }
+    res = await async_client.post("/v1/workers", json=body)
+    assert res.status_code == 422 and res.json()["errors"][0]["field"] == "user_id"
 
 
 @pytest.mark.asyncio
@@ -259,3 +271,14 @@ async def test_a_designation_sent_by_an_api_caller_still_wins(async_client, iden
     asha = identity_with_roles.employees[0]
     res = await async_client.post("/v1/workers/import-from-users", json={"users": [without_designation(asha, designation="Head of Sales")]})
     assert [w["designation"] for w in res.json()["created"]] == ["Head of Sales"]
+
+
+@pytest.mark.asyncio
+async def test_someone_known_by_one_name_imports_and_lists(async_client, identity):
+    cher = employee("Cher", roles=(("engineer", "Engineer"),))
+    identity.employees.append(cher)
+    res = await async_client.post("/v1/workers/import-from-users", json={"users": [item(cher)]})
+    assert res.status_code == 201, res.text
+    assert res.json()["created"][0]["last_name"] == ""
+    listed = await async_client.get("/v1/workers")
+    assert listed.status_code == 200 and "Cher" in [w["name"] for w in listed.json()["data"]]

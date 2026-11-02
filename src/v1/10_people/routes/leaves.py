@@ -16,8 +16,17 @@ from schemas.absence import (
     LeaveRequestCreate,
     LeaveRequestResponse,
 )
+from services.access_scope import (
+    own_or_managed_worker,
+    refuse_self_decision,
+    self_service_scope,
+    worker_ids_in,
+    worker_in_scope,
+)
 from services.leave_service import (
     approve_leave_request,
+    get_leave_request,
+    require_leave_plan,
     create_leave_plan,
     get_worker_balances,
     list_leave_plans,
@@ -66,6 +75,7 @@ async def get_worker_balances_endpoint(
     actor: CurrentActor,
 ):
     actor.require_permission(LEAVE_APPLY)
+    await own_or_managed_worker(session, actor, worker_id, LEAVE_APPROVE)
     return await get_worker_balances(session, org_id, worker_id)
 
 
@@ -84,6 +94,9 @@ async def adjust_balance_endpoint(
     Enables setting opening balance or historical back-dated adjustments for existing workers.
     """
     actor.require_permission(LEAVE_APPROVE)
+    worker = await worker_in_scope(session, actor, data.worker_id, LEAVE_APPROVE)
+    refuse_self_decision(actor, worker, "leave balance")
+    await require_leave_plan(session, org_id, data.leave_plan_id)
     result = await post_ledger_transaction(
         session=session,
         organization_id=org_id,
@@ -113,6 +126,7 @@ async def submit_leave_request_endpoint(
     data: LeaveRequestCreate,
 ):
     actor.require_permission(LEAVE_APPLY)
+    await own_or_managed_worker(session, actor, data.worker_id, LEAVE_APPROVE)  # your own, or someone you approve for
     result = await submit_leave_request(session, org_id, data)
     await session.commit()
     return result
@@ -127,7 +141,8 @@ async def list_leave_requests_endpoint(
     status: Optional[str] = Query(None),
 ):
     actor.require_permission(LEAVE_APPLY)
-    return await list_leave_requests(session, org_id, worker_id=worker_id, status=status)
+    worker_ids = worker_ids_in(self_service_scope(actor, LEAVE_APPROVE), org_id)  # own, plus whom they approve for
+    return await list_leave_requests(session, org_id, worker_id=worker_id, status=status, worker_ids=worker_ids)
 
 
 @router.patch("/leaves/requests/{id}/approve", response_model=LeaveRequestResponse)
@@ -140,6 +155,9 @@ async def approve_leave_request_endpoint(
     approved: bool = Query(True),
 ):
     actor.require_permission(LEAVE_APPROVE)
+    leave_req = await get_leave_request(session, org_id, id, lock=True)
+    worker = await worker_in_scope(session, actor, leave_req.worker_id, LEAVE_APPROVE)
+    refuse_self_decision(actor, worker, "leave request")
     result = await approve_leave_request(session, org_id, id, user_id, approved)
     await session.commit()
     return result

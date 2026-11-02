@@ -41,6 +41,11 @@ class RoleChange(Base):
     new_manager_id: Mapped[Optional[uuid.UUID]] = mapped_column(UUIDType, nullable=True)
     new_position_id: Mapped[Optional[uuid.UUID]] = mapped_column(UUIDType, nullable=True)
     new_annual_ctc: Mapped[Optional[Decimal]] = mapped_column(Numeric(14, 2), nullable=True)
+    # A salary revision's kind (annual_hike, market_correction...): recorded on the revision it applies.
+    revision_type: Mapped[Optional[str]] = mapped_column(String(32), nullable=True)
+    # A promotion's job profile and level: applied, it leaves a promotion record.
+    new_job_profile_id: Mapped[Optional[uuid.UUID]] = mapped_column(UUIDType, nullable=True)
+    new_level: Mapped[Optional[str]] = mapped_column(String(32), nullable=True)
 
     # The seat it moves the person into has no room: going over budget needs finance on the route.
     over_budget: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default="0")

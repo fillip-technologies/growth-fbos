@@ -4,16 +4,17 @@ from fastapi import APIRouter, Depends, Query
 
 import permissions
 import services.posts as posts
-from dependencies import CurrentActor, DatabaseSession, require_permission
+from dependencies import CurrentActor, DatabaseSession, require_permission, worker_in_reach
 from schemas.post import OrgChart, PostsReport, WorkerPostList
 from services.worker_documents import ensure_worker
 
 router = APIRouter(tags=["posts"])
 
 CAN_READ = Depends(require_permission(permissions.EMPLOYEE_READ))
+IN_READ = Depends(worker_in_reach(permissions.EMPLOYEE_READ))
 
 
-@router.get("/workers/{worker_id}/posts", response_model=WorkerPostList, dependencies=[CAN_READ])
+@router.get("/workers/{worker_id}/posts", response_model=WorkerPostList, dependencies=[CAN_READ, IN_READ])
 async def list_worker_posts(
     session: DatabaseSession,
     actor: CurrentActor,

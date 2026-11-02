@@ -63,6 +63,20 @@ async def get_current_user_id(actor: CurrentActor) -> uuid.UUID:
     return actor.user_id
 
 
+def worker_in_reach(*permissions: str) -> Callable[..., Awaitable[None]]:
+    """
+    For routes under `/workers/{worker_id}`: the employee must be inside the reach Identity gives the
+    caller for one of `permissions` (a unit or their own record); anyone else answers 404.
+    """
+    from services.access_scope import worker_in_scope  # local: access_scope imports models
+
+    async def check(worker_id: uuid.UUID, actor: CurrentActor, session: AsyncSession = Depends(get_db)) -> None:
+        await worker_in_scope(session, actor, worker_id, *permissions)
+
+    check.__name__ = "in_reach_" + "_or_".join(p.replace(".", "_") for p in permissions)
+    return check
+
+
 def verify_internal_caller(
     x_fbos_internal_token: Optional[str] = Header(None, alias="X-FBOS-Internal-Token"),
 ) -> None:

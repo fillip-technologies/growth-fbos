@@ -4,7 +4,7 @@ from typing import Annotated, Optional
 from fastapi import APIRouter, Depends, Query, Response, status
 from sqlalchemy import select
 
-from dependencies import CurrentActor, DatabaseSession, get_identity_client, require_any_permission, require_permission
+from dependencies import CurrentActor, DatabaseSession, get_identity_client, require_any_permission, require_permission, worker_in_reach
 import permissions
 from exceptions import DelegationNotFoundError
 from schemas.role_change import (
@@ -33,6 +33,8 @@ CAN_REQUEST = Depends(require_permission(permissions.EMPLOYEE_MANAGE))
 CAN_APPROVE = Depends(require_permission(permissions.ROLE_CHANGE_APPROVE))
 CAN_SEE = Depends(require_any_permission(permissions.EMPLOYEE_MANAGE, permissions.ROLE_CHANGE_APPROVE))
 CAN_CANCEL = Depends(require_any_permission(permissions.EMPLOYEE_MANAGE, permissions.ROLE_CHANGE_APPROVE))
+IN_MANAGE = Depends(worker_in_reach(permissions.EMPLOYEE_MANAGE))
+IN_READ = Depends(worker_in_reach(permissions.EMPLOYEE_READ))
 
 
 async def _one(session, actor, change) -> dict:
@@ -43,7 +45,7 @@ async def _one(session, actor, change) -> dict:
     "/workers/{worker_id}/role-changes",
     response_model=RoleChangeResponse,
     status_code=status.HTTP_201_CREATED,
-    dependencies=[CAN_REQUEST],
+    dependencies=[CAN_REQUEST, IN_MANAGE],
 )
 async def request_role_change(
     session: DatabaseSession,
@@ -58,7 +60,7 @@ async def request_role_change(
     return await _one(session, actor, change)
 
 
-@router.post("/workers/{worker_id}/role-change-previews", response_model=RoleChangePreview, dependencies=[CAN_REQUEST])
+@router.post("/workers/{worker_id}/role-change-previews", response_model=RoleChangePreview, dependencies=[CAN_REQUEST, IN_MANAGE])
 async def preview_role_change(
     session: DatabaseSession,
     actor: CurrentActor,
@@ -79,7 +81,7 @@ async def list_role_options(
     return {"data": [{"code": r.code, "name": r.name, "assignable_by_people": r.assignable_by_people} for r in roles]}
 
 
-@router.get("/workers/{worker_id}/role-changes", response_model=RoleChangeList, dependencies=[Depends(require_permission(permissions.EMPLOYEE_READ))])
+@router.get("/workers/{worker_id}/role-changes", response_model=RoleChangeList, dependencies=[Depends(require_permission(permissions.EMPLOYEE_READ)), IN_READ])
 async def list_worker_role_changes(session: DatabaseSession, actor: CurrentActor, worker_id: uuid.UUID):
     changes = await role_changes.list_changes(session, actor, worker_id=worker_id)
     return {"data": await role_changes.to_responses(session, actor, changes)}

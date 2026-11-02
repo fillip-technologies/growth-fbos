@@ -32,6 +32,8 @@ from exceptions import WorkerNotFoundError
 from schemas.worker_documents import BankAccountResponse, OnboardingResponse
 from sqlalchemy import select
 from models.worker import Worker
+from services.access_scope import worker_in_scope, worker_scope
+from exceptions import PermissionDeniedError
 
 router = APIRouter(prefix="/workers", tags=["workers"])
 
@@ -44,6 +46,16 @@ WORKER_PICKER_PERMISSIONS = (
     permissions.SEPARATION_MANAGE,
     permissions.RECRUITMENT_MANAGE,  # recruiters pick interviewers
 )
+
+# Personal details only those who may read employee files see; a picker shows name, code and placement.
+PERSONAL_FIELDS = (
+    "personal_email", "phone", "date_of_birth", "gender", "blood_group", "residential_address",
+    "emergency_contact_name", "emergency_contact_relation", "emergency_contact_phone",
+)
+
+
+def _for_picker(row: dict) -> dict:
+    return {**row, **{field: None for field in PERSONAL_FIELDS}}
 
 
 @router.get(
@@ -69,9 +81,11 @@ async def list_workers(
     """
     rows, page = await service.list_workers(
         session, org_id, unit_id=unit_id, status=status, search=search, limit=limit, cursor=cursor, user_ids=user_id,
-        has_login=has_login, identity=identity,
+        has_login=has_login, identity=identity, scope=worker_scope(actor, *WORKER_PICKER_PERMISSIONS).condition(),
     )
     await session.commit()  # a designation that followed a changed role in Identity
+    if not actor.has(permissions.EMPLOYEE_READ):
+        rows = [_for_picker(row) for row in rows]
     return PageResponse(data=rows, page=page)
 
 
@@ -122,11 +136,15 @@ async def create_worker(
     org_id: OrgId,
     actor: CurrentActor,
     payload: WorkerCreate,
+    identity: Annotated[IdentityClient, Depends(get_identity_client)],
 ):
     """
     Directly create an employee record (supports current active workers and historical back-dated joinings).
     """
-    worker = await service.create_worker(session, org_id, payload)
+    scope = worker_scope(actor, permissions.EMPLOYEE_MANAGE)
+    if not scope.everyone and payload.unit_id not in scope.unit_ids:
+        raise PermissionDeniedError(permissions.EMPLOYEE_MANAGE)  # only into a unit they manage
+    worker = await service.create_worker(session, org_id, payload, identity=identity)
     await session.commit()
     data = service._worker_to_response(worker)
     return data
@@ -178,6 +196,7 @@ async def get_worker_detail(
     """
     Retrieve full 360° employee profile with reporting line, direct reports count, and career timeline.
     """
+    await worker_in_scope(session, actor, worker_id, permissions.EMPLOYEE_READ)
     detail = await service.get_worker_detail(session, org_id, worker_id, identity=identity)
     await session.commit()  # a designation that followed a changed role in Identity
     return detail
@@ -194,6 +213,11 @@ async def update_worker(
     """
     Update worker profile details. Automatically records a timeline milestone if designation changes.
     """
+    await worker_in_scope(session, actor, worker_id, permissions.EMPLOYEE_MANAGE)
+    if payload.unit_id is not None:
+        scope = worker_scope(actor, permissions.EMPLOYEE_MANAGE)
+        if not scope.everyone and payload.unit_id not in scope.unit_ids:
+            raise PermissionDeniedError(permissions.EMPLOYEE_MANAGE)  # cannot move someone out of their reach
     worker = await service.update_worker(session, org_id, worker_id, payload)
     await session.commit()
     return service._worker_to_response(worker)
@@ -211,6 +235,7 @@ async def add_timeline_event(
     Record a career timeline event (promotions, department transfers, salary increments, past milestones).
     Supports past back-dates and future effective dates.
     """
+    await worker_in_scope(session, actor, worker_id, permissions.EMPLOYEE_MANAGE)
     event = await service.add_timeline_event(session, org_id, worker_id, payload)
     await session.commit()
     return event

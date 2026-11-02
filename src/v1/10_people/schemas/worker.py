@@ -100,6 +100,12 @@ class TimelineEventResponse(BaseModel):
 class WorkerResponse(WorkerBase):
     model_config = ConfigDict(from_attributes=True)
 
+    # What is stored is shown as stored: someone known by one name (imported from a user) has no last name.
+    first_name: str
+    last_name: str
+    work_email: str
+    designation: str
+
     id: uuid.UUID
     organization_id: uuid.UUID
     worker_code: Optional[str] = None

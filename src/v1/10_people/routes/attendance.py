@@ -7,7 +7,15 @@ from typing import List, Optional
 from fastapi import APIRouter, Query, status
 
 from dependencies import CurrentActor, DatabaseSession, OrgId, UserId
+from exceptions import PermissionDeniedError
 from permissions import ATTENDANCE_MANAGE, ATTENDANCE_READ
+from services.access_scope import (
+    own_or_managed_worker,
+    refuse_self_decision,
+    worker_ids_in,
+    worker_in_scope,
+    worker_scope,
+)
 from schemas.attendance import (
     AttendanceRecordCreate,
     AttendanceRegularizationCreate,
@@ -21,6 +29,8 @@ from schemas.attendance import (
     WorkShiftResponse,
 )
 from services.attendance_service import (
+    get_overtime,
+    get_regularization,
     approve_overtime,
     approve_regularization,
     claim_overtime,
@@ -73,6 +83,9 @@ async def clock_in_endpoint(
     data: ClockInRequest,
 ):
     actor.require_permission(ATTENDANCE_READ)
+    worker = await own_or_managed_worker(session, actor, data.worker_id, ATTENDANCE_MANAGE)
+    if data.clock_in_time is not None and not worker_scope(actor, ATTENDANCE_MANAGE).covers(worker):
+        raise PermissionDeniedError(ATTENDANCE_MANAGE)  # only someone who manages attendance sets a time by hand
     result = await clock_in(session, org_id, data)
     await session.commit()
     return result
@@ -86,6 +99,9 @@ async def clock_out_endpoint(
     data: ClockOutRequest,
 ):
     actor.require_permission(ATTENDANCE_READ)
+    worker = await own_or_managed_worker(session, actor, data.worker_id, ATTENDANCE_MANAGE)
+    if data.clock_out_time is not None and not worker_scope(actor, ATTENDANCE_MANAGE).covers(worker):
+        raise PermissionDeniedError(ATTENDANCE_MANAGE)  # only someone who manages attendance sets a time by hand
     result = await clock_out(session, org_id, data)
     await session.commit()
     return result
@@ -104,6 +120,7 @@ async def create_attendance_record_endpoint(
 ):
     """Direct attendance entry for historical back-dating and existing employee data import."""
     actor.require_permission(ATTENDANCE_MANAGE)
+    await worker_in_scope(session, actor, data.worker_id, ATTENDANCE_MANAGE)
     result = await create_attendance_record(session, org_id, data)
     await session.commit()
     return result
@@ -127,6 +144,7 @@ async def list_attendance_endpoint(
         start_date=start_date,
         end_date=end_date,
         status=status,
+        worker_ids=worker_ids_in(worker_scope(actor, ATTENDANCE_READ, ATTENDANCE_MANAGE), org_id),
     )
 
 
@@ -141,6 +159,7 @@ async def claim_overtime_endpoint(
     data: OvertimeClaimCreate,
 ):
     actor.require_permission(ATTENDANCE_READ)
+    await own_or_managed_worker(session, actor, data.worker_id, ATTENDANCE_MANAGE)
     result = await claim_overtime(session, org_id, data)
     await session.commit()
     return result
@@ -156,6 +175,8 @@ async def approve_overtime_endpoint(
     approved: bool = Query(True),
 ):
     actor.require_permission(ATTENDANCE_MANAGE)
+    ot = await get_overtime(session, org_id, id, lock=True)
+    refuse_self_decision(actor, await worker_in_scope(session, actor, ot.worker_id, ATTENDANCE_MANAGE), "overtime claim")
     result = await approve_overtime(session, org_id, id, user_id, approved)
     await session.commit()
     return result
@@ -176,6 +197,7 @@ async def create_regularization_endpoint(
     data: AttendanceRegularizationCreate,
 ):
     actor.require_permission(ATTENDANCE_READ)
+    await own_or_managed_worker(session, actor, data.worker_id, ATTENDANCE_MANAGE)
     result = await create_regularization(session, org_id, data)
     await session.commit()
     return result
@@ -194,6 +216,8 @@ async def approve_regularization_endpoint(
     approved: bool = Query(True),
 ):
     actor.require_permission(ATTENDANCE_MANAGE)
+    reg = await get_regularization(session, org_id, id, lock=True)
+    refuse_self_decision(actor, await worker_in_scope(session, actor, reg.worker_id, ATTENDANCE_MANAGE), "regularization")
     result = await approve_regularization(session, org_id, id, user_id, approved)
     await session.commit()
     return result

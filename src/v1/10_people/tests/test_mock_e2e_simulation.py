@@ -394,8 +394,9 @@ async def test_full_hire_to_retire_mock_simulation(async_client: httpx.AsyncClie
             "notes": "Excellent contribution to core services architecture",
         },
     )
-    assert hike_res.status_code == 201
+    assert hike_res.status_code == 202, hike_res.text
     assert Decimal(str(hike_res.json()["new_annual_ctc"])) == Decimal("207000.00")
+    await approve_as_someone_else(async_client, hike_res.json()["id"])
 
     # Verify updated active salary structure
     updated_salary = await async_client.get(f"/v1/salary-structures/{alice_id}")
@@ -413,6 +414,9 @@ async def test_full_hire_to_retire_mock_simulation(async_client: httpx.AsyncClie
         },
     )
     assert bonus_res.status_code == 201
+    assert bonus_res.json()["status"] == "pending"
+    approved_bonus = await async_client.patch(f"/v1/workers/{alice_id}/bonuses/{bonus_res.json()['id']}/approve")
+    assert approved_bonus.json()["status"] == "approved"  # a client admin may decide their own award
 
     # Promotion to Lead Software Architect
     profile_l5_res = await async_client.post(
@@ -439,7 +443,8 @@ async def test_full_hire_to_retire_mock_simulation(async_client: httpx.AsyncClie
             "effective_date": "2026-07-01",
         },
     )
-    assert promo_res.status_code == 201
+    assert promo_res.status_code == 202, promo_res.text
+    await approve_as_someone_else(async_client, promo_res.json()["id"])
 
     # Verify Alice's 360 profile reflects new designation and timeline history
     alice_refreshed = await async_client.get(f"/v1/workers/{alice_id}")
@@ -502,3 +507,23 @@ async def test_full_hire_to_retire_mock_simulation(async_client: httpx.AsyncClie
     # Verify Bob's worker status is exited
     bob_final = await async_client.get(f"/v1/workers/{bob_id}")
     assert bob_final.json()["status"] == "exited"
+
+
+async def approve_as_someone_else(client, change_id: str) -> None:
+    """A role change is decided by someone other than its requester: an approver steps in, then the admin is back."""
+    import uuid as _uuid
+    from dependencies import get_actor
+    from main import app
+    from services.identity_client import ALL_PEOPLE_PERMISSIONS, Actor
+    from tests.conftest import TEST_ORG_ID
+
+    admin = app.dependency_overrides[get_actor]
+    app.dependency_overrides[get_actor] = lambda: Actor(
+        user_id=_uuid.uuid4(), organization_id=TEST_ORG_ID, user_type="employee", name="Approver",
+        permissions=ALL_PEOPLE_PERMISSIONS,
+    )
+    try:
+        res = await client.post(f"/v1/role-changes/{change_id}/approve", json={})
+        assert res.json()["status"] == "applied", res.text
+    finally:
+        app.dependency_overrides[get_actor] = admin

@@ -63,6 +63,14 @@ class Actor:
         if not self.has(permission):
             raise PermissionDeniedError(permission)
 
+    def only_own(self, permission: str) -> bool:
+        """Whether `permission` covers only the user's own records rather than everyone's."""
+        return not self.is_superuser and permission in self.own_records_only
+
+    def units_for(self, permission: str) -> Optional[frozenset[uuid.UUID]]:
+        """The units `permission` is held within, or None when it isn't limited to units."""
+        return None if self.is_superuser else self.unit_scopes.get(permission)
+
 
 @dataclass(frozen=True)
 class EmployeeRole:
@@ -154,7 +162,8 @@ class IdentityClient:
         if self._internal_token:
             headers["X-FBOS-Internal-Token"] = self._internal_token
 
-        body = await self._get_json(ACTOR_PATH, headers=headers)
+        # with_units: which units each code is limited to, so People narrows records to them (services/access_scope.py).
+        body = await self._get_json(ACTOR_PATH, headers=headers, params={"with_units": "true"})
         return Actor(
             user_id=uuid.UUID(body["user_id"]),
             organization_id=uuid.UUID(body["organization_id"]),
@@ -201,6 +210,11 @@ class IdentityClient:
             ],
             has_more=body["has_more"],
         )
+
+    async def is_active_employee(self, organization_id: uuid.UUID, user_id: uuid.UUID) -> bool:
+        """Whether the user is an active employee user of the organization in Identity."""
+        page = await self.list_employees(organization_id, user_ids=[user_id], limit=1)
+        return any(employee.id == user_id for employee in page.data)
 
     async def unit_heads(self, organization_id: uuid.UUID, unit_id: uuid.UUID) -> list[UnitHead]:
         """The unit and each unit above it, nearest first, with their heads."""

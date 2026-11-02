@@ -42,6 +42,10 @@ class ExitClearanceResponse(BaseModel):
     updated_at: datetime
 
 
+class SeparationWithdrawRequest(BaseModel):
+    reason: Optional[str] = Field(None, max_length=1000)
+
+
 class UpdateClearanceRequest(BaseModel):
     department: str  # it_assets, finance, admin, team_lead, hr
     status: str  # cleared, blocked, pending

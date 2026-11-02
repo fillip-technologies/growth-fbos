@@ -4,10 +4,13 @@ from decimal import Decimal
 import pytest
 from httpx import AsyncClient
 
+from tests.test_role_changes import as_approver, as_requester
+
 
 @pytest.mark.asyncio
 async def test_appraisals_hikes_promotions_and_bonuses(async_client: AsyncClient):
     client = async_client
+    as_requester()  # an HR user, not a client admin: decisions need a second person
 
     # 1. Create worker joined in 2020
     worker_res = await client.post(
@@ -54,23 +57,31 @@ async def test_appraisals_hikes_promotions_and_bonuses(async_client: AsyncClient
     assert prof_res.status_code == 201
     prof_id = prof_res.json()["id"]
 
-    # 4. Record a 15% salary hike with back-dated effective date
+    # 4. Ask for a 15% hike, worked out from the salary on record (not the figure the client sends)
     hike_res = await client.post(
         f"/api/people/v1/workers/{worker_id}/compensation-revisions",
         json={
             "revision_type": "annual_hike",
-            "previous_annual_ctc": 100000.0,
+            "previous_annual_ctc": 1.0,  # ignored
             "increment_pct": 15.0,
             "effective_date": "2022-04-01",  # Historical back-date
             "notes": "Excellent performance on core migration",
         },
     )
-    assert hike_res.status_code == 201
+    assert hike_res.status_code == 202, hike_res.text
     hike = hike_res.json()
+    assert hike["change_type"] == "salary_revision" and hike["status"] == "pending"
     assert float(hike["new_annual_ctc"]) == 115000.0
-    assert hike["effective_date"] == "2022-04-01"
+    # Nothing changes until someone else approves it
+    assert (await client.get(f"/v1/workers/{worker_id}/compensation-revisions")).json() == []
+    as_approver()
+    applied = (await client.post(f"/v1/role-changes/{hike['id']}/approve", json={})).json()
+    assert applied["status"] == "applied"
+    revisions = (await client.get(f"/v1/workers/{worker_id}/compensation-revisions")).json()
+    assert [(r["revision_type"], float(r["new_annual_ctc"])) for r in revisions] == [("annual_hike", 115000.0)]
+    as_requester()
 
-    # 5. Record a promotion to L4
+    # 5. Ask for a promotion to L4; approved, it changes the title and leaves the promotion record
     promo_res = await client.post(
         f"/api/people/v1/workers/{worker_id}/promotions",
         json={
@@ -82,20 +93,24 @@ async def test_appraisals_hikes_promotions_and_bonuses(async_client: AsyncClient
             "effective_date": "2023-04-01",  # Historical promotion
         },
     )
-    assert promo_res.status_code == 201
+    assert promo_res.status_code == 202, promo_res.text
     promo = promo_res.json()
-    assert promo["new_title"] == "Senior Software Engineer"
-    assert promo["new_level"] == "L4"
+    assert promo["change_type"] == "promotion" and promo["status"] == "pending"
+    as_approver()
+    assert (await client.post(f"/v1/role-changes/{promo['id']}/approve", json={})).json()["status"] == "applied"
+    as_requester()
+    records = (await client.get(f"/v1/workers/{worker_id}/promotions")).json()
+    assert [(r["new_title"], r["new_level"], r["previous_title"]) for r in records] == [
+        ("Senior Software Engineer", "L4", "Software Engineer II")
+    ]
 
     # 6. Verify worker designation updated
-    worker_check = await client.get(f"/v1/workers/{worker_id}")
-    assert worker_check.status_code == 200
-    worker_detail = worker_check.json()
+    worker_detail = (await client.get(f"/v1/workers/{worker_id}")).json()
     assert worker_detail["designation"] == "Senior Software Engineer"
     # Timeline should have hire, salary_revision, and promotion
     assert len(worker_detail["timeline"]) >= 3
 
-    # 7. Award a spot bonus
+    # 7. A bonus waits for someone other than whoever awarded it
     bonus_res = await client.post(
         f"/api/people/v1/workers/{worker_id}/bonuses",
         json={
@@ -108,5 +123,9 @@ async def test_appraisals_hikes_promotions_and_bonuses(async_client: AsyncClient
     )
     assert bonus_res.status_code == 201
     bonus = bonus_res.json()
-    assert float(bonus["amount"]) == 5000.0
-    assert bonus["status"] == "approved"
+    assert float(bonus["amount"]) == 5000.0 and bonus["status"] == "pending"
+    approve = f"/api/people/v1/workers/{worker_id}/bonuses/{bonus['id']}/approve"
+    assert (await client.patch(approve)).status_code == 403  # the one who awarded it
+    as_approver()
+    assert (await client.patch(approve)).json()["status"] == "approved"
+    assert (await client.patch(approve)).status_code == 409  # decided once
