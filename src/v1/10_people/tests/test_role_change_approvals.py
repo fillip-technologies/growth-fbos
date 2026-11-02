@@ -126,7 +126,7 @@ async def test_the_requester_or_the_employee_cannot_decide_a_step_meant_for_them
 
     employee_user = uuid.uuid4()
     other = await make_worker(async_client, "self@company.com", user_id=str(employee_user))
-    mine = (await request(async_client, other, new_designation="Lead")).json()
+    mine = (await request(async_client, other, change_type="transfer", new_unit_id=str(UNIT_B))).json()
     own = await decide(async_client, mine["id"], employee_user)
     assert own.status_code == 403 and own.json()["code"] == "SELF_APPROVAL_FORBIDDEN"
 

@@ -21,6 +21,7 @@ from schemas.progression import (
     PromotionCreate,
 )
 from services.payroll_service import get_worker_salary_structure
+from services.designation import refuse_if_from_identity
 from services.identity_sync import queue_sync
 from services.posts import sync_primary_post
 
@@ -129,6 +130,7 @@ async def record_promotion(
     if not worker or worker.organization_id != organization_id:
         raise WorkerNotFoundError("Worker not found")
 
+    refuse_if_from_identity(worker)  # a promotion record changes the designation, which is their Identity role
     old_title = worker.designation
 
     promo = PromotionRecord(

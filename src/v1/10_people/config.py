@@ -57,6 +57,10 @@ class Settings(BaseSettings):
     # The drift check compares both sides for each linked employee at most this often.
     identity_drift_check_interval_hours: int = 24
 
+    # An employee's designation is their role in Identity: it is looked up again when a list or a profile is
+    # opened, at most this often per person (and by the background worker).
+    designation_refresh_minutes: int = 5
+
     # In-app notifications go to the communication service's /internal/notifications.
     notifications_enabled: bool = False
     notification_timeout_seconds: float = 3.0
