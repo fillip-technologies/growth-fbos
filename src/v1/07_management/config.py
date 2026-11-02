@@ -43,10 +43,10 @@ class Settings(BaseSettings):
     capacity_window_past_days: int = 14
     capacity_window_future_days: int = 120
 
-    # Mirrors confirmed Revenue payments into the budget's "revenue" line, once a day. ONE server only.
+    # Mirrors Revenue's issued documents (net of tax) into each budget's "revenue" line, once a day,
+    # over every open fiscal year (documents can be backdated). ONE server only.
     revenue_pull_enabled: bool = False
     revenue_pull_interval_seconds: int = 86400
-    revenue_pull_window_days: int = 7
 
 
 @lru_cache

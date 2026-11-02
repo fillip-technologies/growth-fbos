@@ -7,7 +7,8 @@ push, so any window can simply be asked for again).
 - Delivery `GET /api/delivery/v1/internal/effort?organization_id&from&to`
   -> {"data": [{"user_id", "day", "minutes", "billable": bool, "productive": bool}]}
 - Revenue `GET /api/revenue/v1/internal/revenue-actuals?organization_id&from&to`
-  -> {"data": [{"id", "occurred_on", "amount", "currency"}]}  (confirmed payments; `id` never changes)
+  -> {"data": [{"id", "doc_type", "occurred_on", "amount", "currency"}]}  (issued documents at their
+  taxable value, credit notes negative; `id` never changes)
 
 All three are read-only endpoints in the services that own the data. Until they exist (404), or when the service can't be
 reached, the answer is None: "not known", which callers report as such instead of as zero.
@@ -48,6 +49,7 @@ class Effort:
 @dataclass(frozen=True)
 class RevenueActual:
     id: uuid.UUID
+    doc_type: str
     occurred_on: date
     amount: float
     currency: str
@@ -128,6 +130,7 @@ class RevenueClient(SourceClient):
         return [
             RevenueActual(
                 id=uuid.UUID(row["id"]),
+                doc_type=str(row.get("doc_type") or "document"),
                 occurred_on=date.fromisoformat(row["occurred_on"]),
                 amount=float(row["amount"]),
                 currency=str(row["currency"]).upper(),

@@ -1,4 +1,4 @@
-from datetime import date, datetime, time, timedelta
+from datetime import date
 from typing import Literal
 import uuid
 
@@ -7,12 +7,16 @@ from sqlalchemy import select
 
 from dependencies import CurrentActor, DatabaseSession, verify_internal_caller
 from exceptions import InvalidDateRangeError
-from models.payment import Payment
+from models.invoice import Invoice
 from schemas.revenue_feed import RevenueActualListResponse, RevenueActualRow
 from schemas.activity import ActivityResponse, InternalActivityCreate
 from schemas.subject_access import SubjectAccessResponse
 from services.activity_service import log_from_source
 from services.subject_access_service import check_subject_access
+
+# What counts as revenue for management, with the same rules as the GST-vs-cash report.
+REVENUE_DOC_TYPES = ("tax_invoice", "debit_note", "credit_note")
+UNISSUED_STATUSES = ("draft", "pending_approval")
 
 router = APIRouter(prefix="/internal", tags=["internal"], dependencies=[Depends(verify_internal_caller)])
 
@@ -59,11 +63,12 @@ async def log_activity_from_source(payload: InternalActivityCreate, session: Dat
 @router.get(
     "/revenue-actuals",
     response_model=RevenueActualListResponse,
-    summary="Confirmed payments received in a window (internal)",
+    summary="Revenue earned in a window: issued documents net of tax (internal)",
     description=(
-        "Read by the management service to mirror realized revenue against its budgets. One row per "
-        "confirmed payment, dated by the day it was received; the payment id never changes, so the "
-        "reader can ask for the same window again without double-counting."
+        "Read by the management service to mirror revenue against its budgets. One row per issued tax "
+        "invoice or debit note (positive) and credit note (negative), dated by its issue date, at its "
+        "taxable value: GST collected is owed to the government, not earned. Issued documents never "
+        "change, and the document id is stable, so the same window can be asked for again."
     ),
 )
 async def list_revenue_actuals(
@@ -74,21 +79,28 @@ async def list_revenue_actuals(
 ) -> RevenueActualListResponse:
     if to_date < from_date:
         raise InvalidDateRangeError("'to' must be on or after 'from'")
-    payments = (
+    documents = (
         await session.execute(
-            select(Payment)
+            select(Invoice)
             .where(
-                Payment.organization_id == organization_id,
-                Payment.status == "confirmed",
-                Payment.received_at >= datetime.combine(from_date, time.min),
-                Payment.received_at < datetime.combine(to_date + timedelta(days=1), time.min),
+                Invoice.organization_id == organization_id,
+                Invoice.doc_type.in_(REVENUE_DOC_TYPES),
+                Invoice.status.not_in(UNISSUED_STATUSES),
+                Invoice.issue_date >= from_date,
+                Invoice.issue_date <= to_date,
             )
-            .order_by(Payment.received_at, Payment.id)
+            .order_by(Invoice.issue_date, Invoice.id)
         )
     ).scalars().all()
     return RevenueActualListResponse(
         data=[
-            RevenueActualRow(id=p.id, occurred_on=p.received_at.date(), amount=float(p.amount), currency=p.currency)
-            for p in payments
+            RevenueActualRow(
+                id=doc.id,
+                doc_type=doc.doc_type,
+                occurred_on=doc.issue_date,
+                amount=float(-doc.taxable_total if doc.doc_type == "credit_note" else doc.taxable_total),
+                currency=doc.currency,
+            )
+            for doc in documents
         ]
     )

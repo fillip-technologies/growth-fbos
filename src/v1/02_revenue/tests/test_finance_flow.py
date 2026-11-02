@@ -473,18 +473,27 @@ async def test_monthly_terms_spread_the_contract_over_its_months(async_client: h
     assert amounts == ["33333.33", "33333.33", "33333.34"]
 
 
-async def test_internal_revenue_actuals_lists_confirmed_payments_of_the_window(async_client: httpx.AsyncClient):
-    customer_id = await customer(async_client)
-    invoice = await issue(async_client, await draft(async_client, customer_id, price=1000))
-    paid = await pay(async_client, customer_id, 500, invoice["id"])
-    assert paid.status_code == 201, paid.json()
-
+async def test_internal_revenue_actuals_are_issued_documents_net_of_tax(async_client: httpx.AsyncClient):
     from tests.conftest import TEST_ORG_ID
+
+    customer_id = await customer(async_client)
+    issued = await issue(async_client, await draft(async_client, customer_id, price=1000))
+    await draft(async_client, customer_id, price=500)  # a draft is not revenue yet
+    credit = await async_client.post(
+        f"{BASE}/invoices/{issued['id']}/credit-notes",
+        json={"reason": "service_deficiency", "lines": [{"description": "Refund part", "unit_price": {"amount": 200, "currency": "INR"}}]},
+        headers=key(),
+    )
+    assert credit.status_code == 201, credit.json()
+    assert (await pay(async_client, customer_id, 500, issued["id"])).status_code == 201  # cash is not counted again
 
     url = f"{BASE}/internal/revenue-actuals"
     window = {"organization_id": str(TEST_ORG_ID), "from": TODAY.isoformat(), "to": TODAY.isoformat()}
     rows = (await async_client.get(url, params=window)).json()["data"]
-    assert [(r["occurred_on"], r["amount"], r["currency"]) for r in rows] == [(TODAY.isoformat(), 500.0, "INR")]
+    assert sorted((r["doc_type"], r["amount"], r["currency"]) for r in rows) == [
+        ("credit_note", -200.0, "INR"), ("tax_invoice", 1000.0, "INR"),  # taxable value: GST left out
+    ]
+    assert {r["id"] for r in rows} == {issued["id"], credit.json()["id"]}
 
     yesterday = (TODAY - timedelta(days=1)).isoformat()
     assert (await async_client.get(url, params={**window, "from": yesterday, "to": yesterday})).json()["data"] == []
