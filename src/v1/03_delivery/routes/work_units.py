@@ -4,11 +4,13 @@ from typing import Optional
 from fastapi import APIRouter, Depends, Header, Query, Response, status
 
 import permissions
+import services.stats as stats
 import services.work_units as service
 from services.views import project_view
 from dependencies import CurrentActor, DatabaseSession, OrgId, UserId, require_permission
 from exceptions import PermissionDeniedError
 from schemas.common import PageResponse
+from schemas.stats import ProjectStats
 from schemas.work_units import (
     ChangeRequestApprove,
     ChangeRequestCreate,
@@ -170,6 +172,12 @@ async def create_work_unit(
     await session.commit()
     response.headers["ETag"] = f'"{work_unit.version}"'
     return work_unit
+
+
+@router.get("/work-units/stats", response_model=ProjectStats, dependencies=[CAN_READ])
+async def get_project_stats(session: DatabaseSession, org_id: OrgId, actor: CurrentActor) -> ProjectStats:
+    """Counts over the projects the caller may see: per status and health, progress, and the ones needing attention."""
+    return await stats.project_stats(session, org_id, view=await project_view(session, actor))
 
 
 @router.get("/work-units/{work_unit_id}", response_model=WorkUnitResponse, dependencies=[CAN_READ, IN_VIEW])

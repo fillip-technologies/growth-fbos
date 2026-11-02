@@ -16,11 +16,14 @@ from routes.opportunities import router as opportunities_router
 from routes.payments import router as payments_router
 from routes.quotations import router as quotations_router
 from routes.receivables import router as receivables_router
+from routes.summaries import router as summaries_router
 from routes.tax import router as tax_router
 from routes.tax_registrations import router as tax_registrations_router
 from routes.webhooks import router as webhooks_router
 
 core_router = APIRouter()
+# Before the resource routers: /leads/summary must not be read as /leads/{lead_id}.
+core_router.include_router(summaries_router)
 core_router.include_router(clients_router)
 core_router.include_router(client_tax_profiles_router)
 core_router.include_router(client_services_router)
