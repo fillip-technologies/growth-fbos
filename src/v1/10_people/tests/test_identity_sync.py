@@ -107,6 +107,14 @@ async def test_a_job_brings_its_access_role_for_the_posts_department(async_clien
 
 
 @pytest.mark.asyncio
+async def test_a_designation_made_of_several_identity_roles_matches_each_role_name(async_client, db_session, identity):
+    await map_role(async_client, "Engineer", "engineer_access", scope="company")
+    await make_worker(async_client, user_id=new_user(), unit_id=str(UNIT), designation="Admin / Engineer")
+    await relay(db_session, identity)
+    assert [r["role_code"] for r in last_declaration(identity)["managed_roles"]] == ["engineer_access"]
+
+
+@pytest.mark.asyncio
 async def test_a_job_profile_mapping_beats_the_designation_one(async_client, db_session, identity):
     profile = JobProfile(organization_id=TEST_ORG_ID, job_code="SE", title="Software Engineer", job_family="Eng", job_level="L2")
     db_session.add(profile)

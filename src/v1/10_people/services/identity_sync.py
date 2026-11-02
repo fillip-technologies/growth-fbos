@@ -147,7 +147,9 @@ async def mapped_roles(session: AsyncSession, worker: Worker, live: list[WorkerP
         profile_id = await _job_profile_of(session, post)
         matched = [m for m in mappings if profile_id and m.match_type == "job_profile" and m.match_value == str(profile_id)]
         if not matched:
-            matched = [m for m in mappings if m.match_type == "designation" and m.match_value == post.title.strip().lower()]
+            # A designation that comes from Identity roles joins their names ("Admin / Member"): each name counts.
+            titles = {post.title.strip().lower(), *(part.strip().lower() for part in post.title.split(" / "))}
+            matched = [m for m in mappings if m.match_type == "designation" and m.match_value in titles]
         for mapping in matched:
             scope: Optional[uuid.UUID] = None
             if mapping.scope == "department":
