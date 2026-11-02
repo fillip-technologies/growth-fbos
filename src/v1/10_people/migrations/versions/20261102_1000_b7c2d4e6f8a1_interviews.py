@@ -19,7 +19,21 @@ branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
 
+def _exists(table: str, column: str = None) -> bool:
+    """
+    Whether the table (or the column) is already there. People creates missing tables when it starts
+    (`create_all`), so a table this migration would create may exist already; a column cannot be.
+    """
+    inspector = sa.inspect(op.get_bind())
+    if table not in inspector.get_table_names():
+        return False
+    return column is None or column in {c['name'] for c in inspector.get_columns(table)}
+
+
+
 def upgrade() -> None:
+    if _exists('interviews'):
+        return
     op.create_table('interviews',
     sa.Column('id', database.types.UUIDType(length=36), nullable=False),
     sa.Column('organization_id', database.types.UUIDType(length=36), nullable=False),

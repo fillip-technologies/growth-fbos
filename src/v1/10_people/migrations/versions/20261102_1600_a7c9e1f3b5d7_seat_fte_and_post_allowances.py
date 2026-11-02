@@ -19,10 +19,25 @@ branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
 
+def _exists(table: str, column: str = None) -> bool:
+    """
+    Whether the table (or the column) is already there. People creates missing tables when it starts
+    (`create_all`), so a table this migration would create may exist already; a column cannot be.
+    """
+    inspector = sa.inspect(op.get_bind())
+    if table not in inspector.get_table_names():
+        return False
+    return column is None or column in {c['name'] for c in inspector.get_columns(table)}
+
+
+
 def upgrade() -> None:
-    op.add_column('role_changes', sa.Column('over_budget', sa.Boolean(), server_default='0', nullable=False))
-    op.add_column('payslips', sa.Column('post_allowance_pay', sa.Numeric(precision=14, scale=2), server_default='0', nullable=False))
-    op.add_column('payslips', sa.Column('post_allowance_lines', sa.JSON(), nullable=True))
+    if not _exists('role_changes', 'over_budget'):
+        op.add_column('role_changes', sa.Column('over_budget', sa.Boolean(), server_default='0', nullable=False))
+    if not _exists('payslips', 'post_allowance_pay'):
+        op.add_column('payslips', sa.Column('post_allowance_pay', sa.Numeric(precision=14, scale=2), server_default='0', nullable=False))
+    if not _exists('payslips', 'post_allowance_lines'):
+        op.add_column('payslips', sa.Column('post_allowance_lines', sa.JSON(), nullable=True))
 
 
 def downgrade() -> None:
