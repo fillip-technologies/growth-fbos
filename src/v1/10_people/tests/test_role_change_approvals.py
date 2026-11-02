@@ -215,7 +215,7 @@ async def test_only_those_who_set_up_approvals_can_choose_the_standing_approvers
     assert (await async_client.put("/v1/role-change-approvers/cfo", json={"user_ids": []})).status_code == 422
     await async_client.put("/v1/role-change-approvers/finance", json={"user_ids": [str(FINANCE), str(FINANCE)]})
     listed = (await async_client.get("/v1/role-change-approvers")).json()["data"]
-    assert {row["role_key"]: row["user_ids"] for row in listed} == {"hr_head": [], "finance": [str(FINANCE)]}
+    assert {row["role_key"]: row["user_ids"] for row in listed} == {"hr_head": [], "finance": [str(FINANCE)], "access_admin": []}
     await async_client.put("/v1/role-change-approvers/finance", json={"user_ids": []})
     assert (await async_client.get("/v1/role-change-approvers")).json()["data"][1]["user_ids"] == []
 

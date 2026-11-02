@@ -71,3 +71,46 @@ class EmploymentState(BaseModel):
 
 class EmploymentStatesResponse(BaseModel):
     data: list[EmploymentState]
+
+
+class RoleOption(BaseModel):
+    """A role People may offer on a post."""
+
+    code: str
+    name: str
+    is_system: bool = False
+    assignable_by_people: bool = True
+
+
+class RoleOptionsResponse(BaseModel):
+    data: list[RoleOption]
+
+
+class AdoptRolesRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    role_codes: list[str] = Field(..., min_length=1, max_length=50)
+    source_ref: str = Field(..., min_length=1, max_length=100, description="The post that now gives these roles.")
+
+
+class AdoptedRole(BaseModel):
+    role_code: str
+    scope_unit_id: Optional[uuid.UUID] = None
+
+
+class AdoptRolesResponse(BaseModel):
+    user_id: uuid.UUID
+    adopted: list[AdoptedRole] = []
+    missing: list[str] = []  # codes the user holds by hand in no scope, or that do not exist
+
+
+class CanGrantRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    requester_user_id: uuid.UUID
+    role_codes: list[str] = Field(..., min_length=1, max_length=50)
+    scope_unit_id: Optional[uuid.UUID] = None
+
+
+class CanGrantResponse(BaseModel):
+    not_grantable: list[str] = []  # roles the requester could not grant themselves

@@ -16,7 +16,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from exceptions import PermissionDeniedError, ValidationFailedError
 from models.org_unit import OrgUnit
-from models.rbac import Permission, Role, RoleAssignment
+from models.rbac import PEOPLE_SOURCE, Permission, Role, RoleAssignment
 from models.user import User
 from models.user_permission import UserPermission
 from schemas.user import (
@@ -367,6 +367,12 @@ class UserPermissionService:
         ).unique().scalars().all()
         new_presets = list(presets)
         for assignment in existing_presets:
+            if assignment.source == PEOPLE_SOURCE:
+                # It comes from the person's post in People and is changed only there; the editor sends it back, so it is not added twice.
+                match = next((p for p in new_presets if _same_preset(assignment, p)), None)
+                if match:
+                    new_presets.remove(match)
+                continue
             if replace_presets:
                 match = next((p for p in new_presets if _same_preset(assignment, p)), None)
                 if match:

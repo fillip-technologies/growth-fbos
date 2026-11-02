@@ -17,21 +17,28 @@ from typing import Optional
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from exceptions import DuplicateCodeError, UserNotFoundError, ValidationFailedError
+from exceptions import DuplicateCodeError, PermissionDeniedError, UserNotFoundError, ValidationFailedError
 from models.org_unit import OrgUnit
-from models.rbac import Role, RoleAssignment
+from models.rbac import PEOPLE_SOURCE, Role, RoleAssignment
 from models.user import User
 from models.user_permission import UserPermission
 from schemas.people_sync import (
+    AdoptedRole,
+    AdoptRolesRequest,
+    AdoptRolesResponse,
+    CanGrantRequest,
+    CanGrantResponse,
     EmploymentApplied,
     EmploymentDeclaration,
     EmploymentState,
     EmploymentSyncResponse,
     ManagedRole,
     ManagedRoleState,
+    RoleOption,
     SyncProblem,
 )
 from schemas.user import RolePresetInput
+from services.access_control import Actor, load_grants
 from services.event_publisher import event_publisher
 from services.rbac_service import rbac_service
 from services.user_permission_service import user_permission_service
@@ -39,7 +46,6 @@ from services.user_service import user_service
 
 logger = logging.getLogger("identity.people_sync")
 
-PEOPLE_SOURCE = "people"
 STATES_LIMIT = 100
 
 RoleKey = tuple[uuid.UUID, Optional[uuid.UUID]]  # role id, scope unit
@@ -128,12 +134,16 @@ async def _apply_managed_roles(
         if role is None:
             problems.append(SyncProblem(field="managed_roles", issue=f"Unknown role '{item.role_code}'"))
             continue
+        if not role.assignable_by_people:
+            problems.append(SyncProblem(field="managed_roles", issue=f"{item.role_code}: this role cannot be granted from People"))
+            continue
         desired.setdefault((role.id, item.scope_unit_id), item)
 
     ours = await _managed_assignments(session, user.id)
     ours_by_key: dict[RoleKey, RoleAssignment] = {(a.role_id, a.scope_unit_id): a for a in ours}
     # A problem with one wanted role must not take away a role People already granted for it.
-    unresolved = {w.role_code.lower() for w in wanted} - set(roles)
+    # A role People may no longer grant is also left as it is: a problem must not take access away.
+    unresolved = {w.role_code.lower() for w in wanted} - {code for code, r in roles.items() if r.assignable_by_people}
     protected = {key for key, a in ours_by_key.items() if a.role and a.role.code.lower() in unresolved}
 
     for key, assignment in ours_by_key.items():
@@ -249,3 +259,69 @@ async def employment_states(session: AsyncSession, organization_id: uuid.UUID, u
         )
         for u in users
     ]
+
+
+async def list_role_options(session: AsyncSession, organization_id: uuid.UUID) -> list[RoleOption]:
+    """The roles of the organization, with whether People may grant each (for the role picker)."""
+    rows = (
+        await session.execute(select(Role).where(Role.organization_id == organization_id).order_by(Role.name, Role.code))
+    ).unique().scalars().all()
+    return [
+        RoleOption(code=r.code, name=r.name or r.code, is_system=r.is_system, assignable_by_people=r.assignable_by_people)
+        for r in rows
+    ]
+
+
+async def adopt_roles(
+    session: AsyncSession, organization_id: uuid.UUID, user_id: uuid.UUID, request: AdoptRolesRequest
+) -> AdoptRolesResponse:
+    """
+    Take over roles the user holds by hand: they become People's, tied to the post that gives them, so a
+    later promotion replaces them. Nothing is granted or removed. Repeating it changes nothing.
+    """
+    user = await _load_employee(session, organization_id, user_id)
+    codes = {c.lower() for c in request.role_codes}
+    held = (
+        await session.execute(
+            select(RoleAssignment).where(RoleAssignment.user_id == user.id, RoleAssignment.organization_id == organization_id)
+        )
+    ).unique().scalars().all()
+    adopted: list[AdoptedRole] = []
+    found: set[str] = set()
+    for assignment in held:
+        code = assignment.role.code.lower()
+        if code not in codes:
+            continue
+        if assignment.source is not None and assignment.source != PEOPLE_SOURCE:
+            continue  # another service manages it
+        found.add(code)
+        if assignment.source is None:
+            assignment.source = PEOPLE_SOURCE
+            assignment.source_ref = request.source_ref
+        elif assignment.source_ref != request.source_ref:
+            continue
+        adopted.append(AdoptedRole(role_code=assignment.role.code, scope_unit_id=assignment.scope_unit_id))
+    await session.commit()
+    return AdoptRolesResponse(user_id=user.id, adopted=adopted, missing=sorted(codes - found))
+
+
+async def can_grant(session: AsyncSession, organization_id: uuid.UUID, request: CanGrantRequest) -> CanGrantResponse:
+    """Which of these roles the requester could not grant themselves with the access they hold."""
+    requester = await _load_employee(session, organization_id, request.requester_user_id)
+    if requester.user_type == "client_admin":
+        return CanGrantResponse()
+    actor = Actor(
+        user_id=requester.id, organization_id=organization_id, user_type=requester.user_type,
+        name=requester.name, grants=await load_grants(session, requester.id),
+    )
+    not_grantable: list[str] = []
+    for code in request.role_codes:
+        try:
+            grants, _ = await user_permission_service.resolve(
+                session, organization_id, permissions=[],
+                presets=[RolePresetInput(role_code=code, scope_unit_id=request.scope_unit_id)],
+            )
+            user_permission_service.assert_can_grant(actor, grants)
+        except (ValidationFailedError, PermissionDeniedError):  # an unknown role, or more than the requester holds
+            not_grantable.append(code)
+    return CanGrantResponse(not_grantable=not_grantable)

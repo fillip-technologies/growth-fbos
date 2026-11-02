@@ -32,7 +32,7 @@ SHARING_TYPES = (PRIMARY, CONCURRENT)  # these split the person's working time
 FULL_TIME = Decimal(100)
 
 # Fields a new version of a post carries over from the one it replaces.
-CARRIED_FIELDS = ("post_type", "title", "unit_id", "position_id", "manager_id", "time_share", "monthly_allowance")
+CARRIED_FIELDS = ("post_type", "title", "unit_id", "position_id", "manager_id", "time_share", "monthly_allowance", "role_codes")
 
 
 # --- Rules ----------------------------------------------------------------------------------------
@@ -151,6 +151,7 @@ async def to_responses(session: AsyncSession, actor: Actor, posts: list[WorkerPo
             "end_date": p.end_date,
             "status": p.status,
             "role_change_id": p.role_change_id,
+            "role_codes": p.role_codes or [],
         }
         for p in posts
     ]

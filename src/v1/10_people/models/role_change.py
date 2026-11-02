@@ -36,6 +36,7 @@ class RoleChange(Base):
 
     # What it changes to; empty means "unchanged".
     new_designation: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    new_role_codes: Mapped[Optional[list]] = mapped_column(JSON, nullable=True)  # the post's complete list of roles afterwards
     new_unit_id: Mapped[Optional[uuid.UUID]] = mapped_column(UUIDType, nullable=True)
     new_manager_id: Mapped[Optional[uuid.UUID]] = mapped_column(UUIDType, nullable=True)
     new_position_id: Mapped[Optional[uuid.UUID]] = mapped_column(UUIDType, nullable=True)
@@ -52,6 +53,7 @@ class RoleChange(Base):
 
     # What it was, taken when the change is applied.
     previous_designation: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    previous_role_codes: Mapped[Optional[list]] = mapped_column(JSON, nullable=True)
     previous_unit_id: Mapped[Optional[uuid.UUID]] = mapped_column(UUIDType, nullable=True)
     previous_manager_id: Mapped[Optional[uuid.UUID]] = mapped_column(UUIDType, nullable=True)
     previous_position_id: Mapped[Optional[uuid.UUID]] = mapped_column(UUIDType, nullable=True)
@@ -86,7 +88,7 @@ class RoleChangeStep(Base):
     )
     seq: Mapped[int] = mapped_column(nullable=False)
     name: Mapped[str] = mapped_column(String(255), nullable=False)
-    kind: Mapped[str] = mapped_column(String(20), nullable=False)  # approval, department_head, hr_head, finance
+    kind: Mapped[str] = mapped_column(String(20), nullable=False)  # approval, department_head, hr_head, finance, access_admin
     unit_id: Mapped[Optional[uuid.UUID]] = mapped_column(UUIDType, nullable=True)  # for department_head
     # Who may decide it (user ids as text). Empty with open_to_pool: anyone who may approve role changes.
     approver_user_ids: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
@@ -108,7 +110,7 @@ class RoleChangeApprover(Base):
 
     id: Mapped[uuid.UUID] = mapped_column(UUIDType, primary_key=True, default=uuid.uuid4)
     organization_id: Mapped[uuid.UUID] = mapped_column(UUIDType, nullable=False, index=True)
-    role_key: Mapped[str] = mapped_column(String(20), nullable=False)  # hr_head, finance
+    role_key: Mapped[str] = mapped_column(String(20), nullable=False)  # hr_head, finance, access_admin
     user_id: Mapped[uuid.UUID] = mapped_column(UUIDType, nullable=False)
 
 

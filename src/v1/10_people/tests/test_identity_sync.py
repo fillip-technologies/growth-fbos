@@ -5,13 +5,10 @@ from datetime import date, datetime, timedelta, timezone
 import pytest
 from sqlalchemy import select
 
-from dependencies import get_actor
-from main import app
 from models.identity_sync import WorkerIdentitySync
-from models.job_architecture import JobProfile
 from models.platform import Outbox
 from models.worker import Worker
-from services import identity_sync
+from services import identity_sync, posts
 from services.identity_client import Actor, EmploymentState
 from tests.conftest import TEST_ORG_ID, TEST_USER_ID
 from tests.test_role_change_posts import add_post, approve
@@ -25,10 +22,14 @@ def new_user() -> str:
     return str(uuid.uuid4())
 
 
-async def map_role(client, value="engineer", role="engineer_access", scope="department", match_type="designation"):
-    res = await client.post("/v1/access-role-mappings", json={"match_type": match_type, "match_value": value, "role_code": role, "scope": scope})
-    assert res.status_code == 201, res.text
-    return res.json()
+async def give_roles(db_session, worker_id, *codes, scope="department", post_type="primary") -> None:
+    """Make the worker's live post of this kind give these roles, and queue the sync as an applied role change does."""
+    worker = await db_session.get(Worker, uuid.UUID(worker_id))
+    for post in await posts.live_posts(db_session, worker):
+        if post.post_type == post_type:
+            post.role_codes = [{"role_code": code, "scope": scope, "name": code} for code in codes]
+    await identity_sync.queue_sync(db_session, worker)
+    await db_session.commit()
 
 
 async def relay(db_session, identity, now=NOW) -> int:
@@ -87,18 +88,23 @@ async def test_the_declaration_holds_only_what_people_knows(async_client, db_ses
 
 
 @pytest.mark.asyncio
-async def test_a_job_brings_its_access_role_for_the_posts_department(async_client, db_session, identity):
+async def test_a_post_gives_its_roles_for_the_posts_department(async_client, db_session, identity):
     worker_id = await make_worker(async_client, user_id=new_user(), unit_id=str(UNIT))
     await relay(db_session, identity)
     assert last_declaration(identity)["managed_roles"] == []
 
-    await map_role(async_client, "ENGINEER", "Engineer_Access")  # matched on the designation, any case
-    assert len(await waiting(db_session)) == 1  # everyone with a login is queued when the mapping changes
+    await give_roles(db_session, worker_id, "Engineer_Access")
+    assert len(await waiting(db_session)) == 1
     await relay(db_session, identity)
     [role] = last_declaration(identity)["managed_roles"]
     assert (role["role_code"], role["scope_unit_id"]) == ("Engineer_Access", str(UNIT))
 
-    await map_role(async_client, "engineer", "badge_access", scope="company")
+    await give_roles(db_session, worker_id, "Engineer_Access")
+    worker = await db_session.get(Worker, uuid.UUID(worker_id))
+    primary = next(p for p in await posts.live_posts(db_session, worker) if p.post_type == "primary")
+    primary.role_codes = [*primary.role_codes, {"role_code": "badge_access", "scope": "organization", "name": "Badge"}]
+    await identity_sync.queue_sync(db_session, worker)
+    await db_session.commit()
     await relay(db_session, identity)
     assert {(r["role_code"], r["scope_unit_id"]) for r in last_declaration(identity)["managed_roles"]} == {
         ("Engineer_Access", str(UNIT)), ("badge_access", None),
@@ -107,39 +113,16 @@ async def test_a_job_brings_its_access_role_for_the_posts_department(async_clien
 
 
 @pytest.mark.asyncio
-async def test_a_designation_made_of_several_identity_roles_matches_each_role_name(async_client, db_session, identity):
-    await map_role(async_client, "Engineer", "engineer_access", scope="company")
+async def test_a_designation_alone_gives_no_access(async_client, db_session, identity):
     await make_worker(async_client, user_id=new_user(), unit_id=str(UNIT), designation="Admin / Engineer")
     await relay(db_session, identity)
-    assert [r["role_code"] for r in last_declaration(identity)["managed_roles"]] == ["engineer_access"]
-
-
-@pytest.mark.asyncio
-async def test_a_job_profile_mapping_beats_the_designation_one(async_client, db_session, identity):
-    profile = JobProfile(organization_id=TEST_ORG_ID, job_code="SE", title="Software Engineer", job_family="Eng", job_level="L2")
-    db_session.add(profile)
-    await db_session.flush()
-    seat = (await async_client.post("/v1/positions", json={"title": "Engineer", "job_profile_id": str(profile.id), "effective_from": "2023-01-01"})).json()["id"]
-
-    await map_role(async_client, "engineer", "by_designation")
-    await map_role(async_client, str(profile.id), "by_profile", match_type="job_profile")
-    worker_id = await make_worker(async_client, user_id=new_user(), unit_id=str(UNIT))
-    await relay(db_session, identity)
-    assert [r["role_code"] for r in last_declaration(identity)["managed_roles"]] == ["by_designation"]  # no seat, no profile
-
-    res = await request(async_client, worker_id, change_type="transfer", new_position_id=seat, effective_date="2025-07-01")
-    from tests.test_role_changes import as_approver, as_requester
-    as_approver()
-    assert (await async_client.post(f"/v1/role-changes/{res.json()['id']}/approve", json={})).status_code == 200
-    as_requester()
-    await relay(db_session, identity)
-    assert [r["role_code"] for r in last_declaration(identity)["managed_roles"]] == ["by_profile"]
+    assert last_declaration(identity)["managed_roles"] == []  # access follows the post's roles, not its title
 
 
 @pytest.mark.asyncio
 async def test_a_department_scoped_role_for_a_post_without_a_department_is_left_out_and_noted(async_client, db_session, identity):
     worker_id = await make_worker(async_client, user_id=new_user())  # no department
-    await map_role(async_client)
+    await give_roles(db_session, worker_id, "engineer_access")
     await relay(db_session, identity)
     assert last_declaration(identity)["managed_roles"] == []
     assert "has none" in (await status_of(async_client, worker_id))["note"]
@@ -148,12 +131,13 @@ async def test_a_department_scoped_role_for_a_post_without_a_department_is_left_
 @pytest.mark.asyncio
 async def test_ending_a_post_removes_only_the_access_it_brought(async_client, db_session, identity):
     worker_id = await make_worker(async_client, user_id=new_user(), unit_id=str(UNIT))
-    await map_role(async_client, "engineer", "engineer_access")
-    await map_role(async_client, "trainer", "trainer_access")
+    await give_roles(db_session, worker_id, "engineer_access")
     await relay(db_session, identity)
     assert [r["role_code"] for r in last_declaration(identity)["managed_roles"]] == ["engineer_access"]
 
-    added = await add_post(async_client, worker_id, new_unit_id=str(OTHER_UNIT))
+    added = await add_post(
+        async_client, worker_id, new_unit_id=str(OTHER_UNIT), new_role_codes=[{"role_code": "trainer_access", "scope": "department"}]
+    )
     await relay(db_session, identity)
     assert {(r["role_code"], r["scope_unit_id"]) for r in last_declaration(identity)["managed_roles"]} == {
         ("engineer_access", str(UNIT)), ("trainer_access", str(OTHER_UNIT)),
@@ -237,7 +221,8 @@ async def test_drift_is_reported_never_fixed_and_waiting_changes_are_left_alone(
     in_sync = await make_worker(async_client, "a@company.com", user_id=new_user(), unit_id=str(UNIT))
     drifted = await make_worker(async_client, "b@company.com", user_id=new_user(), unit_id=str(UNIT))
     missing = await make_worker(async_client, "c@company.com", user_id=new_user(), unit_id=str(UNIT))
-    await map_role(async_client)
+    for worker_id in (in_sync, drifted, missing):
+        await give_roles(db_session, worker_id, "engineer_access")
     await relay(db_session, identity)
     identity.declarations.clear()
 
@@ -274,29 +259,9 @@ async def test_a_deactivated_login_for_an_active_employee_is_drift(async_client,
 
 
 @pytest.mark.asyncio
-async def test_mappings_need_both_permissions_and_a_real_job_profile(async_client, db_session):
-    body = {"match_type": "designation", "match_value": "engineer", "role_code": "engineer_access"}
-
-    def act_with(*codes: str) -> None:
-        app.dependency_overrides[get_actor] = lambda: Actor(
-            user_id=TEST_USER_ID, organization_id=TEST_ORG_ID, user_type="employee", name="Someone", permissions=frozenset(codes))
-
-    act_with("people.role_change.manage")
-    assert (await async_client.post("/v1/access-role-mappings", json=body)).status_code == 403  # may not apply roles in Identity
-    act_with("identity.role_assignment.create")
-    assert (await async_client.post("/v1/access-role-mappings", json=body)).status_code == 403  # may not set up approvals
-    act_with("people.role_change.manage", "identity.role_assignment.create")
-    created = await async_client.post("/v1/access-role-mappings", json=body)
-    assert created.status_code == 201
-    assert (await async_client.post("/v1/access-role-mappings", json=body)).json()["code"] == "MAPPING_EXISTS"
-    bad = {"match_type": "job_profile", "match_value": str(uuid.uuid4()), "role_code": "x"}
-    assert (await async_client.post("/v1/access-role-mappings", json=bad)).status_code == 422
-    assert (await async_client.post("/v1/access-role-mappings", json={**bad, "match_value": "not-an-id"})).status_code == 422
-
-    act_with("people.role_change.manage")  # may list and remove them
-    assert len((await async_client.get("/v1/access-role-mappings")).json()["data"]) == 1
-    assert (await async_client.delete(f"/v1/access-role-mappings/{created.json()['id']}")).status_code == 204
-    assert (await async_client.delete(f"/v1/access-role-mappings/{created.json()['id']}")).status_code == 404
+async def test_the_job_to_role_mapping_routes_are_gone(async_client):
+    assert (await async_client.get("/v1/access-role-mappings")).status_code == 404
+    assert (await async_client.post("/v1/access-role-mappings", json={})).status_code in (404, 405)
 
 
 @pytest.mark.asyncio

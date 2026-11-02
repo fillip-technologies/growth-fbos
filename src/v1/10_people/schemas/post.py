@@ -26,6 +26,7 @@ class WorkerPostResponse(BaseModel):
     end_date: Optional[date] = None
     status: str
     role_change_id: Optional[uuid.UUID] = None
+    role_codes: List[dict] = []  # the Identity roles the post gives: [{"role_code", "scope", "name"}]
 
 
 class WorkerPostList(BaseModel):

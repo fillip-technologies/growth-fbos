@@ -563,6 +563,17 @@ class UserNotInvitedError(IdentityServiceError):
         )
 
 
+class RoleManagedByPeopleError(IdentityServiceError):
+    """409: a role that comes from the person's post in People is changed there, with a role change."""
+
+    def __init__(self) -> None:
+        super().__init__(
+            status_code=status.HTTP_409_CONFLICT,
+            code="ROLE_MANAGED_BY_PEOPLE",
+            message="This role comes from the person's post in People. Change it with a role change there.",
+        )
+
+
 class SelfModificationError(IdentityServiceError):
     """403: Users can't deactivate themselves or change their own permissions."""
 
