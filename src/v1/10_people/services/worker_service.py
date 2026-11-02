@@ -367,6 +367,7 @@ SKIP_ALREADY_LINKED = "already_linked"
 SKIP_DUPLICATE_IN_REQUEST = "duplicate_in_request"
 SKIP_EMAIL_TAKEN = "work_email_taken"
 SKIP_CODE_TAKEN = "worker_code_taken"
+SKIP_NO_ROLE = "no_role"
 
 
 async def _worker_code_taken(session: AsyncSession, organization_id: uuid.UUID, code: str) -> bool:
@@ -394,7 +395,15 @@ def _to_importable(employee: IdentityEmployee) -> ImportableUser:
         employee_code=employee.employee_code,
         unit_id=employee.home_unit_id,
         manager_user_id=employee.manager_user_id,
+        roles=[role.name for role in employee.roles],
+        designation=_designation_from_roles(employee),
     )
+
+
+def _designation_from_roles(employee: IdentityEmployee) -> Optional[str]:
+    """The designation a user's Identity role gives: its name, or the names joined when they have several."""
+    names = [(role.name or role.code).strip() for role in employee.roles]
+    return " / ".join(name for name in names if name)[:255] or None
 
 
 def _parse_offset(cursor: Optional[str]) -> int:
@@ -498,6 +507,9 @@ async def _import_one(
     created: list[Worker],
 ) -> Optional[str]:
     """Create one worker and append it to `created`; the reason it was skipped, if it was."""
+    designation = (item.designation or "").strip() or _designation_from_roles(employee)
+    if designation is None:
+        return SKIP_NO_ROLE
     email_taken = await session.execute(
         select(Worker.id).where(Worker.organization_id == organization_id, Worker.work_email == employee.email)
     )
@@ -521,7 +533,7 @@ async def _import_one(
         work_email=employee.email,
         phone=employee.phone,
         unit_id=employee.home_unit_id,
-        designation=item.designation.strip(),
+        designation=designation,
         employment_type=item.employment_type,
         status="active",
         date_of_joining=item.date_of_joining,

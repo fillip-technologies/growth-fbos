@@ -136,6 +136,9 @@ class ImportableUser(BaseModel):
     employee_code: Optional[str] = None
     unit_id: Optional[uuid.UUID] = None
     manager_user_id: Optional[uuid.UUID] = None
+    # The user's roles in Identity, and the designation they give: the same, so the two never disagree.
+    roles: List[str] = []
+    designation: Optional[str] = None
 
 
 class ImportableUsersResponse(BaseModel):
@@ -145,8 +148,9 @@ class ImportableUsersResponse(BaseModel):
 
 class WorkerImportItem(BaseModel):
     user_id: uuid.UUID
+    # Left out, the designation is the user's role in Identity (several roles are joined with " / ").
+    designation: Optional[str] = Field(None, min_length=1, max_length=255)
     # Identity does not hold these, so HR supplies them.
-    designation: str = Field(..., min_length=1, max_length=255)
     date_of_joining: date
     employment_type: str = "full_time"
     # Left empty it falls back to the user's employee code in identity, and to none if that is empty or taken.

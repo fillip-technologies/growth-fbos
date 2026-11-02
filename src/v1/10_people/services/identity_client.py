@@ -63,6 +63,14 @@ class Actor:
 
 
 @dataclass(frozen=True)
+class EmployeeRole:
+    """A role applied to the user in Identity."""
+
+    code: str
+    name: str
+
+
+@dataclass(frozen=True)
 class IdentityEmployee:
     """An active employee user in identity."""
 
@@ -73,6 +81,7 @@ class IdentityEmployee:
     employee_code: Optional[str] = None
     manager_user_id: Optional[uuid.UUID] = None
     home_unit_id: Optional[uuid.UUID] = None
+    roles: tuple[EmployeeRole, ...] = ()  # earliest first: the first is the main role
 
 
 @dataclass(frozen=True)
@@ -169,6 +178,7 @@ class IdentityClient:
                     employee_code=row.get("employee_code"),
                     manager_user_id=uuid.UUID(row["manager_user_id"]) if row.get("manager_user_id") else None,
                     home_unit_id=uuid.UUID(row["home_unit_id"]) if row.get("home_unit_id") else None,
+                    roles=tuple(EmployeeRole(code=role["code"], name=role["name"]) for role in row.get("roles", [])),
                 )
                 for row in body["data"]
             ],

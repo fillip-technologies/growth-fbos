@@ -177,3 +177,23 @@ async def test_the_employment_endpoints_need_the_internal_token_when_configured(
         headers={"X-FBOS-Internal-Token": "s3cret"},
     )
     assert res.status_code == 200
+
+
+@pytest.mark.asyncio
+async def test_employees_come_with_their_roles_earliest_first_without_the_ones_people_manages(async_client, db_session):
+    sales = await make_role(async_client, db_session, "sales_manager", ["identity.user.read"])
+    trainer = await make_role(async_client, db_session, "trainer", ["identity.org_unit.read"])
+    person = await make_person(db_session, "Asha")
+    bare = await make_person(db_session, "Bina")
+    await db_session.commit()
+    for preset in (sales, trainer):
+        res = await async_client.post(f"{API}/role-assignments", json={"user_id": str(person.id), "role_id": str(preset.id), "reason": "By hand"})
+        assert res.status_code == 201, res.text
+    await make_role(async_client, db_session, "job_access", ["identity.audit_log.read"])
+    await declare(async_client, person.id, managed_roles=[role("job_access")])
+
+    res = await async_client.get(f"{API}/internal/people/employees", params={"organization_id": str(TEST_ORG_ID), "search": "@example.com", "limit": 100})
+    by_name = {e["name"]: e for e in res.json()["data"]}
+    assert [r["code"] for r in by_name["Asha"]["roles"]] == ["sales_manager", "trainer"]  # not job_access: it follows the job
+    assert by_name["Asha"]["roles"][0]["name"] == "Sales_Manager"  # the role's name, as set up in Identity
+    assert by_name["Bina"]["roles"] == []
