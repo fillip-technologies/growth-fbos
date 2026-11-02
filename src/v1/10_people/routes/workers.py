@@ -59,7 +59,8 @@ async def list_workers(
     unit_id: Optional[uuid.UUID] = Query(None),
     status: Optional[str] = Query(None),
     search: Optional[str] = Query(None),
-    user_id: Optional[uuid.UUID] = Query(None, description="Only the employee record linked to this login"),
+    user_id: Optional[list[uuid.UUID]] = Query(None, description="Only the employee records linked to these logins (repeat it)"),
+    has_login: Optional[bool] = Query(None, description="true: only employees with a login; false: only those without one"),
     limit: int = Query(25, ge=1, le=100),
     cursor: Optional[str] = Query(None),
 ):
@@ -67,8 +68,8 @@ async def list_workers(
     List employee directory with keyset pagination, unit filtering, and full-text search.
     """
     rows, page = await service.list_workers(
-        session, org_id, unit_id=unit_id, status=status, search=search, limit=limit, cursor=cursor, user_id=user_id,
-        identity=identity,
+        session, org_id, unit_id=unit_id, status=status, search=search, limit=limit, cursor=cursor, user_ids=user_id,
+        has_login=has_login, identity=identity,
     )
     await session.commit()  # a designation that followed a changed role in Identity
     return PageResponse(data=rows, page=page)

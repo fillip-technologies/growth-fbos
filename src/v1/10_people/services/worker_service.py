@@ -234,12 +234,15 @@ async def list_workers(
     search: Optional[str] = None,
     limit: int = 25,
     cursor: Optional[str] = None,
-    user_id: Optional[uuid.UUID] = None,
+    user_ids: Optional[list[uuid.UUID]] = None,
+    has_login: Optional[bool] = None,
     identity: Optional[IdentityClient] = None,
 ) -> tuple[list[dict], PageMeta]:
     stmt = select(Worker).where(Worker.organization_id == organization_id)
-    if user_id:
-        stmt = stmt.where(Worker.user_id == user_id)
+    if user_ids:
+        stmt = stmt.where(Worker.user_id.in_(user_ids))
+    if has_login is not None:
+        stmt = stmt.where(Worker.user_id.is_not(None) if has_login else Worker.user_id.is_(None))
     if unit_id:
         stmt = stmt.where(Worker.unit_id == unit_id)
     if status:
