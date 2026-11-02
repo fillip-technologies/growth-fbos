@@ -5,10 +5,12 @@ from typing import Annotated, Literal, Optional
 from fastapi import APIRouter, Depends, Header, Query, Response, status
 
 import permissions
+import services.stats as stats
 import services.tasks as service
 from services.views import task_view
 from dependencies import CurrentActor, DatabaseSession, OrgId, People, UserId, require_permission
 from schemas.common import PageMeta, PageResponse
+from schemas.stats import TaskStats
 from schemas.tasks import (
     AssignmentResponse,
     BoardResponse,
@@ -176,6 +178,19 @@ async def get_tasks_summary(
 ) -> dict:
     """Get tasks summary for current user / organization."""
     return await service.get_tasks_summary(session, org_id, caller_user_id)
+
+
+@router.get("/tasks/stats", response_model=TaskStats, dependencies=[CAN_READ])
+async def get_task_stats(
+    session: DatabaseSession,
+    org_id: OrgId,
+    caller_user_id: UserId,
+    filters: Filters,
+    done_within_days: int = Query(30, ge=1, le=365, description="Count done tasks finished this recently"),
+    weeks: int = Query(8, ge=1, le=26, description="How many weeks the created / completed series covers"),
+) -> TaskStats:
+    """Counts over the tasks the caller may see: per board column, per person, per priority, and per week."""
+    return await stats.task_stats(session, org_id, caller_user_id, filters, done_within_days, weeks)
 
 
 @router.get("/tasks/{task_id}", response_model=TaskResponse, dependencies=[CAN_READ, IN_VIEW])

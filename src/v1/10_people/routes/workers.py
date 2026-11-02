@@ -32,7 +32,9 @@ from exceptions import WorkerNotFoundError
 from schemas.worker_documents import BankAccountResponse, OnboardingResponse
 from sqlalchemy import select
 from models.worker import Worker
-from services.access_scope import worker_in_scope, worker_scope
+from services.access_scope import NOBODY, worker_in_scope, worker_scope
+import services.summary_service as summaries
+from schemas.summary import WorkforceSummary
 from exceptions import PermissionDeniedError
 
 router = APIRouter(prefix="/workers", tags=["workers"])
@@ -183,6 +185,30 @@ async def list_my_bank_accounts(session: DatabaseSession, actor: CurrentActor):
     """The caller's own bank accounts, account numbers masked."""
     accounts = await banks.list_accounts(session, actor.organization_id, await _own_worker_id(session, actor))
     return [banks.to_response(a) for a in accounts]
+
+
+@router.get("/summary", response_model=WorkforceSummary, dependencies=[Depends(require_permission(permissions.EMPLOYEE_READ))])
+async def get_workforce_summary(
+    session: DatabaseSession,
+    org_id: OrgId,
+    actor: CurrentActor,
+    months: int = Query(6, ge=1, le=24, description="How many calendar months the joined / left series covers"),
+):
+    """
+    The workforce in numbers over the employees the caller may see: headcount by status, department and
+    employment type, joiners and leavers per month, and, for those who may see them, today's attendance
+    and leave.
+    """
+    attendance = worker_scope(actor, permissions.ATTENDANCE_READ, permissions.ATTENDANCE_MANAGE)
+    leave = worker_scope(actor, permissions.LEAVE_APPROVE)
+    return await summaries.workforce(
+        session,
+        org_id,
+        employees=worker_scope(actor, permissions.EMPLOYEE_READ, permissions.EMPLOYEE_MANAGE),
+        attendance=attendance if attendance != NOBODY else None,
+        leave=leave if leave != NOBODY else None,
+        months=months,
+    )
 
 
 @router.get("/{worker_id}", response_model=WorkerDetailResponse, dependencies=[Depends(require_permission(permissions.EMPLOYEE_READ))])
