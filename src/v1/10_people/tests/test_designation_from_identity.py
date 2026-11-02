@@ -140,4 +140,5 @@ async def test_a_promotion_record_cannot_change_the_designation_of_someone_with_
     linked = await make_worker(async_client, user_id=user_with(identity, ("member", "Member")))
     res = await async_client.post(f"/v1/workers/{linked}/promotions", json={
         "new_job_profile_id": str(uuid.uuid4()), "new_title": "Director", "new_level": "L5", "effective_date": "2025-06-01"})
-    assert res.status_code == 409 and res.json()["code"] == "DESIGNATION_FROM_IDENTITY"
+    # A promotion is a role change, which refuses a typed title for someone whose title is their Identity role
+    assert res.status_code == 422 and res.json()["errors"][0]["field"] == "new_designation"

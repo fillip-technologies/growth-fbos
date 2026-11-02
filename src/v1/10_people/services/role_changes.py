@@ -29,6 +29,7 @@ from exceptions import (
     ValidationFailedError,
 )
 from models.job_architecture import Position
+from models.progression import PromotionRecord
 from config import settings
 from models.role_change import RoleChange, RoleChangeStep
 from models.separation import SeparationCase
@@ -60,12 +61,14 @@ REVISION_TYPES = {
     "demotion": "demotion_adjustment",
     "transfer": "transfer_adjustment",
     "correction": "market_correction",
+    "salary_revision": "annual_hike",
 }
 TIMELINE_CATEGORIES = {
     "promotion": "promotion",
     "demotion": "demotion",
     "transfer": "transfer",
     "correction": "role_correction",
+    "salary_revision": "salary_revision",
     "add_post": "post_added",
     "end_post": "post_ended",
     "make_primary": "primary_post_changed",
@@ -75,6 +78,7 @@ TIMELINE_TITLES = {
     "demotion": "Demoted",
     "transfer": "Transferred",
     "correction": "Role corrected",
+    "salary_revision": "Salary revised",
     "add_post": "Post added",
     "end_post": "Post ended",
     "make_primary": "Primary post changed",
@@ -450,6 +454,9 @@ async def _draft_change(
         new_manager_id=data.new_manager_id,
         new_position_id=data.new_position_id,
         new_annual_ctc=data.new_annual_ctc,
+        revision_type=data.revision_type,
+        new_job_profile_id=data.new_job_profile_id,
+        new_level=(data.new_level or "").strip() or None,
         post_ref=data.post_ref,
         post_type=data.post_type,
         new_time_share=data.new_time_share,
@@ -533,17 +540,20 @@ async def _step_to_decide(session: AsyncSession, actor: Actor, change: RoleChang
         raise SelfApprovalError()
     if change.status != PENDING:
         raise ConflictError(f"This role change is {change.status}", code="ROLE_CHANGE_STATE")
-    step = next((s for s in await _steps_of(session, change) if s.status == "active"), None)
+    steps = await _steps_of(session, change)
+    step = next((s for s in steps if s.status == "active"), None)
     if step is None:
         raise ConflictError("This role change has no approval waiting", code="ROLE_CHANGE_STATE")
-    if step.open_to_pool:
-        return step, None
-    approvers = {uuid.UUID(user_id) for user_id in step.approver_user_ids}
-    if actor.user_id in approvers:
-        return step, None
-    delegator = next(iter(approvers & await routing.delegators_to(session, actor.organization_id, actor.user_id, _today())), None)
-    if delegator is None:
-        raise NotAnApproverError(step.name)
+    delegator: Optional[uuid.UUID] = None
+    if not step.open_to_pool:
+        approvers = {uuid.UUID(user_id) for user_id in step.approver_user_ids}
+        if actor.user_id not in approvers:
+            delegator = next(iter(approvers & await routing.delegators_to(session, actor.organization_id, actor.user_id, _today())), None)
+            if delegator is None:
+                raise NotAnApproverError(step.name)
+    if any(s.decided_by == actor.user_id for s in steps if s.status == "approved"):
+        # Each step is a separate pair of eyes: one person approving two steps would make it one.
+        raise ConflictError("You already approved an earlier step of this change", code="ROLE_CHANGE_ALREADY_APPROVED")
     return step, delegator
 
 
@@ -689,12 +699,26 @@ async def _apply_post_change(session: AsyncSession, change: RoleChange, worker: 
             worker.id,
             approver,
             CompensationRevisionCreate(
-                revision_type=REVISION_TYPES[change.change_type],
+                revision_type=change.revision_type or REVISION_TYPES[change.change_type],
                 previous_annual_ctc=current.annual_ctc,
                 new_annual_ctc=change.new_annual_ctc,
                 effective_date=change.effective_date,
                 notes=change.reason,
             ),
+        )
+    if change.change_type == "promotion" and change.new_job_profile_id and change.new_level:
+        session.add(
+            PromotionRecord(
+                organization_id=change.organization_id,
+                worker_id=worker.id,
+                new_job_profile_id=change.new_job_profile_id,
+                new_level=change.new_level,
+                previous_title=previous.get("designation") if previous else None,
+                new_title=updated.title,
+                effective_date=change.effective_date,
+                promotion_letter_doc_id=change.letter_doc_id,
+                approved_by=approver,
+            )
         )
     return previous, _state(updated), f"{TIMELINE_TITLES[change.change_type]} to {updated.title}" if change.new_designation else TIMELINE_TITLES[change.change_type]
 

@@ -55,6 +55,9 @@ class FakeIdentity:
         self.beyond: set[str] = set()  # roles the requester could not grant themselves
         self.adoptions: list[tuple[uuid.UUID, list[str], str]] = []  # (user id, role codes, post ref)
         self.held_by_hand: dict[uuid.UUID, list[tuple[str, Optional[uuid.UUID]]]] = {}  # user id -> (role code, scope unit)
+        # Linking a record to a login asks Identity whether the user is an active employee. Most tests link
+        # made-up ids; a test that checks the refusal turns this off.
+        self.any_login_is_an_employee = True
 
     async def list_employees(self, organization_id, *, search=None, user_ids=None, limit=50, offset=0):
         self.employee_calls += 1
@@ -62,6 +65,9 @@ class FakeIdentity:
             raise AuthServiceUnavailableError()
         rows = [e for uid, e in self.employees.items() if not user_ids or uid in user_ids]
         return IdentityEmployeePage(data=rows[offset : offset + limit], has_more=len(rows) > offset + limit)
+
+    async def is_active_employee(self, organization_id: uuid.UUID, user_id: uuid.UUID) -> bool:
+        return self.any_login_is_an_employee or user_id in self.employees
 
     async def declare_employment(self, organization_id: uuid.UUID, user_id: uuid.UUID, declaration: dict) -> EmploymentOutcome:
         if self.down:

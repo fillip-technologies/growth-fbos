@@ -156,8 +156,32 @@ async def submit_leave_request(
     if not plan or plan.organization_id != organization_id:
         raise WorkerNotFoundError("Leave plan not found")
 
-    # Check sufficient balance
+    # The same days cannot be asked for twice
+    overlapping = await session.execute(
+        select(LeaveRequest.id).where(
+            LeaveRequest.organization_id == organization_id,
+            LeaveRequest.worker_id == data.worker_id,
+            LeaveRequest.status.in_(("pending", "approved")),
+            LeaveRequest.start_date <= data.end_date,
+            LeaveRequest.end_date >= data.start_date,
+        )
+    )
+    if overlapping.first():
+        raise ConflictError("These dates overlap a leave request already pending or approved", code="LEAVE_OVERLAP")
+
+    # Check sufficient balance, counting what is already asked for and still waiting
     current_balance = await get_leave_balance(session, organization_id, data.worker_id, data.leave_plan_id)
+    pending_days = (
+        await session.execute(
+            select(func.coalesce(func.sum(LeaveRequest.days_count), 0)).where(
+                LeaveRequest.organization_id == organization_id,
+                LeaveRequest.worker_id == data.worker_id,
+                LeaveRequest.leave_plan_id == data.leave_plan_id,
+                LeaveRequest.status == "pending",
+            )
+        )
+    ).scalar_one()
+    current_balance -= Decimal(str(pending_days))
     if current_balance < data.days_count:
         raise ValidationFailedError(
             "days_count",
@@ -180,13 +204,37 @@ async def submit_leave_request(
     return leave_req
 
 
+async def require_leave_plan(session: AsyncSession, organization_id: uuid.UUID, leave_plan_id: uuid.UUID) -> LeavePlan:
+    plan = await session.get(LeavePlan, leave_plan_id)
+    if not plan or plan.organization_id != organization_id:
+        raise WorkerNotFoundError("Leave plan not found")
+    return plan
+
+
+async def get_leave_request(
+    session: AsyncSession, organization_id: uuid.UUID, request_id: uuid.UUID, lock: bool = False
+) -> LeaveRequest:
+    """The request; `lock` holds its row so two approvers cannot both debit the balance."""
+    stmt = select(LeaveRequest).where(LeaveRequest.id == request_id, LeaveRequest.organization_id == organization_id)
+    if lock:
+        stmt = stmt.with_for_update()
+    leave_req = (await session.execute(stmt)).scalar_one_or_none()
+    if not leave_req:
+        raise WorkerNotFoundError("Leave request not found")
+    return leave_req
+
+
 async def list_leave_requests(
     session: AsyncSession,
     organization_id: uuid.UUID,
     worker_id: Optional[uuid.UUID] = None,
     status: Optional[str] = None,
+    worker_ids=None,
 ) -> List[LeaveRequest]:
+    """`worker_ids` (a subquery) narrows the list to the employees the caller reaches."""
     query = select(LeaveRequest).where(LeaveRequest.organization_id == organization_id)
+    if worker_ids is not None:
+        query = query.where(LeaveRequest.worker_id.in_(worker_ids))
     if worker_id:
         query = query.where(LeaveRequest.worker_id == worker_id)
     if status:
@@ -203,9 +251,7 @@ async def approve_leave_request(
     approver_id: uuid.UUID,
     approved: bool,
 ) -> LeaveRequest:
-    leave_req = await session.get(LeaveRequest, request_id)
-    if not leave_req or leave_req.organization_id != organization_id:
-        raise WorkerNotFoundError("Leave request not found")
+    leave_req = await get_leave_request(session, organization_id, request_id, lock=True)
 
     if leave_req.status != "pending":
         raise ConflictError(f"Leave request is already {leave_req.status}")

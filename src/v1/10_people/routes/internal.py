@@ -2,13 +2,12 @@ from typing import Literal
 import uuid
 
 from fastapi import APIRouter, Depends, Query
-from sqlalchemy import select
 
 from dependencies import CurrentActor, DatabaseSession, verify_internal_caller
 from exceptions import PermissionDeniedError, WorkerNotFoundError
-from models.worker import Worker
 import permissions
 from schemas.subject_access import SubjectAccessResponse
+from services.access_scope import worker_in_scope
 
 router = APIRouter(prefix="/internal", tags=["internal"], dependencies=[Depends(verify_internal_caller)])
 
@@ -37,13 +36,7 @@ async def get_subject_access(
     if not actor.has(required):
         raise PermissionDeniedError(required)
 
-    worker = (
-        await session.execute(
-            select(Worker).where(Worker.organization_id == actor.organization_id, Worker.id == subject_id)
-        )
-    ).scalar_one_or_none()
-    if worker is None:
-        raise WorkerNotFoundError()
+    worker = await worker_in_scope(session, actor, subject_id, required)  # 404 outside the caller's reach
     return SubjectAccessResponse(
         type=subject_type,
         id=worker.id,

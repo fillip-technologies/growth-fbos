@@ -153,12 +153,12 @@ class RoleChangeNotFoundError(HTTPException):
 
 
 class SelfApprovalError(HTTPException):
-    def __init__(self) -> None:
+    def __init__(self, message: str = "A role change must be approved by someone other than the person who requested it") -> None:
         super().__init__(
             status_code=status.HTTP_403_FORBIDDEN,
             detail={
                 "code": "SELF_APPROVAL_FORBIDDEN",
-                "message": "A role change must be approved by someone other than the person who requested it",
+                "message": message,
                 "status": 403,
             },
         )

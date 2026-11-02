@@ -21,6 +21,10 @@ class UserCredential(Base):
     recovery_codes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     failed_attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     locked_until: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    # When the latest wrong password or MFA code came: failures count toward a lock within the window.
+    last_failed_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    # The last MFA code accepted, so the same code cannot be replayed.
+    last_totp_code: Mapped[Optional[str]] = mapped_column(String(16), nullable=True)
     password_changed_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
     reset_token: Mapped[Optional[str]] = mapped_column(String(255), nullable=True, index=True)
     reset_token_expires_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)

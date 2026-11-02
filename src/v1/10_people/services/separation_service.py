@@ -21,12 +21,17 @@ from models.separation import (
 from models.worker import PositionAssignment, Worker, WorkerTimelineEvent
 from schemas.separation import SeparationInitiateRequest, UpdateClearanceRequest
 from services.codes import next_separation_code
-from services.leave_service import get_leave_balance
+from services.leave_service import get_leave_balance, post_ledger_transaction
 from services.payroll_service import get_worker_salary_structure
 from services.identity_sync import queue_sync
 from services.posts import end_all_posts, refresh_seat
 
 CLEARANCE_DEPARTMENTS = ["it_assets", "finance", "admin", "team_lead", "hr"]
+CLEARANCE_STATUSES = ("pending", "cleared", "blocked")
+# A case still open; an exited or withdrawn one is closed.
+CLOSED_STATUSES = ("exited", "withdrawn")
+# Once the settlement is worked out, the clearances it relied on are fixed.
+SETTLED_STATUSES = ("settled", "exited", "withdrawn")
 
 
 async def initiate_separation(
@@ -45,7 +50,7 @@ async def initiate_separation(
         select(SeparationCase.id).where(
             SeparationCase.organization_id == organization_id,
             SeparationCase.worker_id == data.worker_id,
-            SeparationCase.status != "exited",
+            SeparationCase.status.not_in(CLOSED_STATUSES),
         )
     )
     if open_case.first():
@@ -98,6 +103,55 @@ async def initiate_separation(
     return await get_separation_case(session, organization_id, sep.id)
 
 
+async def withdraw_separation(
+    session: AsyncSession,
+    organization_id: uuid.UUID,
+    separation_id: uuid.UUID,
+    reason: Optional[str] = None,
+) -> SeparationCase:
+    """A resignation taken back before settlement: the employee stays, as they were before it."""
+    sep = await get_separation_case(session, organization_id, separation_id)
+    if sep.status in SETTLED_STATUSES:
+        raise ConflictError(f"This exit is {sep.status} and can no longer be withdrawn", code="SEPARATION_STATE")
+    worker = await session.get(Worker, sep.worker_id)
+    if not worker or worker.organization_id != organization_id:
+        raise WorkerNotFoundError("Worker not found")
+
+    sep.status = "withdrawn"
+    worker.status = "active"
+    worker.resignation_date = None
+    worker.last_working_date = None  # the login no longer ends
+    await queue_sync(session, worker)
+    session.add(
+        WorkerTimelineEvent(
+            organization_id=organization_id,
+            worker_id=worker.id,
+            event_category="resignation_withdrawn",
+            title="Separation withdrawn",
+            description=reason,
+            effective_date=date.today(),
+            new_state={"separation_code": sep.separation_code, "status": "active"},
+        )
+    )
+    await session.flush()
+    return await get_separation_case(session, organization_id, separation_id)
+
+
+async def _debit_encashed_leave(session: AsyncSession, sep: SeparationCase) -> None:
+    """The leave paid out in the settlement leaves the balance, so it is never paid twice."""
+    plans = await session.execute(
+        select(LeavePlan).where(LeavePlan.organization_id == sep.organization_id, LeavePlan.is_encashable == True)
+    )
+    for plan in plans.scalars().all():
+        balance = await get_leave_balance(session, sep.organization_id, sep.worker_id, plan.id)
+        if balance > Decimal("0.0"):
+            await post_ledger_transaction(
+                session, sep.organization_id, sep.worker_id, plan.id, transaction_type="encashment",
+                units_days=-balance, effective_date=sep.agreed_lwd, reference_id=str(sep.id),
+                description=f"Encashed in the full-and-final settlement of {sep.separation_code}",
+            )
+
+
 async def get_separation_case(
     session: AsyncSession,
     organization_id: uuid.UUID,
@@ -125,7 +179,9 @@ async def list_separations(
     organization_id: uuid.UUID,
     worker_id: Optional[uuid.UUID] = None,
     status: Optional[str] = None,
+    worker_ids=None,
 ) -> List[SeparationCase]:
+    """`worker_ids` (a subquery) narrows the list to the employees the caller reaches."""
     query = (
         select(SeparationCase)
         .options(
@@ -134,6 +190,8 @@ async def list_separations(
         )
         .where(SeparationCase.organization_id == organization_id)
     )
+    if worker_ids is not None:
+        query = query.where(SeparationCase.worker_id.in_(worker_ids))
     if worker_id:
         query = query.where(SeparationCase.worker_id == worker_id)
     if status:
@@ -151,6 +209,10 @@ async def update_department_clearance(
     data: UpdateClearanceRequest,
 ) -> SeparationCase:
     sep = await get_separation_case(session, organization_id, separation_id)
+    if sep.status in SETTLED_STATUSES:
+        raise ConflictError(f"This exit is {sep.status}; its clearances can no longer change", code="SEPARATION_STATE")
+    if data.status not in CLEARANCE_STATUSES:
+        raise ValidationFailedError("status", f"Must be one of: {', '.join(CLEARANCE_STATUSES)}")
 
     target_clearance = None
     for cl in sep.clearances:
@@ -166,10 +228,9 @@ async def update_department_clearance(
     if data.remarks:
         target_clearance.remarks = data.remarks
 
-    # Check if all clearances are cleared
+    # All cleared completes the clearance; a clearance taken back reopens it.
     all_cleared = all(cl.status == "cleared" for cl in sep.clearances)
-    if all_cleared and sep.status == "clearance_pending":
-        sep.status = "clearance_completed"
+    sep.status = "clearance_completed" if all_cleared else "clearance_pending"
 
     await session.flush()
     return await get_separation_case(session, organization_id, separation_id)
@@ -266,6 +327,7 @@ async def finalize_exit(
     sep.status = "exited"
     worker.status = "exited"
     await end_all_posts(session, worker, sep.agreed_lwd)
+    await _debit_encashed_leave(session, sep)
     await queue_sync(session, worker)  # the login ends (also scheduled for the last working day)
 
     # Vacate position assignment

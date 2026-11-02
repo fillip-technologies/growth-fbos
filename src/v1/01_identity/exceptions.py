@@ -110,6 +110,28 @@ class MfaCodeInvalidError(IdentityServiceError):
         )
 
 
+class MfaAlreadyEnabledError(IdentityServiceError):
+    """409: MFA is on; starting a new enrollment would replace the secret the user signs in with."""
+
+    def __init__(self) -> None:
+        super().__init__(
+            status_code=status.HTTP_409_CONFLICT,
+            code="MFA_ALREADY_ENABLED",
+            message="Two-factor sign-in is already on for this account",
+        )
+
+
+class MfaNotEnabledError(IdentityServiceError):
+    """404: The user has no two-factor sign-in to turn off."""
+
+    def __init__(self) -> None:
+        super().__init__(
+            status_code=status.HTTP_404_NOT_FOUND,
+            code="MFA_NOT_ENABLED",
+            message="Two-factor sign-in is not on for this user",
+        )
+
+
 class MfaTokenExpiredError(IdentityServiceError):
     """401: The 5-minute mfa_token expired."""
 

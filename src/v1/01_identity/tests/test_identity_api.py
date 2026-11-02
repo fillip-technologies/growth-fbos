@@ -474,16 +474,29 @@ async def test_invitation_and_reset_password_flow(async_client: httpx.AsyncClien
     )
     assert accept_res.status_code == 204
 
-    # 4. Forgot password to trigger reset token
-    forgot_res = await async_client.post(
-        "/api/identity/v1/auth/password/forgot",
-        json={"email": "new.member@example.com"},
-    )
+    # 4. Forgot password to trigger reset token. The link's token goes out in the email; only its hash is stored.
+    from services.event_publisher import event_publisher
+    sent: list[dict] = []
+    original_publish = event_publisher.publish
+
+    async def capture(event_type, data):
+        if event_type == "identity.password.reset_requested.v1":
+            sent.append(data)
+        return await original_publish(event_type, data)
+
+    event_publisher.publish = capture
+    try:
+        forgot_res = await async_client.post(
+            "/api/identity/v1/auth/password/forgot",
+            json={"email": "new.member@example.com"},
+        )
+    finally:
+        event_publisher.publish = original_publish
     assert forgot_res.status_code == 202
 
+    reset_token = sent[0]["token"]
     await db_session.refresh(cred)
-    reset_token = cred.reset_token
-    assert reset_token is not None
+    assert cred.reset_token is not None and cred.reset_token != reset_token
 
     # 5. Reset password
     reset_res = await async_client.post(
@@ -497,30 +510,35 @@ async def test_invitation_and_reset_password_flow(async_client: httpx.AsyncClien
 async def test_oauth_client_credentials(async_client: httpx.AsyncClient, db_session):
     # 1. Seed an active ApiClient
     from models.auth import ApiClient
-    client_record = ApiClient(
-        id=uuid.uuid4(),
-        organization_id=TEST_ORG_ID,
-        client_id="cli_test_integration",
-        client_secret_hash=None,  # No secret required for test client
-        name="Test Integration",
-        allowed_scopes="billing.invoice.read",
-        status="active",
-    )
-    db_session.add(client_record)
+    from utils.security import hash_password
+    db_session.add_all([
+        ApiClient(
+            id=uuid.uuid4(), organization_id=TEST_ORG_ID, client_id="cli_test_integration",
+            client_secret_hash=hash_password("s3cret-value"), name="Test Integration",
+            allowed_scopes="billing.invoice.read", status="active",
+        ),
+        ApiClient(  # no secret on record: unusable, whatever secret is sent
+            id=uuid.uuid4(), organization_id=TEST_ORG_ID, client_id="cli_no_secret",
+            client_secret_hash=None, name="No Secret", allowed_scopes="billing.invoice.read", status="active",
+        ),
+    ])
     await db_session.commit()
 
-    # 2. Request OAuth client credentials token
-    oauth_res = await async_client.post(
-        "/api/identity/v1/auth/oauth/token",
-        json={
-            "grant_type": "client_credentials",
-            "client_id": "cli_test_integration",
-            "client_secret": "any_secret",
-            "scope": "billing.invoice.read",
-        },
-    )
+    async def token(client_id: str, secret: str, scope: str):
+        return await async_client.post(
+            "/api/identity/v1/auth/oauth/token",
+            json={"grant_type": "client_credentials", "client_id": client_id, "client_secret": secret, "scope": scope},
+        )
+
+    # 2. The right secret and an allowed scope give a token
+    oauth_res = await token("cli_test_integration", "s3cret-value", "billing.invoice.read")
     assert oauth_res.status_code == 200
     assert "access_token" in oauth_res.json()
+
+    # 3. A wrong secret, a client without a secret, or a scope beyond the client's are refused
+    assert (await token("cli_test_integration", "any_secret", "billing.invoice.read")).status_code == 401
+    assert (await token("cli_no_secret", "any_secret", "billing.invoice.read")).status_code == 401
+    assert (await token("cli_test_integration", "s3cret-value", "identity.user.manage")).status_code == 422
 
 
 

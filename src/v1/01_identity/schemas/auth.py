@@ -95,9 +95,10 @@ class MfaVerifyRequest(BaseModel):
     @field_validator("code")
     @classmethod
     def validate_totp_code(cls, value: str) -> str:
+        # Six digits from the authenticator app, or one of the recovery codes ("ABCDE-FGHJK").
         cleaned = value.strip()
-        if not re.fullmatch(r"^\d{6}$", cleaned):
-            raise ValueError("Code must be a 6-digit numeric TOTP code")
+        if not (re.fullmatch(r"^\d{6}$", cleaned) or re.fullmatch(r"^[A-Za-z0-9][A-Za-z0-9 -]{5,31}$", cleaned)):
+            raise ValueError("Code must be the 6-digit code from your authenticator app or a recovery code")
         return cleaned
 
 

@@ -195,6 +195,8 @@ class WorkerBankAccount(Base):
     proof_document_id: Mapped[Optional[uuid.UUID]] = mapped_column(UUIDType, nullable=True)  # in 05_documents
     verified_by: Mapped[Optional[uuid.UUID]] = mapped_column(UUIDType, nullable=True)
     verified_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    # Who last entered the payment details: someone else must verify them (maker-checker).
+    details_changed_by: Mapped[Optional[uuid.UUID]] = mapped_column(UUIDType, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False

@@ -187,6 +187,10 @@ async def test_bank_primary_verification_and_deactivation(async_client):
 
     # The primary cannot be deactivated until another takes over
     assert (await async_client.post(f"{base}/{first['id']}/deactivate")).status_code == 409
+    # Salary only goes to a verified account
+    unverified = await async_client.post(f"{base}/{second['id']}/primary")
+    assert unverified.status_code == 409 and unverified.json()["code"] == "BANK_ACCOUNT_UNVERIFIED"
+    assert (await async_client.post(f"{base}/{second['id']}/verify")).json()["status"] == "verified"
     made = (await async_client.post(f"{base}/{second['id']}/primary")).json()
     assert made["is_primary"] is True
     listed = (await async_client.get(base)).json()

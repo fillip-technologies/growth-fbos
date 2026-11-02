@@ -81,6 +81,10 @@ class LeaveRequestCreate(BaseModel):
     def validate_leave_dates(self) -> "LeaveRequestCreate":
         if self.end_date < self.start_date:
             raise ValueError("end_date cannot be earlier than start_date")
+        if self.days_count > (self.end_date - self.start_date).days + 1:
+            raise ValueError("days_count cannot be more than the days from start_date to end_date")
+        if (self.days_count * 2) % 1 != 0:
+            raise ValueError("days_count is counted in whole or half days")
         return self
 
 

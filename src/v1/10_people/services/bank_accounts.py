@@ -6,8 +6,8 @@ from datetime import datetime, timezone
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from exceptions import BankAccountNotFoundError, ConflictError, ValidationFailedError
-from models.worker import WorkerBankAccount
+from exceptions import BankAccountNotFoundError, ConflictError, SelfApprovalError, ValidationFailedError
+from models.worker import Worker, WorkerBankAccount
 from schemas.worker_documents import BankAccountCreate, BankAccountUpdate
 from services import crypto
 from services.document_catalog import ACCOUNT_RE, IFSC_RE
@@ -116,11 +116,14 @@ async def create_account(
         proof_document_id=data.proof_document_id,
         status=PENDING,
         is_primary=False,
+        details_changed_by=actor.user_id,
     )
     session.add(account)
     await session.flush()
+    # A new, unverified account never takes salary away from a verified one: it becomes primary only
+    # when there is none yet. Otherwise it is made primary after it is verified.
     has_primary = any(a.is_primary for a in await list_accounts(session, actor.organization_id, worker_id))
-    if data.is_primary or not has_primary:
+    if not has_primary:
         await _make_only_primary(session, account)
     log_access(session, actor, worker_id, "update", f"bank_account:{account.id}")
     await session.flush()
@@ -146,8 +149,8 @@ async def update_account(
         changed_payment_details = True
     if "account_type" in fields:
         account.account_type = _check_type(fields.pop("account_type"))
-    if "account_holder_name" in fields:
-        changed_payment_details = True
+    if "account_holder_name" in fields or "upi_id" in fields:
+        changed_payment_details = True  # where the money goes: verified again
     for field, value in fields.items():
         setattr(account, field, value.strip() if isinstance(value, str) else value)
 
@@ -155,6 +158,7 @@ async def update_account(
         account.status = PENDING
         account.verified_by = None
         account.verified_at = None
+        account.details_changed_by = actor.user_id
     await session.flush()
     log_access(session, actor, worker_id, "update", f"bank_account:{account.id}")
     return account
@@ -164,6 +168,8 @@ async def set_primary(session: AsyncSession, actor: Actor, worker_id: uuid.UUID,
     account = await _get(session, actor.organization_id, worker_id, account_id)
     if account.status == INACTIVE:
         raise ConflictError("An inactive account cannot be primary", code="BANK_ACCOUNT_INACTIVE")
+    if account.status != VERIFIED:
+        raise ConflictError("Verify this account before paying salary into it", code="BANK_ACCOUNT_UNVERIFIED")
     await _make_only_primary(session, account)
     await session.flush()
     log_access(session, actor, worker_id, "update", f"bank_account:{account.id}")
@@ -174,6 +180,12 @@ async def verify_account(session: AsyncSession, actor: Actor, worker_id: uuid.UU
     account = await _get(session, actor.organization_id, worker_id, account_id)
     if account.status != PENDING:
         raise ConflictError(f"This account is {account.status} and cannot be verified", code="BANK_ACCOUNT_STATE")
+    # A client admin may check their own entry (they could grant themselves anything); everyone else may not.
+    if not actor.is_superuser and account.details_changed_by == actor.user_id:
+        raise SelfApprovalError("Bank details must be verified by someone other than the person who entered them")
+    worker = await session.get(Worker, worker_id)
+    if worker is not None and worker.user_id == actor.user_id:
+        raise SelfApprovalError("Your own bank details must be verified by someone else")
     account.status = VERIFIED
     account.verified_by = actor.user_id
     account.verified_at = datetime.now(timezone.utc)

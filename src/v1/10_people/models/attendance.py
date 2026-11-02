@@ -4,6 +4,7 @@ import uuid
 from datetime import date, datetime, time
 
 from sqlalchemy import (
+    UniqueConstraint,
     Boolean,
     Column,
     Date,
@@ -44,6 +45,8 @@ class WorkShift(Base):
 
 class DailyAttendance(Base):
     __tablename__ = "daily_attendance"
+    # One attendance day per worker; concurrent clock-ins cannot make a second one.
+    __table_args__ = (UniqueConstraint("organization_id", "worker_id", "work_date", name="uq_daily_attendance_worker_day"),)
 
     id = Column(UUIDType, primary_key=True, default=uuid.uuid4)
     organization_id = Column(UUIDType, nullable=False, index=True)

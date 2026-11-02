@@ -53,7 +53,10 @@ class SalaryStructure(Base):
 
 class PayrollRun(Base):
     __tablename__ = "payroll_runs"
-    __table_args__ = (UniqueConstraint("organization_id", "payroll_code", name="uq_payroll_runs_org_code"),)
+    __table_args__ = (
+        UniqueConstraint("organization_id", "payroll_code", name="uq_payroll_runs_org_code"),
+        UniqueConstraint("organization_id", "year", "month", name="uq_payroll_runs_org_period"),  # one run a month
+    )
 
     id = Column(UUIDType, primary_key=True, default=uuid.uuid4)
     organization_id = Column(UUIDType, nullable=False, index=True)

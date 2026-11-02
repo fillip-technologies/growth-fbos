@@ -5,7 +5,8 @@ from typing import List, Literal, Optional
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-ChangeType = Literal["promotion", "demotion", "transfer", "correction", "add_post", "end_post", "make_primary"]
+ChangeType = Literal["promotion", "demotion", "transfer", "correction", "salary_revision", "add_post", "end_post", "make_primary"]
+RevisionType = Literal["annual_hike", "promotion_hike", "market_correction", "probation_confirmation"]
 PostKind = Literal["concurrent", "additional_charge", "acting"]
 
 
@@ -39,6 +40,10 @@ class RoleChangeCreate(BaseModel):
     new_position_id: Optional[uuid.UUID] = None
     new_annual_ctc: Optional[Decimal] = Field(None, gt=0)
     letter_doc_id: Optional[uuid.UUID] = None
+    # A salary revision's kind; a promotion's job profile and level (for the promotion record).
+    revision_type: Optional[RevisionType] = None
+    new_job_profile_id: Optional[uuid.UUID] = None
+    new_level: Optional[str] = Field(None, min_length=1, max_length=32)
 
     # Which post: empty means the primary post. Required to end a post or make one primary.
     post_ref: Optional[uuid.UUID] = None
@@ -57,6 +62,14 @@ class RoleChangeCreate(BaseModel):
                 raise ValueError("A new post has no post_ref")
             if self.end_date is not None and self.end_date <= self.effective_date:
                 raise ValueError("The planned end must be after the start")
+            return self
+        if self.change_type == "salary_revision":
+            others = (
+                self.new_designation, self.new_role_codes, self.new_unit_id, self.new_manager_id, self.new_position_id,
+                self.new_time_share, self.new_monthly_allowance,
+            )
+            if self.new_annual_ctc is None or any(value is not None for value in others):
+                raise ValueError("A salary revision changes the salary (new_annual_ctc) and nothing else")
             return self
         if self.change_type in ("end_post", "make_primary"):
             if self.post_ref is None:

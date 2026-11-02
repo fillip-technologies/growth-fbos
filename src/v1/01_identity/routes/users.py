@@ -6,7 +6,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from database.session import get_db_session
 from dependencies import get_client_ip, get_user_agent, require_permission
-from exceptions import PreconditionRequiredError
+from exceptions import MfaNotEnabledError, PreconditionRequiredError
 from schemas.common import PaginatedResponse
 from schemas.session import SessionResponse
 from schemas.user import (
@@ -22,6 +22,7 @@ from schemas.user import (
     UserVerticalsResponse,
 )
 from services.access_control import Actor
+from services.mfa_admin import reset_mfa
 from services.org_unit_vertical_service import org_unit_vertical_service
 from services.session_service import PERM_SESSION_READ, PERM_SESSION_REVOKE, session_service
 from services.user_service import (
@@ -208,6 +209,30 @@ async def join_team(
         response.status_code = status.HTTP_201_CREATED
         response.headers["Location"] = f"/api/identity/v1/users/{user_id}/teams/{team_id}"
     return team
+
+
+@router.delete(
+    "/{user_id}/mfa",
+    status_code=status.HTTP_204_NO_CONTENT,
+    summary="Turn off a user's two-factor sign-in",
+    description=(
+        "For someone who lost their authenticator and recovery codes: MFA and the codes are cleared, the user "
+        "is signed out everywhere and told by email, and turns MFA on again after signing in. Not for your own "
+        "account; a client administrator's only by a client administrator. 404 when it was not on."
+    ),
+)
+async def reset_user_mfa(
+    user_id: uuid.UUID,
+    request: Request,
+    actor: Actor = Depends(require_permission(PERM_UPDATE)),
+    db: AsyncSession = Depends(get_db_session),
+) -> Response:
+    user = await user_service.load_user_for(
+        db, actor, user_id, PERM_UPDATE, manage_action="reset the two-factor sign-in of"
+    )
+    if not await reset_mfa(db, actor, user, client_ip=get_client_ip(request), user_agent=get_user_agent(request)):
+        raise MfaNotEnabledError()
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
 @router.delete(

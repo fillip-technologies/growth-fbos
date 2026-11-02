@@ -56,7 +56,8 @@ class BonusDisbursement(Base):
     currency = Column(String(3), nullable=False, default="USD")
     payout_month = Column(String(16), nullable=False)  # e.g. "2026-04"
     reason = Column(Text, nullable=False)
-    status = Column(String(32), nullable=False, default="pending", index=True)  # pending, approved, paid
+    status = Column(String(32), nullable=False, default="pending", index=True)  # pending, approved, rejected, paid
+    requested_by = Column(UUIDType, nullable=True)  # who awarded it; someone else approves it
     approved_by = Column(UUIDType, nullable=True)
 
     created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)

@@ -130,6 +130,12 @@ class AttendanceRegularizationCreate(BaseModel):
     requested_clock_out: datetime
     reason: str
 
+    @model_validator(mode="after")
+    def validate_requested_times(self) -> "AttendanceRegularizationCreate":
+        if self.requested_clock_out < self.requested_clock_in:
+            raise ValueError("requested_clock_out cannot be earlier than requested_clock_in")
+        return self
+
 
 class AttendanceRegularizationResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
