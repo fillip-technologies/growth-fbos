@@ -93,6 +93,9 @@ class RoleAssignment(Base):
         UUIDType, ForeignKey("users.id", ondelete="SET NULL"), nullable=True
     )
     reason: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
+    # Set when another service manages the assignment (`people`: granted by a job); empty for hand-granted ones.
+    source: Mapped[Optional[str]] = mapped_column(String(50), nullable=True, index=True)
+    source_ref: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
 
     user: Mapped["User"] = relationship("User", foreign_keys=[user_id], lazy="joined")
     role: Mapped["Role"] = relationship("Role", foreign_keys=[role_id], lazy="joined")

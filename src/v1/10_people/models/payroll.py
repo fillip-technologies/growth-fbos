@@ -11,6 +11,7 @@ from sqlalchemy import (
     DateTime,
     ForeignKey,
     Integer,
+    JSON,
     Numeric,
     String,
     Text,
@@ -89,6 +90,9 @@ class Payslip(Base):
     overtime_pay = Column(Numeric(14, 2), nullable=False, default=0.0)
     reimbursements_pay = Column(Numeric(14, 2), nullable=False, default=0.0)
     bonus_pay = Column(Numeric(14, 2), nullable=False, default=0.0)
+    # Allowances of the posts held this month (an acting or extra post), prorated by the days each was held.
+    post_allowance_pay = Column(Numeric(14, 2), nullable=False, default=0.0, server_default="0")
+    post_allowance_lines = Column(JSON, nullable=True)  # [{title, post_type, days, amount}]
     gross_earned = Column(Numeric(14, 2), nullable=False)
     total_deductions = Column(Numeric(14, 2), nullable=False, default=0.0)
     net_payable = Column(Numeric(14, 2), nullable=False)

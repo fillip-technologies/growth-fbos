@@ -23,6 +23,8 @@ from schemas.separation import SeparationInitiateRequest, UpdateClearanceRequest
 from services.codes import next_separation_code
 from services.leave_service import get_leave_balance
 from services.payroll_service import get_worker_salary_structure
+from services.identity_sync import queue_sync
+from services.posts import end_all_posts, refresh_seat
 
 CLEARANCE_DEPARTMENTS = ["it_assets", "finance", "admin", "team_lead", "hr"]
 
@@ -263,6 +265,8 @@ async def finalize_exit(
 
     sep.status = "exited"
     worker.status = "exited"
+    await end_all_posts(session, worker, sep.agreed_lwd)
+    await queue_sync(session, worker)  # the login ends (also scheduled for the last working day)
 
     # Vacate position assignment
     assign_res = await session.execute(
@@ -274,9 +278,10 @@ async def finalize_exit(
     )
     for assignment in assign_res.scalars().all():
         assignment.status = "terminated"
+        await session.flush()
         pos = await session.get(Position, assignment.position_id)
         if pos:
-            pos.hiring_status = "vacant"
+            await refresh_seat(session, pos)
 
     # Add exit milestone
     timeline = WorkerTimelineEvent(

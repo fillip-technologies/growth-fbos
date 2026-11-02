@@ -18,6 +18,8 @@ from exceptions import AuthServiceUnavailableError, PeopleServiceError, Permissi
 
 ACTOR_PATH = "/api/identity/v1/internal/authz/actor"
 EMPLOYEES_PATH = "/api/identity/v1/internal/people/employees"
+UNIT_HEADS_PATH = "/api/identity/v1/internal/unit-heads"
+EMPLOYMENT_PATH = "/api/identity/v1/internal/people/users"
 
 
 ALL_PEOPLE_PERMISSIONS: frozenset[str] = frozenset([
@@ -34,6 +36,7 @@ ALL_PEOPLE_PERMISSIONS: frozenset[str] = frozenset([
     "people.compensation.manage",
     "people.separation.manage",
     "people.role_change.approve",
+    "people.role_change.manage",
 ])
 
 
@@ -70,6 +73,41 @@ class IdentityEmployee:
     employee_code: Optional[str] = None
     manager_user_id: Optional[uuid.UUID] = None
     home_unit_id: Optional[uuid.UUID] = None
+
+
+@dataclass(frozen=True)
+class UnitHead:
+    """A unit and who heads it (None when nobody active does)."""
+
+    unit_id: uuid.UUID
+    name: str
+    head_user_id: Optional[uuid.UUID] = None
+
+
+@dataclass(frozen=True)
+class EmploymentOutcome:
+    """What Identity did with a declaration, and what it could not do."""
+
+    status: str
+    fields: list[str]
+    roles_added: list[str]
+    roles_removed: list[str]
+    deactivated: bool
+    problems: list[str]
+
+
+@dataclass(frozen=True)
+class EmploymentState:
+    """What Identity holds for a user, in the shape People declares it."""
+
+    user_id: uuid.UUID
+    status: str
+    name: str
+    phone: Optional[str]
+    employee_code: Optional[str]
+    home_unit_id: Optional[uuid.UUID]
+    manager_user_id: Optional[uuid.UUID]
+    managed_roles: frozenset[tuple[str, Optional[uuid.UUID]]]  # (role code lowercased, scope unit)
 
 
 @dataclass(frozen=True)
@@ -137,9 +175,61 @@ class IdentityClient:
             has_more=body["has_more"],
         )
 
-    async def _get_json(self, path: str, *, headers: dict[str, str], params: Optional[dict[str, Any]] = None) -> Any:
+    async def unit_heads(self, organization_id: uuid.UUID, unit_id: uuid.UUID) -> list[UnitHead]:
+        """The unit and each unit above it, nearest first, with their heads."""
+        headers = {"X-FBOS-Internal-Token": self._internal_token} if self._internal_token else {}
+        body = await self._get_json(
+            UNIT_HEADS_PATH, headers=headers, params={"organization_id": str(organization_id), "unit_id": str(unit_id)}
+        )
+        return [
+            UnitHead(
+                unit_id=uuid.UUID(row["unit_id"]),
+                name=row["name"],
+                head_user_id=uuid.UUID(row["head_user_id"]) if row.get("head_user_id") else None,
+            )
+            for row in body["data"]
+        ]
+
+    async def declare_employment(self, organization_id: uuid.UUID, user_id: uuid.UUID, declaration: dict[str, Any]) -> EmploymentOutcome:
+        """Tell Identity what People holds about the user's login. Repeating the same declaration changes nothing."""
+        headers = {"X-FBOS-Internal-Token": self._internal_token} if self._internal_token else {}
+        body = await self._get_json(
+            f"{EMPLOYMENT_PATH}/{user_id}/employment", headers=headers,
+            params={"organization_id": str(organization_id)}, method="PUT", json=declaration,
+        )
+        applied = body["applied"]
+        return EmploymentOutcome(
+            status=body["status"], fields=applied["fields"], roles_added=applied["roles_added"],
+            roles_removed=applied["roles_removed"], deactivated=applied["deactivated"],
+            problems=[f"{problem['field']}: {problem['issue']}" for problem in body["problems"]],
+        )
+
+    async def employment_states(self, organization_id: uuid.UUID, user_ids: list[uuid.UUID]) -> list[EmploymentState]:
+        headers = {"X-FBOS-Internal-Token": self._internal_token} if self._internal_token else {}
+        body = await self._get_json(
+            f"{EMPLOYMENT_PATH}/employment", headers=headers,
+            params={"organization_id": str(organization_id), "user_id": [str(u) for u in user_ids]},
+        )
+        return [
+            EmploymentState(
+                user_id=uuid.UUID(row["user_id"]), status=row["status"], name=row["name"], phone=row.get("phone"),
+                employee_code=row.get("employee_code"),
+                home_unit_id=uuid.UUID(row["home_unit_id"]) if row.get("home_unit_id") else None,
+                manager_user_id=uuid.UUID(row["manager_user_id"]) if row.get("manager_user_id") else None,
+                managed_roles=frozenset(
+                    (role["role_code"].lower(), uuid.UUID(role["scope_unit_id"]) if role.get("scope_unit_id") else None)
+                    for role in row["managed_roles"]
+                ),
+            )
+            for row in body["data"]
+        ]
+
+    async def _get_json(
+        self, path: str, *, headers: dict[str, str], params: Optional[dict[str, Any]] = None,
+        method: str = "GET", json: Optional[dict[str, Any]] = None,
+    ) -> Any:
         try:
-            response = await self._http.get(path, headers=headers, params=params)
+            response = await self._http.request(method, path, headers=headers, params=params, json=json)
         except httpx.HTTPError as exc:
             raise AuthServiceUnavailableError() from exc
 

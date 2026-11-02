@@ -9,6 +9,8 @@ the last commit that contains them is `2522df7` in `fbos_services` (`git show 25
 
 The forward-looking plan for roles, multiple posts and identity sync is kept as its own file:
 [`people-roles-posts-identity-plan.md`](people-roles-posts-identity-plan.md).
+The plan for building out the Management service (07) is likewise its own file:
+[`service-07-management-plan.md`](service-07-management-plan.md).
 The database reference stays in [`schema/`](schema/). Working rules for contributors stay in
 `CLAUDE.md`, `AGENTS.md` and `.agents/`.
 
@@ -27,6 +29,7 @@ Written 2026-10-30. Where the older docs disagreed with the code, the code and t
 | 4 | Fixly v2 inventory connected to FBOS | Phases 0–4 built (bridge, read UI, writes, service); 5–6 open |
 | 5 | People (HR): employees, recruitment, attendance, leave, payroll, exit | Built, then extended 2026-10-30 (below) |
 | 6 | Next: posts, identity sync, approvals through Control | Planned (separate file) |
+| 7 | Management (07): planning, KPI engine, resources and capacity | Planned (separate file); only 11 endpoints and no auth exist today |
 
 ---
 

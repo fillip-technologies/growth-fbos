@@ -444,7 +444,7 @@ class RbacService:
             ).unique().scalars()
         }
         new_grants = [grant for grant in grants if grant.key not in held]
-        user_permission_service.add_to_user(session, actor, user, new_grants, presets, data.reason)
+        user_permission_service.add_to_user(session, actor.user_id, user, new_grants, presets, data.reason)
         await session.flush()
 
         assignment_id = (
@@ -485,20 +485,10 @@ class RbacService:
         )
         return self._build_role_assignment_response(assignment)
 
-    async def revoke_role_assignment(
-        self,
-        session: AsyncSession,
-        actor: Actor,
-        assignment_id: uuid.UUID,
-        reason: str,
-    ) -> None:
-        """Remove a preset and the permissions it gave the user in that scope."""
-        assignment = await session.get(RoleAssignment, assignment_id)
-        if not assignment or assignment.organization_id != actor.organization_id:
-            raise RoleAssignmentNotFoundError()
-        if assignment.user_id == actor.user_id:
-            raise SelfModificationError("change the permissions of")
-
+    async def plan_revocation(
+        self, session: AsyncSession, assignment: RoleAssignment
+    ) -> tuple[list[UserPermission], list[UserPermission], dict[str, uuid.UUID]]:
+        """What removing a preset takes with it: the permissions it granted, which of them go, and which stay under another preset."""
         granted_rows = (
             await session.execute(
                 select(UserPermission).where(
@@ -529,6 +519,40 @@ class RbacService:
                 still_granted_by.setdefault(rp.permission_code, other.role_id)
 
         revoked_rows = [row for row in granted_rows if row.permission_code not in still_granted_by]
+        return granted_rows, revoked_rows, still_granted_by
+
+    async def apply_revocation(
+        self,
+        session: AsyncSession,
+        assignment: RoleAssignment,
+        granted_rows: list[UserPermission],
+        revoked_rows: list[UserPermission],
+        still_granted_by: dict[str, uuid.UUID],
+    ) -> list[str]:
+        """Delete the preset and what only it granted. Returns the removed codes; the caller commits."""
+        for row in granted_rows:
+            if row.permission_code in still_granted_by:
+                row.source_role_id = still_granted_by[row.permission_code]
+            else:
+                await session.delete(row)
+        await session.delete(assignment)
+        return sorted(row.permission_code for row in revoked_rows)
+
+    async def revoke_role_assignment(
+        self,
+        session: AsyncSession,
+        actor: Actor,
+        assignment_id: uuid.UUID,
+        reason: str,
+    ) -> None:
+        """Remove a preset and the permissions it gave the user in that scope."""
+        assignment = await session.get(RoleAssignment, assignment_id)
+        if not assignment or assignment.organization_id != actor.organization_id:
+            raise RoleAssignmentNotFoundError()
+        if assignment.user_id == actor.user_id:
+            raise SelfModificationError("change the permissions of")
+
+        granted_rows, revoked_rows, still_granted_by = await self.plan_revocation(session, assignment)
         for row in revoked_rows:
             grant = Grant(
                 row.permission_code, row.scope_unit_id,
@@ -541,13 +565,7 @@ class RbacService:
                 )
 
         user_id, role_id = assignment.user_id, assignment.role_id
-        revoked_codes = sorted(row.permission_code for row in revoked_rows)
-        for row in granted_rows:
-            if row.permission_code in still_granted_by:
-                row.source_role_id = still_granted_by[row.permission_code]
-            else:
-                await session.delete(row)
-        await session.delete(assignment)
+        revoked_codes = await self.apply_revocation(session, assignment, granted_rows, revoked_rows, still_granted_by)
         await session.commit()
 
         await event_publisher.publish(

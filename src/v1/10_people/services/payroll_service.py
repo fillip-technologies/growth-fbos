@@ -27,6 +27,7 @@ from schemas.payroll import (
     SalaryStructureCreate,
 )
 from services.codes import next_claim_code, next_payroll_code
+from services.posts import allowance_lines_for_month
 
 
 # Everyone still employed is paid, including probationers and those serving notice.
@@ -278,8 +279,16 @@ async def calculate_payroll_run(
             bonus_pay += bonus.amount
             bonus.status = "paid"
 
+        # What the posts held this month pay on top (an acting or extra post), for the days each was held,
+        # less the days of unpaid absence like the other allowances.
+        post_lines = [
+            {**line, "amount": str((Decimal(line["amount"]) * prorate_ratio).quantize(Decimal("0.01")))}
+            for line in await allowance_lines_for_month(session, worker.id, month_start, month_end)
+        ]
+        post_allowance_pay = sum((Decimal(line["amount"]) for line in post_lines), Decimal("0.0"))
+
         worker_deductions = struct.pf_deduction + struct.pt_deduction + struct.tds_tax
-        gross_earned = basic_earned + allowances_earned + overtime_pay + reimbursements_pay + bonus_pay
+        gross_earned = basic_earned + allowances_earned + overtime_pay + reimbursements_pay + bonus_pay + post_allowance_pay
         net_payable = max(gross_earned - worker_deductions, Decimal("0.0"))
 
         payslip = Payslip(
@@ -295,6 +304,8 @@ async def calculate_payroll_run(
             overtime_pay=overtime_pay.quantize(Decimal("0.01")),
             reimbursements_pay=reimbursements_pay.quantize(Decimal("0.01")),
             bonus_pay=bonus_pay.quantize(Decimal("0.01")),
+            post_allowance_pay=post_allowance_pay.quantize(Decimal("0.01")),
+            post_allowance_lines=post_lines or None,
             gross_earned=gross_earned.quantize(Decimal("0.01")),
             total_deductions=worker_deductions.quantize(Decimal("0.01")),
             net_payable=net_payable.quantize(Decimal("0.01")),

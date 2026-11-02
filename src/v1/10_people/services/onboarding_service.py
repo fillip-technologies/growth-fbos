@@ -15,6 +15,7 @@ from models.recruitment import Candidate, JobApplication, JobOffer, JobRequisiti
 from models.worker import PositionAssignment, Worker, WorkerTimelineEvent
 from schemas.recruitment import OnboardCandidateRequest
 from services.codes import next_worker_code
+from services.posts import refresh_seat, start_primary_post
 
 logger = logging.getLogger(__name__)
 
@@ -108,10 +109,10 @@ async def accept_and_onboard_candidate(
     )
     session.add(worker)
     await session.flush()
+    await start_primary_post(session, worker, position_id=position.id if position else None)
 
     # 4. Seat assignment
     if position:
-        position.hiring_status = "filled"
         assignment = PositionAssignment(
             organization_id=organization_id,
             worker_id=worker.id,
@@ -121,7 +122,8 @@ async def accept_and_onboard_candidate(
             effective_start_date=joining_date,
         )
         session.add(assignment)
-
+        await session.flush()
+        await refresh_seat(session, position)
 
     # 5. Timeline milestone
     timeline = WorkerTimelineEvent(

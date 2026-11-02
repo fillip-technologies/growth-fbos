@@ -55,8 +55,8 @@ async def set_salary(client, worker_id, ctc=1_200_000):
     assert res.status_code == 201, res.text
 
 
-async def make_position(client, title="Senior Engineer") -> str:
-    res = await client.post("/v1/positions", json={"title": title, "effective_from": "2023-01-01"})
+async def make_position(client, title="Senior Engineer", **extra) -> str:
+    res = await client.post("/v1/positions", json={"title": title, "effective_from": "2023-01-01", **extra})
     assert res.status_code == 201, res.text
     return res.json()["id"]
 
@@ -254,7 +254,7 @@ async def test_a_change_that_can_no_longer_apply_is_marked_failed(async_client, 
     await db_session.flush()
     assert await role_changes.apply_due_role_changes(db_session) == []
     await db_session.refresh(row)
-    assert row.status == "failed" and "filled" in row.failure_reason
+    assert row.status == "failed" and "no room" in row.failure_reason
     assert (await async_client.get(f"/v1/workers/{worker_id}")).json()["unit_id"] is None
 
 

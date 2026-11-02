@@ -105,6 +105,8 @@ class WorkerResponse(WorkerBase):
     worker_code: Optional[str] = None
     user_id: Optional[uuid.UUID] = None
     name: str = ""
+    # Posts held besides the primary one ("+1 more" in lists).
+    extra_post_count: int = 0
     created_at: datetime
     updated_at: datetime
 

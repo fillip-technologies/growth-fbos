@@ -231,6 +231,10 @@ class UserService:
         only). Moving needs update rights in the destination unit too.
         """
         unit = await self._resolve_home_unit(session, actor, unit_id, PERM_UPDATE)
+        await self.place_in_unit(session, user, unit)
+
+    async def place_in_unit(self, session: AsyncSession, user: User, unit: Optional[OrgUnit]) -> None:
+        """Make `unit` the user's home unit (None clears it), with the membership that goes with it."""
         await session.execute(
             delete(UnitMembership).where(
                 UnitMembership.user_id == user.id, UnitMembership.member_role == HOME_UNIT_ROLE
@@ -265,7 +269,7 @@ class UserService:
             },
         )
 
-    async def _resolve_manager(
+    async def resolve_manager(
         self,
         session: AsyncSession,
         organization_id: uuid.UUID,
@@ -323,7 +327,7 @@ class UserService:
         same_org = existing.organization_id == actor.organization_id
         raise UserAlreadyExistsError(existing.id if same_org else None)
 
-    async def _assert_employee_code_free(
+    async def assert_employee_code_free(
         self,
         session: AsyncSession,
         organization_id: uuid.UUID,
@@ -467,9 +471,9 @@ class UserService:
 
         await self._assert_user_quota(session, org.id, client)
         await self._assert_email_free(session, actor, data.email)
-        await self._assert_employee_code_free(session, org.id, data.employee_code)
+        await self.assert_employee_code_free(session, org.id, data.employee_code)
         home_unit = await self._resolve_home_unit(session, actor, data.home_unit_id, PERM_CREATE)
-        await self._resolve_manager(session, org.id, data.manager_user_id)
+        await self.resolve_manager(session, org.id, data.manager_user_id)
 
         grants, presets = [], []
         if data.permissions or data.role_assignments:
@@ -509,7 +513,7 @@ class UserService:
             invitation_token=token,
             invitation_token_expires_at=expires_at,
         ))
-        user_permission_service.add_to_user(session, actor, user, grants, presets, reason="Initial access on invitation")
+        user_permission_service.add_to_user(session, actor.user_id, user, grants, presets, reason="Initial access on invitation")
 
         try:
             await session.commit()
@@ -580,7 +584,7 @@ class UserService:
             user.phone = data.phone
             changed.append("phone")
         if "manager_user_id" in provided and data.manager_user_id != user.manager_user_id:
-            await self._resolve_manager(session, user.organization_id, data.manager_user_id, subject_id=user.id)
+            await self.resolve_manager(session, user.organization_id, data.manager_user_id, subject_id=user.id)
             user.manager_user_id = data.manager_user_id
             changed.append("manager_user_id")
         if "home_unit_id" in provided and data.home_unit_id != user.home_unit_id:
@@ -596,6 +600,22 @@ class UserService:
 
         await self._publish_user_updated(actor, user, changed)
         return await self._build_user_response(session, user)
+
+    async def deactivate_in_session(self, session: AsyncSession, user: User, now: datetime) -> None:
+        """End the user's access: status, pending invitation / reset tokens and every session. The caller commits."""
+        user.status = "deactivated"
+        user.version += 1
+        cred = await session.get(UserCredential, user.id)
+        if cred:
+            cred.invitation_token = None
+            cred.invitation_token_expires_at = None
+            cred.reset_token = None
+            cred.reset_token_expires_at = None
+        await session.execute(
+            update(RefreshToken)
+            .where(RefreshToken.user_id == user.id, RefreshToken.revoked_at.is_(None))
+            .values(revoked_at=now.replace(tzinfo=None))
+        )
 
     async def deactivate_user(
         self,
@@ -625,20 +645,7 @@ class UserService:
                 )
 
         now = datetime.now(timezone.utc)
-        user.status = "deactivated"
-        user.version += 1
-
-        cred = await session.get(UserCredential, user.id)
-        if cred:
-            cred.invitation_token = None
-            cred.invitation_token_expires_at = None
-            cred.reset_token = None
-            cred.reset_token_expires_at = None
-        await session.execute(
-            update(RefreshToken)
-            .where(RefreshToken.user_id == user.id, RefreshToken.revoked_at.is_(None))
-            .values(revoked_at=now.replace(tzinfo=None))
-        )
+        await self.deactivate_in_session(session, user, now)
         await session.commit()
         await session.refresh(user)
 

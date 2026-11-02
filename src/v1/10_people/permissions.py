@@ -27,6 +27,11 @@ COMPENSATION_MANAGE = "people.compensation.manage"
 # Promotions, demotions and transfers: anyone who manages employees may request one;
 # approving needs this separate permission (and never the requester).
 ROLE_CHANGE_APPROVE = "people.role_change.approve"
+# Setup: who the standing approvers (HR head, finance) are.
+ROLE_CHANGE_MANAGE = "people.role_change.manage"
 
 # Separation & Offboarding
 SEPARATION_MANAGE = "people.separation.manage"
+
+# Identity's own code for applying a role to a user: needed to decide which jobs bring which roles.
+IDENTITY_ROLE_ASSIGNMENT_CREATE = "identity.role_assignment.create"
