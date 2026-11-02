@@ -309,3 +309,20 @@ async def test_status_for_someone_without_a_login_or_never_sent(async_client, db
     await db_session.delete(state)
     await db_session.flush()
     assert (await status_of(async_client, linked))["status"] == "not_synced"
+
+
+@pytest.mark.asyncio
+async def test_the_directory_finds_employees_by_their_logins_or_by_having_none(async_client):
+    first, second = new_user(), new_user()
+    await make_worker(async_client, "first@company.com", user_id=first)
+    await make_worker(async_client, "second@company.com", user_id=second)
+    await make_worker(async_client, "third@company.com", user_id=new_user())
+    nologin = await make_worker(async_client, "nologin.dir@company.com")
+
+    res = await async_client.get(f"/v1/workers?user_id={first}&user_id={second}")
+    assert res.status_code == 200, res.text
+    assert {row["user_id"] for row in res.json()["data"]} == {first, second}
+
+    without = (await async_client.get("/v1/workers?has_login=false")).json()["data"]
+    assert [row["id"] for row in without] == [nologin]
+    assert len((await async_client.get("/v1/workers?has_login=true")).json()["data"]) == 3
