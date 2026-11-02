@@ -153,3 +153,82 @@ async def test_full_recruitment_and_onboarding_lifecycle(async_client: AsyncClie
     assert req_check.status_code == 200
     assert req_check.json()["filled_count"] == 1
     assert req_check.json()["status"] == "filled"
+
+
+def _as(user_id, *codes):
+    from dependencies import get_actor
+    from main import app
+    from services.identity_client import Actor
+    from tests.conftest import TEST_ORG_ID
+
+    app.dependency_overrides[get_actor] = lambda: Actor(
+        user_id=user_id, organization_id=TEST_ORG_ID, user_type="employee", name="Someone", permissions=frozenset(codes),
+    )
+
+
+@pytest.mark.asyncio
+async def test_interviewer_assignment_and_blinded_feedback(async_client: AsyncClient):
+    from tests.conftest import TEST_USER_ID
+
+    client = async_client
+    base = "/api/people/v1"
+    interviewer_user = uuid.uuid4()
+    worker = await client.post(
+        f"{base}/workers",
+        json={
+            "first_name": "Iris", "last_name": "Interviewer", "work_email": "iris@company.com",
+            "user_id": str(interviewer_user), "designation": "Engineer", "date_of_joining": "2024-01-01",
+        },
+    )
+    assert worker.status_code == 201, worker.text
+    no_login = await client.post(
+        f"{base}/workers",
+        json={"first_name": "No", "last_name": "Login", "work_email": "nl@company.com", "designation": "Engineer", "date_of_joining": "2024-01-01"},
+    )
+    req = (await client.post(f"{base}/requisitions", json={"title": "Engineer", "openings_count": 1})).json()
+    cand = (await client.post(f"{base}/candidates", json={"first_name": "Cy", "last_name": "Candidate", "email": "cy@example.com"})).json()
+    application = (await client.post(f"{base}/applications", json={"candidate_id": cand["id"], "requisition_id": req["id"]})).json()
+    when = "2026-12-01T10:00:00Z"
+
+    # A worker with no login cannot interview.
+    bad = await client.post(
+        f"{base}/applications/{application['id']}/interviews",
+        json={"round_name": "technical", "interviewer_worker_id": no_login.json()["id"], "scheduled_at": when},
+    )
+    assert bad.status_code == 422
+
+    made = await client.post(
+        f"{base}/applications/{application['id']}/interviews",
+        json={"round_name": "technical", "interviewer_worker_id": worker.json()["id"], "scheduled_at": when, "location": "Room 2"},
+    )
+    assert made.status_code == 201, made.text
+    interview = made.json()
+    assert interview["interviewer_name"] == "Iris Interviewer" and interview["candidate_name"] == "Cy Candidate"
+
+    # An interviewer with no recruitment permission at all is refused; one with the interview permission sees only their own.
+    _as(interviewer_user)
+    assert (await client.get(f"{base}/interviews/mine")).status_code == 403
+    _as(uuid.uuid4(), "people.recruitment.interview")
+    assert (await client.get(f"{base}/interviews/mine")).json() == []
+    other = await client.post(f"{base}/interviews/{interview['id']}/feedback", json={"overall_recommendation": "yes"})
+    assert other.status_code == 403  # not their interview
+
+    _as(interviewer_user, "people.recruitment.interview")
+    mine = (await client.get(f"{base}/interviews/mine")).json()
+    assert [i["id"] for i in mine] == [interview["id"]]
+    done = await client.post(
+        f"{base}/interviews/{interview['id']}/feedback",
+        json={"overall_recommendation": "strong_yes", "feedback_notes": "Great"},
+    )
+    assert done.status_code == 201, done.text
+    again = await client.post(f"{base}/interviews/{interview['id']}/feedback", json={"overall_recommendation": "no"})
+    assert again.status_code == 409
+
+    # Blinded: another reader cannot see it, a manager can.
+    _as(uuid.uuid4(), "people.recruitment.read")
+    assert (await client.get(f"{base}/applications/{application['id']}/scorecards")).json() == []
+    _as(TEST_USER_ID, "people.recruitment.read", "people.recruitment.manage")
+    cards = (await client.get(f"{base}/applications/{application['id']}/scorecards")).json()
+    assert len(cards) == 1 and cards[0]["stage_name"] == "technical"
+    listed = (await client.get(f"{base}/applications/{application['id']}/interviews")).json()
+    assert listed[0]["status"] == "completed"

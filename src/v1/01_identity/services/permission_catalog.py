@@ -145,6 +145,7 @@ PERMISSION_CATALOG: list[tuple[str, str, str]] = [
     # People (HCM & ATS: recruitment, employee directory, shifts, attendance, overtime, leaves, compensation, separation)
     ("people.recruitment.read", "people", "View job requisitions, candidate pipeline and applications"),
     ("people.recruitment.manage", "people", "Manage job postings, schedule interviews, and issue offers"),
+    ("people.recruitment.interview", "people", "See interviews assigned to you and give feedback on them"),
     ("people.employee.read", "people", "View employee directory, org chart and profiles"),
     ("people.employee.manage", "people", "Manage employee records, historical data, designations and promotions"),
     ("people.attendance.read", "people", "View attendance, clock-in/out logs and overtime records"),

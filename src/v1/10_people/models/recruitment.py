@@ -133,3 +133,28 @@ class JobOffer(Base):
     application = relationship("JobApplication", back_populates="offers")
     candidate = relationship("Candidate")
     position = relationship("Position")
+
+
+class Interview(Base):
+    """One interview round of an application, assigned to an employee (the interviewer)."""
+
+    __tablename__ = "interviews"
+
+    id = Column(UUIDType, primary_key=True, default=uuid.uuid4)
+    organization_id = Column(UUIDType, nullable=False, index=True)
+    application_id = Column(UUIDType, ForeignKey("job_applications.id"), nullable=False, index=True)
+    round_name = Column(String(64), nullable=False)
+    interviewer_worker_id = Column(UUIDType, nullable=False, index=True)
+    interviewer_user_id = Column(UUIDType, nullable=False, index=True)  # identity user who signs in
+    interviewer_name = Column(String(128), nullable=False)
+    scheduled_at = Column(DateTime(timezone=True), nullable=False, index=True)
+    duration_minutes = Column(Integer, nullable=False, default=60)
+    location = Column(String(255), nullable=True)  # room or meeting link
+    status = Column(String(20), nullable=False, default="scheduled", index=True)  # scheduled, completed, cancelled
+    scorecard_id = Column(UUIDType, nullable=True)
+    created_by = Column(UUIDType, nullable=False)
+
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False)
+
+    application = relationship("JobApplication")

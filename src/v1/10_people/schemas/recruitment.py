@@ -199,3 +199,60 @@ class OnboardCandidateRequest(BaseModel):
     work_email: EmailStr
     date_of_joining: Optional[date] = None  # Supports past joining dates for back-dated records!
     custom_worker_code: Optional[str] = None
+
+
+# ---------------------------------------------------------
+# Interviews
+# ---------------------------------------------------------
+class InterviewCreate(BaseModel):
+    round_name: str = Field(..., min_length=1, max_length=64)
+    interviewer_worker_id: uuid.UUID
+    scheduled_at: datetime
+    duration_minutes: int = Field(default=60, ge=5, le=480)
+    location: Optional[str] = Field(None, max_length=255)
+
+
+class InterviewUpdate(BaseModel):
+    scheduled_at: Optional[datetime] = None
+    duration_minutes: Optional[int] = Field(None, ge=5, le=480)
+    location: Optional[str] = Field(None, max_length=255)
+    status: Optional[str] = Field(None, description="Only 'cancelled' can be set here.")
+
+    @model_validator(mode="after")
+    def validate_status(self) -> "InterviewUpdate":
+        if self.status is not None and self.status != "cancelled":
+            raise ValueError("status can only be set to 'cancelled'")
+        return self
+
+
+class InterviewFeedback(BaseModel):
+    overall_recommendation: str = Field(..., description="strong_yes, yes, neutral, no, strong_no")
+    attribute_ratings: Dict[str, Any] = Field(default_factory=dict)
+    feedback_notes: Optional[str] = None
+
+    @model_validator(mode="after")
+    def validate_recommendation(self) -> "InterviewFeedback":
+        valid = {"strong_yes", "yes", "neutral", "no", "strong_no"}
+        if self.overall_recommendation not in valid:
+            raise ValueError(f"overall_recommendation must be one of {valid}")
+        return self
+
+
+class InterviewResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
+    application_id: uuid.UUID
+    round_name: str
+    interviewer_worker_id: uuid.UUID
+    interviewer_user_id: uuid.UUID
+    interviewer_name: str
+    scheduled_at: datetime
+    duration_minutes: int
+    location: Optional[str] = None
+    status: str
+    scorecard_id: Optional[uuid.UUID] = None
+    # Filled in lists that span applications ("my interviews").
+    candidate_name: Optional[str] = None
+    job_title: Optional[str] = None
+    created_at: datetime

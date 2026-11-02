@@ -5,6 +5,8 @@ People (HCM & ATS) service permission codes, matching identity catalog naming (`
 # Recruitment & ATS
 RECRUITMENT_READ = "people.recruitment.read"
 RECRUITMENT_MANAGE = "people.recruitment.manage"
+# An interviewer: sees the interviews assigned to them and gives feedback on those only.
+RECRUITMENT_INTERVIEW = "people.recruitment.interview"
 
 # Core Employee Management
 EMPLOYEE_READ = "people.employee.read"

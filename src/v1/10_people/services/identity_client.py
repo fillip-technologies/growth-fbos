@@ -23,6 +23,7 @@ EMPLOYEES_PATH = "/api/identity/v1/internal/people/employees"
 ALL_PEOPLE_PERMISSIONS: frozenset[str] = frozenset([
     "people.recruitment.read",
     "people.recruitment.manage",
+    "people.recruitment.interview",
     "people.employee.read",
     "people.employee.manage",
     "people.attendance.read",
