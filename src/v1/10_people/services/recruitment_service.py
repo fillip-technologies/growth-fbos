@@ -351,3 +351,16 @@ async def create_offer(
     await session.flush()
     await session.refresh(offer)
     return offer
+
+
+async def list_offers(
+    session: AsyncSession,
+    organization_id: uuid.UUID,
+    application_id: uuid.UUID,
+) -> list[JobOffer]:
+    result = await session.execute(
+        select(JobOffer)
+        .where(JobOffer.organization_id == organization_id, JobOffer.application_id == application_id)
+        .order_by(JobOffer.created_at.desc())
+    )
+    return list(result.scalars().all())

@@ -121,6 +121,10 @@ async def test_full_recruitment_and_onboarding_lifecycle(async_client: AsyncClie
     offer_id = offer["id"]
     assert offer["is_out_of_band"] is False
 
+    listed = await client.get(f"/api/people/v1/applications/{app_id}/offers")
+    assert listed.status_code == 200, listed.text
+    assert [o["id"] for o in listed.json()] == [offer_id]
+
     # 8. Accept and Onboard
     onboard_res = await client.post(
         f"/api/people/v1/offers/{offer_id}/accept-and-onboard",
