@@ -2,9 +2,11 @@ from fastapi import APIRouter
 
 from routes.attendance import router as attendance_router
 from routes.internal import router as internal_router
+from routes.identity_sync import router as identity_sync_router
 from routes.leaves import router as leaves_router
 from routes.payroll import router as payroll_router
 from routes.positions import router as positions_router
+from routes.posts import router as posts_router
 from routes.progression import router as progression_router
 from routes.recruitment import router as recruitment_router
 from routes.role_changes import router as role_changes_router
@@ -17,7 +19,9 @@ core_router.include_router(positions_router)
 core_router.include_router(recruitment_router)
 core_router.include_router(workers_router)
 core_router.include_router(worker_documents_router)
+core_router.include_router(posts_router)
 core_router.include_router(role_changes_router)
+core_router.include_router(identity_sync_router)
 core_router.include_router(internal_router)
 core_router.include_router(attendance_router)
 core_router.include_router(leaves_router)

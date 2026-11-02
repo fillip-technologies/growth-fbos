@@ -92,6 +92,8 @@ class PayslipResponse(BaseModel):
     overtime_pay: Decimal
     reimbursements_pay: Decimal
     bonus_pay: Decimal
+    post_allowance_pay: Decimal = Decimal("0.00")
+    post_allowance_lines: Optional[list] = None
     gross_earned: Decimal
     total_deductions: Decimal
     net_payable: Decimal

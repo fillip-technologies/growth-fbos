@@ -44,6 +44,18 @@ class Settings(BaseSettings):
     # Run it on one server only (it is off by default).
     role_change_worker_enabled: bool = False
     role_change_worker_interval_seconds: int = 900
+    # A role-change approval nobody has decided after this many days opens to anyone who may approve role changes.
+    role_change_escalation_days: int = 3
+
+    # Most posts (jobs) one person may hold at the same time, primary included.
+    max_posts_per_worker: int = 3
+
+    # Tells Identity what People declares (placement, access from the job, leavers). Off by default: the
+    # changes are queued either way and delivered once it is on. Run on one server only.
+    identity_sync_enabled: bool = False
+    identity_sync_batch_size: int = 50
+    # The drift check compares both sides for each linked employee at most this often.
+    identity_drift_check_interval_hours: int = 24
 
     # In-app notifications go to the communication service's /internal/notifications.
     notifications_enabled: bool = False

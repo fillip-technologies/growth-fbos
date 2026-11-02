@@ -132,3 +132,7 @@ async def test_full_separation_clearance_and_settlement(async_client: AsyncClien
     assert worker_check.status_code == 200
     assert worker_check.json()["status"] == "exited"
     assert worker_check.json()["last_working_date"] == "2026-03-31"
+
+    # 11. The exit ends the person's posts
+    posts = (await client.get(f"/v1/workers/{worker_id}/posts", params={"include_ended": True})).json()["data"]
+    assert [(p["post_type"], p["status"], p["end_date"]) for p in posts] == [("primary", "ended", "2026-03-31")]

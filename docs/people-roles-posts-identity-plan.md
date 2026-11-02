@@ -166,6 +166,22 @@ Today a role change has one second approver. The professional version is a confi
   The plan is to submit role changes as Control approval requests with a `people.role_change` policy
   instead of building a second engine. **To verify before committing:** that Control's API supports
   conditional routing and an external subject. If not, extend People's own approval with steps.
+- **Checked 2026-11-02: Control cannot do it yet, so People has its own steps (built).** Control stores a
+  policy's `condition`, `skip_condition` and `approver_selector` but never evaluates them; the only
+  assignee it creates is the requester (a stub); delegations are stored but never applied; it has no
+  escalation for approvals and does not tell the subject's service when a request ends. Making Control
+  real is a separate project that also touches the Gateway.
+- **What was built in People:** every change starts with one open "Approval" step (anyone holding
+  `people.role_change.approve`). It then adds: a new post → the head of the person's department, then
+  the head of the post's department (one step if it is the same person; department heads come from
+  Identity's `/internal/unit-heads`); a demotion → the HR head; a salary change → finance. HR head and
+  finance are standing approvers set in People (`people.role_change.manage`); with none set the step is
+  left out. The requester and the employee never decide their own change; if that leaves a step with
+  nobody it opens to anyone who may approve. Approvers delegate by date range
+  (`/role-change-delegations`); a step nobody decides within `ROLE_CHANGE_ESCALATION_DAYS` (3) opens to
+  anyone who may approve, and the worker notifies the requester and the named approvers.
+- **Not built:** the "over budgeted headcount → finance" rule. Seats are still all-or-nothing (a vacant
+  seat is within budget), so there is nothing to go over until FTE seats (phase 6).
 - Requester ≠ approver stays enforced.
 
 ## 7. Identity lifecycle (joiner / mover / leaver)
@@ -182,6 +198,39 @@ Today a role change has one second approver. The professional version is a confi
 - A nightly **drift check** compares both sides (department, manager, status) and shows "In sync" or
   what differs on the profile. It reports; it does not fix silently.
 
+**Built (phase 4, 2026-11-02):**
+
+- **Identity endpoint:** `PUT /internal/people/users/{id}/employment` takes a declaration of what People holds
+  (name, phone, employee code, home unit, manager, the full list of managed roles, `deactivate`). It applies what
+  is named, answers what it did and what it could not (`problems`), and repeating it changes nothing.
+  `GET /internal/people/users/employment` reads the same shape back for the drift check. Both need the internal token.
+- **Tagged roles:** role assignments gained `source` / `source_ref`. People's assignments carry `source=people`
+  and the post that asked for them. The sync adds and removes only those; roles granted by hand, or already held by
+  hand, are never touched or taken over. Removal reuses Identity's own revoke rules (a permission another
+  preset still grants stays).
+- **Job -> access role:** `access_role_mappings` (`/access-role-mappings`): a post's job profile, else its
+  designation, brings an Identity role, scoped to the post's department or company-wide. Creating one needs
+  `people.role_change.manage` **and** `identity.role_assignment.create` (decision 13). The union over all live posts is
+  declared, so ending a post removes only what that post brought. A department-scoped role for a post with no
+  department is left out and noted on the sync status. A role code Identity does not know comes back as a
+  problem and shows on the profile.
+- **Only facts People holds are declared:** no phone, code, department or manager is sent when People has none
+  (so nothing Identity holds is cleared); a manager without a login is declared as no manager.
+- **Delivery:** every change writes an outbox row (`WorkerIdentitySyncRequested`); the relay builds the declaration at
+  delivery time, sends one per employee however many changes queued, and on failure keeps the rows and retries with a
+  doubling pause (up to 6 h). A refusal of part of it (`problems`) is shown on the profile and is not retried;
+  `POST /workers/{id}/identity-sync-requests` sends it again.
+- **Leavers:** the login is deactivated on the last working day (the worker queues everyone whose date has come and
+  whose login is not yet ended) and again at exit finalization. Default from section 11, decision 4.
+- **Drift check:** at most daily per employee, it compares Identity with what would be declared (status, name, phone,
+  code, department, manager, People-managed roles) and stores the differences; `GET /workers/{id}/identity-sync` answers
+  `in_sync`, `pending`, `failed`, `drift`, `not_synced` or `not_linked`. It never changes anything.
+- **Switch:** queueing is always on; delivery and the drift check run in the background worker when
+  `IDENTITY_SYNC_ENABLED` (one server only, with `ROLE_CHANGE_WORKER_ENABLED`).
+- **Not built:** the "employee moved" / "post ended" events for Delivery, Assets and Communication (nothing
+  consumes events yet), team memberships for posts in a team, and the Identity-side read-only fields. The Identity users
+  page change belongs to phase 5.
+
 ## 8. Screens
 
 - Identity Users page: an "Employee record" panel (designation, status, link to the People profile).
@@ -191,6 +240,12 @@ Today a role change has one second approver. The professional version is a confi
 - Employee lists show the primary title and "+1 more".
 - Change role form: which post; approval preview with the route and the access impact.
 - Org chart with dotted lines.
+
+**Built (phase 5, 2026-11-02):** the Posts tab, the Access panel (sync status), "+N more" in the directory, the Change role form per
+post with a live preview of the approval route and the access impact (`POST /workers/{id}/role-change-previews`, plus
+`access_impact` on each waiting change), the org chart with dotted lines (`GET /org-chart`), "Managed in People" on the Identity user
+page (`GET /workers?user_id=`), and a setup page for standing approvers, job -> access role mappings and delegations.
+Approver and person names come from Identity's user list, so they show only to people who may read users.
 
 ## 9. Audit and controls
 
@@ -204,10 +259,27 @@ Today a role change has one second approver. The professional version is a confi
 |---|---|
 | 1 | Effective-dated posts table, migration (primary post per employee), rules, API |
 | 2 | Role changes per post (change, add, end, make primary) with vacancy and FTE checks |
-| 3 | Approvals through Control: `people.role_change` policy, conditional routing, delegation, escalation (after verifying Control's API) |
-| 4 | Lifecycle sync to Identity: placement, mapped roles, leaver deactivation, outbox relay, drift check |
-| 5 | Screens: Posts tab, updated Change role form with approval preview and access impact, dotted-line org chart, "Managed in People" on Identity |
-| 6 | Controls: access recertification, separation-of-duties checks, reports by post and FTE, seat sharing by FTE, post allowances on payslips |
+| 3 | **Done in People (Control cannot do it yet):** Approvals through Control: `people.role_change` policy, conditional routing, delegation, escalation (after verifying Control's API) |
+| 4 | **Done:** Lifecycle sync to Identity: placement, mapped roles, leaver deactivation, outbox relay, drift check |
+| 5 | **Done (not yet tried in a browser):** Screens: Posts tab, updated Change role form with approval preview and access impact, dotted-line org chart, "Managed in People" on Identity |
+| 6 | **Partly done (see below):** Controls: access recertification, separation-of-duties checks, reports by post and FTE, seat sharing by FTE, post allowances on payslips |
+
+**Built (phase 6, 2026-11-02):**
+
+- **Seats shared by FTE:** a seat's use is the sum of its assignments' FTE; it shows "filled" only once the budget is fully
+  used (`refresh_seat`). A primary or concurrent post uses its share of the person's time (a primary with none uses what
+  the concurrent posts leave, a full seat if alone); an **acting or additional-charge post uses none** (it covers the work and adds no
+  headcount). Changing a post's time share, making a post primary, ending a post and an exit all update the seat. Positions
+  answer `used_fte`.
+- **Over budget needs finance:** a change that puts someone into a seat without room is refused (`POSITION_FILLED`) unless finance
+  approvers are set; then it is marked `over_budget` and the route gets the Finance step (merged with the pay-change step when both apply).
+  If the seat fills up between request and approval, the approval is refused rather than going over unseen.
+- **Allowances on payslips:** each post's monthly allowance is paid for the days the post was held in the month, over the days
+  in the month, less unpaid-absence days like the other allowances. Payslips gain `post_allowance_pay` and `post_allowance_lines`
+  (`[{title, post_type, days, amount}]`); both are included in gross. Ending a post, or its planned end date, stops it.
+- **Report:** `GET /reports/posts` and the Posts & FTE page: people, posts by kind, FTE allocated, seats' budget and use, by department.
+- **Not built:** separation-of-duties checks (nothing conflicts yet; add when roles that must not be held together exist), and access
+  recertification (decision 5, default "later").
 
 ## 11. Decisions needed
 

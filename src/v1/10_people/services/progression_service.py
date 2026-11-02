@@ -21,6 +21,8 @@ from schemas.progression import (
     PromotionCreate,
 )
 from services.payroll_service import get_worker_salary_structure
+from services.identity_sync import queue_sync
+from services.posts import sync_primary_post
 
 
 async def record_compensation_revision(
@@ -147,6 +149,8 @@ async def record_promotion(
     # Update worker title
     worker.designation = data.new_title
     worker.job_title = data.new_title
+    await sync_primary_post(session, worker, data.effective_date)
+    await queue_sync(session, worker)
 
     # Add milestone to Worker timeline
     timeline = WorkerTimelineEvent(

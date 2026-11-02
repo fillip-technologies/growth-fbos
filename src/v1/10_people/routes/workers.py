@@ -58,6 +58,7 @@ async def list_workers(
     unit_id: Optional[uuid.UUID] = Query(None),
     status: Optional[str] = Query(None),
     search: Optional[str] = Query(None),
+    user_id: Optional[uuid.UUID] = Query(None, description="Only the employee record linked to this login"),
     limit: int = Query(25, ge=1, le=100),
     cursor: Optional[str] = Query(None),
 ):
@@ -65,7 +66,7 @@ async def list_workers(
     List employee directory with keyset pagination, unit filtering, and full-text search.
     """
     rows, page = await service.list_workers(
-        session, org_id, unit_id=unit_id, status=status, search=search, limit=limit, cursor=cursor
+        session, org_id, unit_id=unit_id, status=status, search=search, limit=limit, cursor=cursor, user_id=user_id
     )
     return PageResponse(data=rows, page=page)
 

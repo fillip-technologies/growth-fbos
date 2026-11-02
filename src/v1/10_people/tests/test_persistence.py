@@ -19,6 +19,8 @@ from services.identity_client import ALL_PEOPLE_PERMISSIONS, Actor
 from tests.conftest import TEST_ORG_ID, TEST_USER_ID
 
 WRITE_METHODS = {"POST", "PUT", "PATCH", "DELETE"}
+# POST because they carry a body, but they only check and answer: nothing to commit.
+READ_ONLY_POSTS = {"/workers/{worker_id}/role-change-previews"}
 
 
 def _all_routes(routes):
@@ -35,7 +37,9 @@ def test_every_write_route_commits():
     write_routes = [
         route
         for route in _all_routes(app.routes)
-        if getattr(route, "endpoint", None) and WRITE_METHODS & set(getattr(route, "methods", ()))
+        if getattr(route, "endpoint", None)
+        and WRITE_METHODS & set(getattr(route, "methods", ()))
+        and not any(route.path.endswith(read_only) for read_only in READ_ONLY_POSTS)
     ]
     assert len(write_routes) > 30, "found too few write routes: the test is not looking at the app"
     missing = [

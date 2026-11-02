@@ -66,6 +66,8 @@ class PositionResponse(BaseModel):
     unit_id: Optional[uuid.UUID] = None
     reports_to_position_id: Optional[uuid.UUID] = None
     budgeted_fte: float
+    # How much of the budget people hold (a seat can be shared); the rest is open.
+    used_fte: float = 0.0
     hiring_status: str
     is_critical: bool
     effective_from: date

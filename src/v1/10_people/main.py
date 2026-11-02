@@ -34,7 +34,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         app.state.identity_client = IdentityClient(http, settings.internal_service_token)
         if settings.notifications_enabled:
             notification_client.start(communication_http, settings.internal_service_token)
-        worker_task = asyncio.create_task(run_forever()) if settings.role_change_worker_enabled else None
+        worker_task = asyncio.create_task(run_forever(app.state.identity_client)) if settings.role_change_worker_enabled else None
         yield
         if worker_task is not None:
             worker_task.cancel()

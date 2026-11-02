@@ -1,5 +1,5 @@
 import uuid
-from datetime import date
+from datetime import date, datetime, timezone
 from typing import Optional
 
 from sqlalchemy import func, or_, select
@@ -21,7 +21,9 @@ from schemas.worker import (
 )
 from services.codes import next_worker_code
 from services.identity_client import IdentityClient, IdentityEmployee
+from services.identity_sync import queue_sync
 from services.pagination import paginate
+from services.posts import extra_post_counts, start_primary_post, sync_primary_post
 
 
 def _worker_to_response(w: Worker) -> dict:
@@ -132,6 +134,8 @@ async def create_worker(
     )
     session.add(worker)
     await session.flush()
+    await start_primary_post(session, worker)
+    await queue_sync(session, worker)
 
     # Automatically create the initial hiring timeline event (with the effective joining date)
     join_event = WorkerTimelineEvent(
@@ -213,6 +217,9 @@ async def update_worker(
     for field, val in update_dict.items():
         setattr(worker, field, val)
 
+    # Department and manager belong to the primary post: keep it in step with the record.
+    await sync_primary_post(session, worker, datetime.now(timezone.utc).date())
+    await queue_sync(session, worker)
     await session.flush()
     await session.refresh(worker)
     return worker
@@ -226,8 +233,11 @@ async def list_workers(
     search: Optional[str] = None,
     limit: int = 25,
     cursor: Optional[str] = None,
+    user_id: Optional[uuid.UUID] = None,
 ) -> tuple[list[dict], PageMeta]:
     stmt = select(Worker).where(Worker.organization_id == organization_id)
+    if user_id:
+        stmt = stmt.where(Worker.user_id == user_id)
     if unit_id:
         stmt = stmt.where(Worker.unit_id == unit_id)
     if status:
@@ -247,7 +257,8 @@ async def list_workers(
     rows, page = await paginate(
         session, stmt, Worker, limit=limit, cursor=cursor, order_by=Worker.created_at, descending=False
     )
-    return [_worker_to_response(w) for w in rows], page
+    extra_posts = await extra_post_counts(session, [w.id for w in rows])
+    return [{**_worker_to_response(w), "extra_post_count": extra_posts.get(w.id, 0)} for w in rows], page
 
 
 async def get_worker_detail(
@@ -265,6 +276,7 @@ async def get_worker_detail(
         raise WorkerNotFoundError(str(worker_id))
 
     data = _worker_to_response(worker)
+    data["extra_post_count"] = (await extra_post_counts(session, [worker.id])).get(worker.id, 0)
 
     # Manager resolution
     if worker.manager_id:
@@ -518,6 +530,7 @@ async def _import_one(
         async with session.begin_nested():
             session.add(worker)
             await session.flush()
+            await start_primary_post(session, worker)
     except IntegrityError:
         return SKIP_ALREADY_LINKED  # a concurrent import linked this user first
 
@@ -536,6 +549,7 @@ async def _import_one(
             },
         )
     )
+    await queue_sync(session, worker)
     created.append(worker)
     return None
 

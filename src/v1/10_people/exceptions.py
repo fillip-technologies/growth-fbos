@@ -162,3 +162,39 @@ class SelfApprovalError(HTTPException):
                 "status": 403,
             },
         )
+
+
+class PostNotFoundError(HTTPException):
+    def __init__(self) -> None:
+        super().__init__(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={"code": "POST_NOT_FOUND", "message": "Post not found", "status": 404},
+        )
+
+
+class NotAnApproverError(HTTPException):
+    def __init__(self, waiting_for: str) -> None:
+        super().__init__(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail={
+                "code": "NOT_AN_APPROVER",
+                "message": f"This role change is waiting for: {waiting_for}. You are not an approver of that step",
+                "status": 403,
+            },
+        )
+
+
+class DelegationNotFoundError(HTTPException):
+    def __init__(self) -> None:
+        super().__init__(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={"code": "DELEGATION_NOT_FOUND", "message": "Delegation not found", "status": 404},
+        )
+
+
+class MappingNotFoundError(HTTPException):
+    def __init__(self) -> None:
+        super().__init__(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={"code": "MAPPING_NOT_FOUND", "message": "Access role mapping not found", "status": 404},
+        )

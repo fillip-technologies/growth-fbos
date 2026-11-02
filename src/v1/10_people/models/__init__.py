@@ -6,6 +6,7 @@ from models.attendance import (
     OvertimeRecord,
     WorkShift,
 )
+from models.identity_sync import AccessRoleMapping, WorkerIdentitySync
 from models.job_architecture import JobProfile, PayBand, Position
 from models.platform import (
     CodeSequence,
@@ -37,7 +38,8 @@ from models.separation import (
     FullAndFinalSettlement,
     SeparationCase,
 )
-from models.role_change import RoleChange
+from models.role_change import RoleChange, RoleChangeApprover, RoleChangeDelegation, RoleChangeStep
+from models.worker_post import WorkerPost
 from models.worker import (
     PositionAssignment,
     Worker,
@@ -64,6 +66,12 @@ __all__ = [
     "PositionAssignment",
     "WorkerTimelineEvent",
     "RoleChange",
+    "RoleChangeStep",
+    "RoleChangeApprover",
+    "RoleChangeDelegation",
+    "WorkerIdentitySync",
+    "AccessRoleMapping",
+    "WorkerPost",
     "OnboardingRequirement",
     "SensitiveAccessLog",
     "WorkerBankAccount",

@@ -12,6 +12,7 @@ from schemas.common import PageMeta, PageResponse
 from schemas.position import JobProfileCreate, PayBandCreate, PositionCreate
 from services.codes import next_position_code
 from services.pagination import paginate
+from services.posts import seat_used_fte
 
 
 async def create_pay_band(
@@ -156,6 +157,9 @@ async def list_positions(
     if hiring_status:
         stmt = stmt.where(Position.hiring_status == hiring_status)
 
-    return await paginate(
+    rows, page = await paginate(
         session, stmt, Position, limit=limit, cursor=cursor, order_by=Position.position_code, descending=True
     )
+    for position in rows:
+        position.used_fte = float(await seat_used_fte(session, position.id))
+    return rows, page
