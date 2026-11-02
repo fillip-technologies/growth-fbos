@@ -4,7 +4,7 @@ Keeping an employee's login in step with their job.
 People declares, Identity applies (joiner / mover / leaver):
 
 - placement, name, phone and employee code, for the facts People holds;
-- the access roles the person's posts bring (see `AccessRoleMapping`), added and removed to match
+- the access roles the person's posts bring (see `mapped_roles`: each post lists the Identity roles it gives), added and removed to match
   their current posts, never touching roles granted by hand in Identity;
 - the end of the login on the last working day.
 
@@ -27,8 +27,7 @@ from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from config import settings
-from models.identity_sync import AccessRoleMapping, WorkerIdentitySync
-from models.job_architecture import Position
+from models.identity_sync import WorkerIdentitySync
 from models.platform import Outbox
 from models.worker import Worker
 from models.worker_post import WorkerPost
@@ -72,20 +71,6 @@ async def queue_sync(session: AsyncSession, worker: Worker) -> None:
     await session.flush()
 
 
-async def queue_sync_for_organization(session: AsyncSession, organization_id: uuid.UUID) -> int:
-    """Every employee with a login who has not left (the job -> access mappings changed)."""
-    workers = (
-        await session.execute(
-            select(Worker).where(
-                Worker.organization_id == organization_id, Worker.user_id.is_not(None), Worker.status != "exited"
-            )
-        )
-    ).scalars().all()
-    for worker in workers:
-        await queue_sync(session, worker)
-    return len(workers)
-
-
 def is_leaver(worker: Worker, today: date) -> bool:
     """Gone, or past the last working day: the login ends."""
     return worker.status == "exited" or (worker.last_working_date is not None and worker.last_working_date <= today)
@@ -122,44 +107,35 @@ async def queue_due_leavers(session: AsyncSession, today: date) -> int:
 # --- What People declares -------------------------------------------------------------------------
 
 
-async def _mappings(session: AsyncSession, organization_id: uuid.UUID) -> list[AccessRoleMapping]:
-    return list(
-        (await session.execute(select(AccessRoleMapping).where(AccessRoleMapping.organization_id == organization_id))).scalars()
-    )
-
-
-async def _job_profile_of(session: AsyncSession, post: WorkerPost) -> Optional[uuid.UUID]:
-    if post.position_id is None:
-        return None
-    position = await session.get(Position, post.position_id)
-    return position.job_profile_id if position else None
+def role_specs(post: WorkerPost) -> list[dict[str, str]]:
+    """The roles a post gives, each as {"role_code", "scope"}: "organization", "department" (the post's), or "unit" (with "unit_id")."""
+    specs = []
+    for item in post.role_codes or []:
+        spec = {"role_code": item, "scope": "organization"} if isinstance(item, str) else item
+        specs.append({k: spec[k] for k in ("role_code", "scope", "unit_id") if spec.get(k)} | {"scope": spec.get("scope") or "organization"})
+    return specs
 
 
 async def mapped_roles(session: AsyncSession, worker: Worker, live: list[WorkerPost]) -> tuple[list[dict[str, Any]], list[str]]:
     """
-    The access roles the person's posts bring, each scoped to its post's department, and what had to
-    be left out. A post uses the mappings of its job profile, else those of its designation.
+    The access roles the person's posts give, each scoped to its post's department when the post says so,
+    and what had to be left out. Access follows the post: it comes with the post and goes when the post ends.
     """
-    mappings = await _mappings(session, worker.organization_id)
     wanted: dict[tuple[str, Optional[uuid.UUID]], dict[str, Any]] = {}
     notes: list[str] = []
     for post in live:
-        profile_id = await _job_profile_of(session, post)
-        matched = [m for m in mappings if profile_id and m.match_type == "job_profile" and m.match_value == str(profile_id)]
-        if not matched:
-            # A designation that comes from Identity roles joins their names ("Admin / Member"): each name counts.
-            titles = {post.title.strip().lower(), *(part.strip().lower() for part in post.title.split(" / "))}
-            matched = [m for m in mappings if m.match_type == "designation" and m.match_value in titles]
-        for mapping in matched:
+        for spec in role_specs(post):
             scope: Optional[uuid.UUID] = None
-            if mapping.scope == "department":
+            if spec["scope"] == "unit":  # kept as it was held by hand, in a department other than the post's
+                scope = uuid.UUID(spec["unit_id"])
+            elif spec["scope"] == "department":
                 if post.unit_id is None:
-                    notes.append(f"'{mapping.role_code}' for the post '{post.title}' is limited to a department, and the post has none")
+                    notes.append(f"'{spec['role_code']}' for the post '{post.title}' is limited to a department, and the post has none")
                     continue
                 scope = post.unit_id
             wanted.setdefault(
-                (mapping.role_code.lower(), scope),
-                {"role_code": mapping.role_code, "scope_unit_id": str(scope) if scope else None, "source_ref": str(post.post_ref)},
+                (spec["role_code"].lower(), scope),
+                {"role_code": spec["role_code"], "scope_unit_id": str(scope) if scope else None, "source_ref": str(post.post_ref)},
             )
     return list(wanted.values()), notes
 

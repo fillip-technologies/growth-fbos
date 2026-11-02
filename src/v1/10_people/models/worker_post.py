@@ -3,7 +3,7 @@ from datetime import date, datetime
 from decimal import Decimal
 from typing import Optional
 
-from sqlalchemy import Date, DateTime, ForeignKey, Index, Numeric, String, func
+from sqlalchemy import JSON, Date, DateTime, ForeignKey, Index, Numeric, String, func
 from sqlalchemy.orm import Mapped, mapped_column
 
 from database.base import Base
@@ -44,6 +44,9 @@ class WorkerPost(Base):
     end_date: Mapped[Optional[date]] = mapped_column(Date, nullable=True)
     status: Mapped[str] = mapped_column(String(20), nullable=False, default="active", index=True)  # scheduled, active, ended
     role_change_id: Mapped[Optional[uuid.UUID]] = mapped_column(UUIDType, nullable=True)
+    # The Identity roles this post gives, as [{"role_code": "...", "scope": "organization" | "department"}].
+    # A department scope uses the post's department. Access follows the post: it comes and goes with it.
+    role_codes: Mapped[list] = mapped_column(JSON, nullable=False, default=list, server_default="[]")
 
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
     updated_at: Mapped[datetime] = mapped_column(

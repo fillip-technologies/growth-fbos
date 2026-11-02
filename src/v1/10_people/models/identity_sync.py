@@ -2,7 +2,7 @@ import uuid
 from datetime import datetime
 from typing import Optional
 
-from sqlalchemy import DateTime, ForeignKey, JSON, String, Text, UniqueConstraint, func
+from sqlalchemy import DateTime, ForeignKey, JSON, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from database.base import Base
@@ -30,24 +30,3 @@ class WorkerIdentitySync(Base):
     # [{field, people, identity}] from the last drift check; empty when both sides agree.
     drift: Mapped[Optional[list]] = mapped_column(JSON, nullable=True)
     drift_checked_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True, index=True)
-
-
-class AccessRoleMapping(Base):
-    """
-    A job that brings an Identity access role: "Sales Manager" -> the sales_manager role, for the
-    person's department. Matched on the post's job profile, else on its designation (title).
-    """
-
-    __tablename__ = "access_role_mappings"
-    __table_args__ = (
-        UniqueConstraint("organization_id", "match_type", "match_value", "role_code", name="uq_access_role_mappings"),
-    )
-
-    id: Mapped[uuid.UUID] = mapped_column(UUIDType, primary_key=True, default=uuid.uuid4)
-    organization_id: Mapped[uuid.UUID] = mapped_column(UUIDType, nullable=False, index=True)
-    match_type: Mapped[str] = mapped_column(String(20), nullable=False)  # job_profile, designation
-    match_value: Mapped[str] = mapped_column(String(255), nullable=False)  # a job profile id, or a lowercased designation
-    role_code: Mapped[str] = mapped_column(String(100), nullable=False)
-    scope: Mapped[str] = mapped_column(String(20), nullable=False, default="department")  # department, company
-    created_by: Mapped[uuid.UUID] = mapped_column(UUIDType, nullable=False)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)

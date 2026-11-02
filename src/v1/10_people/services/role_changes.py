@@ -41,6 +41,7 @@ import services.designation as designation
 import services.identity_sync as identity_sync
 import services.role_change_routing as routing
 from services.notification_client import notification_client
+import services.post_roles as post_roles
 import services.posts as posts
 from services.payroll_service import get_worker_salary_structure
 from services.progression_service import record_compensation_revision
@@ -195,10 +196,16 @@ def _clone(post: WorkerPost, **changes) -> WorkerPost:
     return WorkerPost(**fields)
 
 
+def _new_post_title(change: RoleChange) -> Optional[str]:
+    """The title of a post a change adds: the one given, else the names of its roles."""
+    return change.new_designation or post_roles.title_from_roles(change.new_role_codes or [])
+
+
 def _post_changes(change: RoleChange) -> dict:
     """The fields of a post that a change alters (empty means unchanged)."""
     wanted = {
         "title": change.new_designation,
+        "role_codes": change.new_role_codes,  # [] removes every role; None leaves them
         "unit_id": change.new_unit_id,
         "manager_id": change.new_manager_id,
         "position_id": change.new_position_id,
@@ -239,9 +246,9 @@ def prospective_posts(live: list[WorkerPost], change: RoleChange) -> list[Worker
     """The person's posts as they would be once the change is applied (copies; nothing is saved)."""
     if change.change_type == "add_post":
         added = WorkerPost(
-            post_type=change.post_type, title=change.new_designation, unit_id=change.new_unit_id,
+            post_type=change.post_type, title=_new_post_title(change), unit_id=change.new_unit_id,
             position_id=change.new_position_id, manager_id=change.new_manager_id, time_share=change.new_time_share,
-            monthly_allowance=change.new_monthly_allowance,
+            monthly_allowance=change.new_monthly_allowance, role_codes=change.new_role_codes or [],
         )
         return [*live, added]
     target = _target_post(live, change)
@@ -283,7 +290,7 @@ async def _check_post_action(session: AsyncSession, change: RoleChange, worker: 
 
     if change.change_type == "add_post":
         added = WorkerPost(
-            post_type=change.post_type, title=change.new_designation, unit_id=change.new_unit_id,
+            post_type=change.post_type, title=_new_post_title(change), unit_id=change.new_unit_id,
             manager_id=change.new_manager_id, time_share=change.new_time_share,
         )
         if change.new_position_id is not None:
@@ -329,6 +336,11 @@ async def _check_post_change(session: AsyncSession, change: RoleChange, worker: 
             )
     if change.new_designation is not None and change.new_designation == target.title:
         raise ValidationFailedError("new_designation", "Same as the current designation")
+    if change.new_role_codes is not None:
+        if worker.user_id is None:
+            raise ValidationFailedError("new_role_codes", "Roles give access to a login, and this employee has none")
+        if post_roles.same_roles(change.new_role_codes, target.role_codes or []):
+            raise ValidationFailedError("new_role_codes", "Same as the roles the post gives now")
     if change.new_unit_id is not None and change.new_unit_id == target.unit_id:
         raise ValidationFailedError("new_unit_id", "Same as the current department")
     if change.new_manager_id is not None:
@@ -346,8 +358,10 @@ async def _check_post_change(session: AsyncSession, change: RoleChange, worker: 
 
     if change.change_type == "transfer" and not (change.new_unit_id or change.new_manager_id or change.new_position_id):
         raise ValidationFailedError("change_type", "A transfer changes the department, manager or position")
-    if change.change_type in ("promotion", "demotion") and not (change.new_designation or change.new_annual_ctc):
-        raise ValidationFailedError("change_type", f"A {change.change_type} changes the designation or the salary")
+    if change.change_type in ("promotion", "demotion") and not (
+        change.new_designation or change.new_annual_ctc or change.new_role_codes is not None
+    ):
+        raise ValidationFailedError("change_type", f"A {change.change_type} changes the designation, the role or the salary")
 
     posts.check_rules(after)
 
@@ -406,7 +420,7 @@ async def _get(session: AsyncSession, organization_id: uuid.UUID, change_id: uui
 
 
 async def _draft_change(
-    session: AsyncSession, actor: Actor, worker_id: uuid.UUID, data: RoleChangeCreate
+    session: AsyncSession, actor: Actor, identity: IdentityClient, worker_id: uuid.UUID, data: RoleChangeCreate
 ) -> tuple[RoleChange, Worker]:
     """A change as it would be requested, checked against every rule but not saved."""
     worker = await ensure_worker(session, actor.organization_id, worker_id)
@@ -431,6 +445,7 @@ async def _draft_change(
         reason=data.reason.strip(),
         letter_doc_id=data.letter_doc_id,
         new_designation=(data.new_designation or "").strip() or None,
+        new_role_codes=[spec.model_dump(mode="json", exclude_none=True) for spec in data.new_role_codes] if data.new_role_codes is not None else None,
         new_unit_id=data.new_unit_id,
         new_manager_id=data.new_manager_id,
         new_position_id=data.new_position_id,
@@ -442,18 +457,46 @@ async def _draft_change(
         end_date=data.end_date,
         requested_by=actor.user_id,
     )
+    await _name_new_roles(session, identity, change, worker)  # a post added by its roles takes its title from them
     await validate_change(session, change, worker)
     return change, worker
+
+
+async def _name_new_roles(session: AsyncSession, identity: IdentityClient, change: RoleChange, worker: Worker) -> None:
+    """Check the requested roles against Identity and keep their names, so the title can follow them."""
+    if change.new_role_codes is None:
+        return
+    live = await posts.live_posts(session, worker)
+    current = [] if change.change_type == "add_post" else (_target_post(live, change).role_codes or [])
+    change.new_role_codes = await post_roles.resolve_specs(identity, change.organization_id, change.new_role_codes, current)
+
+
+async def _roles_beyond_requester(session: AsyncSession, identity: IdentityClient, change: RoleChange, worker: Worker) -> list[str]:
+    """New roles the requester could not grant under Users themselves: those need an Identity admin's approval."""
+    if change.new_role_codes is None:
+        return []
+    live = await posts.live_posts(session, worker)
+    target = None if change.change_type == "add_post" else _target_post(live, change)
+    added = post_roles.added_specs(target.role_codes or [] if target else [], change.new_role_codes)
+    department_id = change.new_unit_id or (target.unit_id if target else None) or worker.unit_id
+    return await post_roles.roles_beyond_requester(identity, change.organization_id, change.requested_by, added, department_id)
+
+
+async def _plan_steps(session: AsyncSession, identity: IdentityClient, change: RoleChange, worker: Worker) -> list[routing.StepSpec]:
+    """The approvals the change needs. Refuses a change whose route cannot be made, before anything is saved."""
+    beyond = await _roles_beyond_requester(session, identity, change, worker)
+    return await routing.plan_steps(session, identity, change, worker, roles_beyond_requester=beyond)
 
 
 async def request_change(
     session: AsyncSession, actor: Actor, identity: IdentityClient, worker_id: uuid.UUID, data: RoleChangeCreate
 ) -> RoleChange:
-    change, worker = await _draft_change(session, actor, worker_id, data)
+    change, worker = await _draft_change(session, actor, identity, worker_id, data)
+    planned = await _plan_steps(session, identity, change, worker)
     session.add(change)
     await session.flush()
 
-    steps = routing.build_steps(change, worker, await routing.plan_steps(session, identity, change, worker))
+    steps = routing.build_steps(change, worker, planned)
     steps[0].status = "active"
     steps[0].activated_at = datetime.now(timezone.utc)
     session.add_all(steps)
@@ -465,8 +508,8 @@ async def preview_change(
     session: AsyncSession, actor: Actor, identity: IdentityClient, worker_id: uuid.UUID, data: RoleChangeCreate
 ) -> dict:
     """What requesting this would set in motion: the approvals it needs and the access it changes. Saves nothing."""
-    change, worker = await _draft_change(session, actor, worker_id, data)
-    steps = routing.build_steps(change, worker, await routing.plan_steps(session, identity, change, worker))
+    change, worker = await _draft_change(session, actor, identity, worker_id, data)
+    steps = routing.build_steps(change, worker, await _plan_steps(session, identity, change, worker))
     steps[0].status = "active"
     return {"steps": [_step_response(step) for step in steps], "access_impact": await access_impact(session, worker, change)}
 
@@ -599,6 +642,7 @@ def _state(post: WorkerPost) -> dict:
         "post_ref": str(post.post_ref),
         "post_type": post.post_type,
         "designation": post.title,
+        "role_codes": post.role_codes or [],
         "unit_id": str(post.unit_id) if post.unit_id else None,
         "manager_id": str(post.manager_id) if post.manager_id else None,
     }
@@ -607,6 +651,7 @@ def _state(post: WorkerPost) -> dict:
 def _remember_previous(change: RoleChange, post: WorkerPost, seat_id: Optional[uuid.UUID]) -> None:
     change.post_ref = post.post_ref
     change.previous_designation = post.title
+    change.previous_role_codes = post.role_codes or []
     change.previous_unit_id = post.unit_id
     change.previous_manager_id = post.manager_id
     change.previous_position_id = seat_id
@@ -618,7 +663,11 @@ async def _apply_post_change(session: AsyncSession, change: RoleChange, worker: 
     seat_id = await _held_seat_id(session, worker, target)
     _remember_previous(change, target, seat_id)
 
-    updated = await posts.version_post(session, target, change.effective_date, role_change_id=change.id, **_post_changes(change))
+    changes = _post_changes(change)
+    if change.new_role_codes and target.post_type == posts.PRIMARY and worker.user_id is not None and "title" not in changes:
+        # Their title is their role in Identity, so it moves with the role.
+        changes["title"] = post_roles.title_from_roles(change.new_role_codes) or target.title
+    updated = await posts.version_post(session, target, change.effective_date, role_change_id=change.id, **changes)
     after = [updated if p is target else p for p in live]
     fte = posts.post_fte(updated, after)
     if change.new_position_id is not None:
@@ -655,7 +704,8 @@ async def _apply_add_post(session: AsyncSession, change: RoleChange, worker: Wor
         organization_id=change.organization_id,
         worker_id=worker.id,
         post_type=change.post_type,
-        title=change.new_designation,
+        title=_new_post_title(change),
+        role_codes=change.new_role_codes or [],
         unit_id=change.new_unit_id,
         position_id=change.new_position_id,
         manager_id=change.new_manager_id,
@@ -879,6 +929,8 @@ async def to_responses(session: AsyncSession, actor: Actor, changes: list[RoleCh
             "reason": c.reason,
             "letter_doc_id": c.letter_doc_id,
             "new_designation": c.new_designation,
+            "new_role_codes": c.new_role_codes,
+            "previous_role_codes": c.previous_role_codes,
             "new_unit_id": c.new_unit_id,
             "new_manager_id": c.new_manager_id,
             "new_position_id": c.new_position_id,

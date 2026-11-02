@@ -190,11 +190,3 @@ class DelegationNotFoundError(HTTPException):
             status_code=status.HTTP_404_NOT_FOUND,
             detail={"code": "DELEGATION_NOT_FOUND", "message": "Delegation not found", "status": 404},
         )
-
-
-class MappingNotFoundError(HTTPException):
-    def __init__(self) -> None:
-        super().__init__(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail={"code": "MAPPING_NOT_FOUND", "message": "Access role mapping not found", "status": 404},
-        )

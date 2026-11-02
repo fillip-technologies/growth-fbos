@@ -14,6 +14,9 @@ if TYPE_CHECKING:
     from models.vertical import Vertical
 
 
+PEOPLE_SOURCE = "people"  # RoleAssignment.source of roles that People grants from a person's post
+
+
 class Permission(Base):
     __tablename__ = "permissions"
 
@@ -33,6 +36,8 @@ class Role(Base):
     code: Mapped[str] = mapped_column(String(100), nullable=False, index=True)
     name: Mapped[str] = mapped_column(String(255), nullable=False, default="")
     is_system: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    # People may grant this role through an approved role change. Off for system and admin roles.
+    assignable_by_people: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, server_default="1")
     version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
 
     role_permissions: Mapped[list["RolePermission"]] = relationship(

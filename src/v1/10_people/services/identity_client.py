@@ -20,6 +20,8 @@ ACTOR_PATH = "/api/identity/v1/internal/authz/actor"
 EMPLOYEES_PATH = "/api/identity/v1/internal/people/employees"
 UNIT_HEADS_PATH = "/api/identity/v1/internal/unit-heads"
 EMPLOYMENT_PATH = "/api/identity/v1/internal/people/users"
+PEOPLE_PATH = "/api/identity/v1/internal/people"
+ROLES_PATH = "/api/identity/v1/internal/people/roles"
 
 
 ALL_PEOPLE_PERMISSIONS: frozenset[str] = frozenset([
@@ -120,6 +122,21 @@ class EmploymentState:
 
 
 @dataclass(frozen=True)
+class RoleOption:
+    """A role of the organization and whether People may grant it."""
+
+    code: str
+    name: str
+    assignable_by_people: bool
+
+
+@dataclass(frozen=True)
+class AdoptedRoles:
+    adopted: list[tuple[str, Optional[uuid.UUID]]]  # (role code, scope unit)
+    missing: list[str]
+
+
+@dataclass(frozen=True)
 class IdentityEmployeePage:
     data: list[IdentityEmployee]
     has_more: bool
@@ -213,6 +230,46 @@ class IdentityClient:
             roles_removed=applied["roles_removed"], deactivated=applied["deactivated"],
             problems=[f"{problem['field']}: {problem['issue']}" for problem in body["problems"]],
         )
+
+    async def list_roles(self, organization_id: uuid.UUID) -> list[RoleOption]:
+        """The organization's roles, for the picker and to check a role exists and may be granted from People."""
+        headers = {"X-FBOS-Internal-Token": self._internal_token} if self._internal_token else {}
+        body = await self._get_json(ROLES_PATH, headers=headers, params={"organization_id": str(organization_id)})
+        return [
+            RoleOption(code=row["code"], name=row["name"], assignable_by_people=row["assignable_by_people"])
+            for row in body["data"]
+        ]
+
+    async def adopt_roles(self, organization_id: uuid.UUID, user_id: uuid.UUID, role_codes: list[str], source_ref: str) -> AdoptedRoles:
+        """Make roles the user holds by hand People's own, tied to the post that gives them. Grants and removes nothing."""
+        headers = {"X-FBOS-Internal-Token": self._internal_token} if self._internal_token else {}
+        body = await self._get_json(
+            f"{EMPLOYMENT_PATH}/{user_id}/role-adoptions", headers=headers, method="POST",
+            params={"organization_id": str(organization_id)},
+            json={"role_codes": role_codes, "source_ref": source_ref},
+        )
+        return AdoptedRoles(
+            adopted=[
+                (row["role_code"], uuid.UUID(row["scope_unit_id"]) if row.get("scope_unit_id") else None)
+                for row in body["adopted"]
+            ],
+            missing=body["missing"],
+        )
+
+    async def roles_beyond_requester(
+        self, organization_id: uuid.UUID, requester_user_id: uuid.UUID, role_codes: list[str], scope_unit_id: Optional[uuid.UUID]
+    ) -> list[str]:
+        """The roles the requester could not grant themselves with the access they hold."""
+        headers = {"X-FBOS-Internal-Token": self._internal_token} if self._internal_token else {}
+        body = await self._get_json(
+            f"{PEOPLE_PATH}/role-grant-checks", headers=headers, method="POST",
+            params={"organization_id": str(organization_id)},
+            json={
+                "requester_user_id": str(requester_user_id), "role_codes": role_codes,
+                "scope_unit_id": str(scope_unit_id) if scope_unit_id else None,
+            },
+        )
+        return body["not_grantable"]
 
     async def employment_states(self, organization_id: uuid.UUID, user_ids: list[uuid.UUID]) -> list[EmploymentState]:
         headers = {"X-FBOS-Internal-Token": self._internal_token} if self._internal_token else {}

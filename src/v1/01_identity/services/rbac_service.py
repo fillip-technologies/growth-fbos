@@ -14,12 +14,13 @@ from exceptions import (
     PreconditionRequiredError,
     RoleAssignmentNotFoundError,
     RoleIsSystemError,
+    RoleManagedByPeopleError,
     RoleNotFoundError,
     SelfModificationError,
     UserNotFoundError,
     ValidationFailedError,
 )
-from models.rbac import Permission, Role, RoleAssignment, RolePermission
+from models.rbac import PEOPLE_SOURCE, Permission, Role, RoleAssignment, RolePermission
 from models.user import User
 from models.user_permission import UserPermission
 from models.vertical import Vertical
@@ -64,6 +65,7 @@ class RbacService:
             code=role.code,
             name=role.name,
             is_system=role.is_system,
+            assignable_by_people=role.assignable_by_people,
             permissions=permissions,
             version=role.version,
         )
@@ -105,6 +107,7 @@ class RbacService:
             valid_from=assignment.valid_from,
             valid_to=assignment.valid_to,
             granted_by=granted_by_ref,
+            source=assignment.source,
         )
 
     async def list_roles(
@@ -551,6 +554,8 @@ class RbacService:
             raise RoleAssignmentNotFoundError()
         if assignment.user_id == actor.user_id:
             raise SelfModificationError("change the permissions of")
+        if assignment.source == PEOPLE_SOURCE:
+            raise RoleManagedByPeopleError()
 
         granted_rows, revoked_rows, still_granted_by = await self.plan_revocation(session, assignment)
         for row in revoked_rows:

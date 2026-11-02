@@ -6,7 +6,7 @@ from models.attendance import (
     OvertimeRecord,
     WorkShift,
 )
-from models.identity_sync import AccessRoleMapping, WorkerIdentitySync
+from models.identity_sync import WorkerIdentitySync
 from models.job_architecture import JobProfile, PayBand, Position
 from models.platform import (
     CodeSequence,
@@ -70,7 +70,6 @@ __all__ = [
     "RoleChangeApprover",
     "RoleChangeDelegation",
     "WorkerIdentitySync",
-    "AccessRoleMapping",
     "WorkerPost",
     "OnboardingRequirement",
     "SensitiveAccessLog",

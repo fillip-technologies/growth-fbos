@@ -17,6 +17,7 @@ from schemas.role_change import (
     RoleChangeList,
     RoleChangePreview,
     RoleChangeResponse,
+    RoleOptionList,
     StandingApprovers,
     StandingApproversList,
     StandingApproversUpdate,
@@ -67,6 +68,15 @@ async def preview_role_change(
 ):
     """Check a change and show who would have to approve it and which access roles it adds or removes. Saves nothing."""
     return await role_changes.preview_change(session, actor, identity, worker_id, payload)
+
+
+@router.get("/role-options", response_model=RoleOptionList, dependencies=[CAN_SEE])
+async def list_role_options(
+    actor: CurrentActor, identity: Annotated[IdentityClient, Depends(get_identity_client)]
+):
+    """The Identity roles a post can give, for the role picker of a role change."""
+    roles = await identity.list_roles(actor.organization_id)
+    return {"data": [{"code": r.code, "name": r.name, "assignable_by_people": r.assignable_by_people} for r in roles]}
 
 
 @router.get("/workers/{worker_id}/role-changes", response_model=RoleChangeList, dependencies=[Depends(require_permission(permissions.EMPLOYEE_READ))])
@@ -130,7 +140,7 @@ async def list_standing_approvers(session: DatabaseSession, actor: CurrentActor)
 
 @router.put("/role-change-approvers/{role_key}", response_model=StandingApprovers, dependencies=[CAN_SET_UP])
 async def set_standing_approvers(session: DatabaseSession, actor: CurrentActor, role_key: str, payload: StandingApproversUpdate):
-    """Replace the people who hold this role (`hr_head`, `finance`). An empty list removes the step from routes."""
+    """Replace the people who hold this role (`hr_head`, `finance`, `access_admin`). An empty list removes the step from routes."""
     user_ids = await routing.replace_standing_approvers(session, actor.organization_id, role_key, payload.user_ids)
     await session.commit()
     return {"role_key": role_key, "user_ids": user_ids}

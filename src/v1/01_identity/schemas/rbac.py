@@ -56,6 +56,7 @@ class RoleResponse(BaseModel):
     code: str
     name: str
     is_system: bool
+    assignable_by_people: bool = True
     permissions: list[str] = Field(default_factory=list)
     version: int = 1
 
@@ -92,6 +93,7 @@ class RoleAssignmentResponse(BaseModel):
     valid_from: datetime
     valid_to: Optional[datetime] = None
     granted_by: Optional[UserRef] = None
+    source: Optional[str] = None  # "people": it comes from the person's post and is changed there, not under Users
 
 
 class GrantItem(BaseModel):

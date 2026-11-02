@@ -9,11 +9,31 @@ ChangeType = Literal["promotion", "demotion", "transfer", "correction", "add_pos
 PostKind = Literal["concurrent", "additional_charge", "acting"]
 
 
+RoleScope = Literal["organization", "department", "unit"]
+
+
+class RoleSpec(BaseModel):
+    """An Identity role a post gives. A department scope limits it to the post's department; "organization" is company-wide."""
+
+    role_code: str = Field(..., min_length=1, max_length=100)
+    scope: RoleScope = "organization"
+    unit_id: Optional[uuid.UUID] = None  # only for scope "unit": a role held in a department other than the post's, kept as it was
+    name: Optional[str] = None  # filled from Identity when the change is requested
+
+    @model_validator(mode="after")
+    def _unit_scope_names_its_unit(self) -> "RoleSpec":
+        if (self.scope == "unit") != (self.unit_id is not None):
+            raise ValueError('Give unit_id with scope "unit", and only then')
+        return self
+
+
 class RoleChangeCreate(BaseModel):
     change_type: ChangeType
     effective_date: date  # past dates apply as soon as the change is approved
     reason: str = Field(..., min_length=1, max_length=2000)
     new_designation: Optional[str] = Field(None, min_length=1, max_length=255)
+    # The complete list of Identity roles the post gives afterwards; empty removes them all. Omit to leave them as they are.
+    new_role_codes: Optional[List[RoleSpec]] = Field(None, max_length=20)
     new_unit_id: Optional[uuid.UUID] = None
     new_manager_id: Optional[uuid.UUID] = None
     new_position_id: Optional[uuid.UUID] = None
@@ -31,8 +51,8 @@ class RoleChangeCreate(BaseModel):
     @model_validator(mode="after")
     def _says_what_it_does(self) -> "RoleChangeCreate":
         if self.change_type == "add_post":
-            if not self.post_type or not self.new_designation:
-                raise ValueError("A new post needs its kind (post_type) and a title (new_designation)")
+            if not self.post_type or not (self.new_designation or self.new_role_codes):
+                raise ValueError("A new post needs its kind (post_type) and a title (new_designation) or a role (new_role_codes)")
             if self.post_ref is not None:
                 raise ValueError("A new post has no post_ref")
             if self.end_date is not None and self.end_date <= self.effective_date:
@@ -45,11 +65,11 @@ class RoleChangeCreate(BaseModel):
         if not any(
             value is not None
             for value in (
-                self.new_designation, self.new_unit_id, self.new_manager_id, self.new_position_id,
+                self.new_designation, self.new_role_codes, self.new_unit_id, self.new_manager_id, self.new_position_id,
                 self.new_annual_ctc, self.new_time_share, self.new_monthly_allowance,
             )
         ):
-            raise ValueError("Change at least one of designation, department, manager, position, salary, share of time or allowance")
+            raise ValueError("Change at least one of designation, role, department, manager, position, salary, share of time or allowance")
         return self
 
 
@@ -103,6 +123,8 @@ class RoleChangeResponse(BaseModel):
     letter_doc_id: Optional[uuid.UUID] = None
 
     new_designation: Optional[str] = None
+    new_role_codes: Optional[List[RoleSpec]] = None
+    previous_role_codes: Optional[List[RoleSpec]] = None
     new_unit_id: Optional[uuid.UUID] = None
     new_manager_id: Optional[uuid.UUID] = None
     new_position_id: Optional[uuid.UUID] = None
@@ -182,3 +204,15 @@ class DelegationList(BaseModel):
 class RoleChangePreview(BaseModel):
     steps: List[RoleChangeStepResponse]
     access_impact: AccessImpact
+
+
+class RoleOptionResponse(BaseModel):
+    """An Identity role that can go on a post."""
+
+    code: str
+    name: str
+    assignable_by_people: bool  # false: a system or admin role, kept only where a post already has it
+
+
+class RoleOptionList(BaseModel):
+    data: List[RoleOptionResponse]

@@ -9,6 +9,7 @@ Then the change adds steps:
 | adds a post                        | the head of the person's department, then the head of the post's department |
 | is a demotion                      | the HR head                                      |
 | changes salary, or goes over a seat's budget | finance                                |
+| gives a role the requester could not grant under Users | the access approver (an Identity admin)  |
 
 HR head and finance are standing approvers set in People; department heads come from Identity.
 With nobody set or found, that step is left out (the open approval still covers the change).
@@ -29,9 +30,9 @@ from models.role_change import RoleChange, RoleChangeApprover, RoleChangeDelegat
 from models.worker import Worker
 from services.identity_client import IdentityClient
 
-HR_HEAD, FINANCE = "hr_head", "finance"
-STANDING_ROLES = (HR_HEAD, FINANCE)
-STEP_NAMES = {HR_HEAD: "HR head approval", FINANCE: "Finance approval"}
+HR_HEAD, FINANCE, ACCESS_ADMIN = "hr_head", "finance", "access_admin"
+STANDING_ROLES = (HR_HEAD, FINANCE, ACCESS_ADMIN)
+STEP_NAMES = {HR_HEAD: "HR head approval", FINANCE: "Finance approval", ACCESS_ADMIN: "Access approval"}
 
 
 @dataclass
@@ -61,7 +62,8 @@ async def _department_head(identity: IdentityClient, organization_id: uuid.UUID,
 
 
 async def plan_steps(
-    session: AsyncSession, identity: IdentityClient, change: RoleChange, worker: Worker
+    session: AsyncSession, identity: IdentityClient, change: RoleChange, worker: Worker,
+    roles_beyond_requester: Optional[list[str]] = None,
 ) -> list[StepSpec]:
     """The approvals this change needs, in order, before anyone is excluded."""
     specs = [StepSpec(name="Approval", kind="approval")]
@@ -75,6 +77,15 @@ async def plan_steps(
         hr = await standing_approvers(session, change.organization_id, HR_HEAD)
         if hr:
             specs.append(StepSpec(name=STEP_NAMES[HR_HEAD], kind=HR_HEAD, candidates=hr))
+    if roles_beyond_requester:
+        # Unlike HR and finance, this step cannot be left out: access beyond the requester's own needs someone who holds it.
+        access = await standing_approvers(session, change.organization_id, ACCESS_ADMIN)
+        if not access:
+            raise ConflictError(
+                "This gives a role the requester could not grant themselves. Name who approves access first (access approvers).",
+                code="ACCESS_APPROVER_MISSING",
+            )
+        specs.append(StepSpec(name=STEP_NAMES[ACCESS_ADMIN], kind=ACCESS_ADMIN, candidates=access))
     if change.new_annual_ctc is not None or change.over_budget:
         finance = await standing_approvers(session, change.organization_id, FINANCE)
         if finance:
