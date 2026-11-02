@@ -9,8 +9,9 @@ import services.stats as stats
 import services.tasks as service
 from services.views import task_view
 from dependencies import CurrentActor, DatabaseSession, OrgId, People, UserId, require_permission
+from exceptions import ValidationFailedError
 from schemas.common import PageMeta, PageResponse
-from schemas.stats import TaskStats
+from schemas.stats import TaskStats, TimeSummary
 from schemas.tasks import (
     AssignmentResponse,
     BoardResponse,
@@ -490,6 +491,31 @@ async def list_time_entries(
 ) -> PageResponse[TimeEntryResponse]:
     """List time entries (timesheet). Another user's time needs access to everyone's time."""
     return await service.list_time_entries(session, org_id, actor, user_id, date_from, date_to, limit, cursor)
+
+
+@router.get(
+    "/time-entries/summary",
+    response_model=TimeSummary,
+    dependencies=[Depends(require_permission(permissions.TIME_ENTRY_READ))],
+)
+async def get_time_summary(
+    session: DatabaseSession,
+    org_id: OrgId,
+    actor: CurrentActor,
+    date_from: date = Query(...),
+    date_to: date = Query(...),
+    user_id: Optional[uuid.UUID] = Query(None, description="Only this person's time"),
+    unit_id: Optional[uuid.UUID] = Query(None, description="Only time on tasks this team owns"),
+    work_unit_id: Optional[uuid.UUID] = Query(None, description="Only time on this project's tasks"),
+) -> TimeSummary:
+    """Minutes recorded between two days: per person, per team owning the tasks, and per week. Someone who
+    may read only their own time gets just theirs."""
+    if date_to < date_from or (date_to - date_from).days > 366:
+        raise ValidationFailedError("date_to", "Pick a range of at most a year, ending after it starts")
+    own_only = actor.user_id if actor.only_own(permissions.TIME_ENTRY_READ) else None
+    return await stats.time_summary(
+        session, org_id, date_from, date_to, only_user_id=own_only, user_id=user_id, unit_id=unit_id, work_unit_id=work_unit_id
+    )
 
 
 @router.delete("/time-entries/{entry_id}", status_code=status.HTTP_204_NO_CONTENT, dependencies=[CAN_READ])

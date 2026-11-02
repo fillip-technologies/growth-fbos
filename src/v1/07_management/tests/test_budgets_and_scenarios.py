@@ -154,3 +154,42 @@ async def test_scenarios_start_from_approved_company_targets(async_client, contr
         "name": "x", "base_period_id": periods["FY30 Feb 2030"]["id"], "assumption": {"type": "absolute_change", "value": 1},
     })
     assert empty.status_code == 422
+
+
+async def test_budget_summary_per_budget_category_and_month(async_client, control):
+    year = (await fiscal_year(async_client))["year"]
+    sales = uuid.uuid4()
+    await _approve(async_client, control, await _budget(async_client, year["id"], code="OPS-30"))
+    draft = await ok(await async_client.post(f"{BASE}/budgets", json={
+        "fiscal_year_id": year["id"], "code": "SALES-30", "name": "Sales", "currency": "INR", "scope": {"unit_id": str(sales)},
+    }), 201)
+    await ok(await async_client.post(f"{BASE}/budgets/{draft['id']}/lines", json={"category": "travel", "planned_amount": 500}), 201)
+    for category, amount, day in [("salaries", 300, "2030-01-15"), ("travel", 80, "2030-03-01"), ("travel", 20, "2030-03-20")]:
+        res = await async_client.post(f"{BASE}/internal/budget-actuals", json={
+            "organization_id": str(TEST_ORG_ID), "budget_code": "OPS-30", "category": category, "amount": amount,
+            "occurred_on": day, "source_type": "revenue", "source_event_id": str(uuid.uuid4()),
+        })
+        assert res.status_code == 201, res.text
+
+    body = await ok(await async_client.get(f"{BASE}/budgets/summary", params={"fiscal_year_id": year["id"]}))
+
+    assert (body["fiscal_year_code"], body["currency"], body["mixed_currencies"]) == ("FY30", "INR", False)
+    assert (body["planned"], body["approved"], body["actual"]) == (1700.0, 1200.0, 400.0)
+    rows = {r["code"]: r for r in body["budgets"]}
+    assert (rows["OPS-30"]["approved"], rows["OPS-30"]["actual"], rows["OPS-30"]["status"]) == (1200.0, 400.0, "approved")
+    assert (rows["SALES-30"]["planned"], rows["SALES-30"]["approved"], rows["SALES-30"]["scope_unit_id"]) == (500.0, 0.0, str(sales))
+    assert body["budgets"][0]["code"] == "OPS-30"  # most spent first
+    assert {c["category"]: (c["planned"], c["actual"]) for c in body["by_category"]} == {"salaries": (1000.0, 300.0), "travel": (700.0, 100.0)}
+    months = {m["month"]: m["actual"] for m in body["actual_by_month"]}
+    assert len(months) == 12 and months["2030-01"] == 300.0 and months["2030-03"] == 100.0 and months["2030-02"] == 0.0
+    assert rows["OPS-30"]["scope_unit_id"] is None
+
+
+async def test_budget_summary_picks_the_year_today_is_in_and_refuses_an_unknown_one(async_client):
+    await fiscal_year(async_client, code="FY29", start="2029-01-01", end="2029-12-31")
+    await fiscal_year(async_client, code="FY30", start="2030-01-01", end="2030-12-31")
+    body = await ok(await async_client.get(f"{BASE}/budgets/summary"))
+    # No year contains today (tests run before 2029): the latest one.
+    assert body["fiscal_year_code"] == "FY30" and body["budgets"] == [] and body["actual"] == 0.0
+    missing = await async_client.get(f"{BASE}/budgets/summary", params={"fiscal_year_id": str(uuid.uuid4())})
+    assert missing.status_code == 404

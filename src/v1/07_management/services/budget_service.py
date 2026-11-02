@@ -14,7 +14,7 @@ initiatives, the actuals posted against them, and budget vs actual vs committed.
   that initiative in proportion to their allocations.
 """
 
-from collections import defaultdict
+from collections import Counter, defaultdict
 from datetime import date
 from decimal import Decimal
 from typing import Optional
@@ -28,6 +28,7 @@ from exceptions import (
     BudgetLineNotFoundError,
     BudgetNotFoundError,
     DuplicateBudgetCodeError,
+    FiscalYearNotFoundError,
     InvalidStateTransitionError,
     UnknownReferenceError,
     ValidationFailedError,
@@ -37,6 +38,10 @@ from models.resource import Allocation, CapacityLedger, Resource
 from schemas.budget import (
     BudgetActualCreate,
     BudgetActualResponse,
+    BudgetCategoryRow,
+    BudgetMonth,
+    BudgetSummaryResponse,
+    BudgetSummaryRow,
     BudgetAllocationCreate,
     BudgetAllocationResponse,
     BudgetCreate,
@@ -506,3 +511,91 @@ async def variance(session: AsyncSession, org_id: uuid.UUID, budget_id: uuid.UUI
     return VarianceResponse(
         budget_id=budget.id, currency=budget.currency, as_of=as_of, unpriced_bookings=unpriced, lines=items, totals=totals
     )
+
+
+# --- Summary --------------------------------------------------------------------
+
+
+async def budget_summary(
+    session: AsyncSession, org_id: uuid.UUID, fiscal_year_id: Optional[uuid.UUID], today: Optional[date] = None
+) -> BudgetSummaryResponse:
+    """Planned, approved and spent per budget, per category and per month of one fiscal year: the given
+    one, else the one today falls in, else the latest. Rejected budgets count nothing approved."""
+    year = await _summary_year(session, org_id, fiscal_year_id, today or date.today())
+    budgets = (
+        await session.execute(select(Budget).where(Budget.organization_id == org_id, Budget.fiscal_year_id == year.id))
+    ).scalars().all()
+    by_id = {b.id: b for b in budgets}
+    line_rows = (
+        await session.execute(
+            select(BudgetLine.id, BudgetLine.budget_id, BudgetLine.category, BudgetLine.planned_amount, BudgetLine.approved_amount)
+            .where(BudgetLine.budget_id.in_(list(by_id)))
+        )
+    ).all() if by_id else []
+    actual_by_line, _ = await _line_sums(session, [row.id for row in line_rows])
+
+    per_budget: dict[uuid.UUID, list[Decimal]] = {b.id: [ZERO, ZERO, ZERO] for b in budgets}
+    per_category: dict[str, list[Decimal]] = defaultdict(lambda: [ZERO, ZERO, ZERO])
+    for line_id, budget_id, category, planned, approved in line_rows:
+        approved_counts = by_id[budget_id].status != "rejected"
+        values = (Decimal(planned or 0), Decimal(approved or 0) if approved_counts else ZERO, Decimal(actual_by_line.get(line_id) or 0))
+        for bucket in (per_budget[budget_id], per_category[category]):
+            for i, value in enumerate(values):
+                bucket[i] += value
+
+    month_rows = (
+        await session.execute(
+            select(BudgetActual.occurred_on, func.sum(BudgetActual.amount))
+            .where(BudgetActual.budget_line_id.in_([row.id for row in line_rows]))
+            .group_by(BudgetActual.occurred_on)
+        )
+    ).all() if line_rows else []
+    months: dict[str, Decimal] = {}
+    cursor = date(year.start_date.year, year.start_date.month, 1)
+    while cursor <= year.end_date:
+        months[f"{cursor.year:04d}-{cursor.month:02d}"] = ZERO
+        cursor = date(cursor.year + (cursor.month == 12), cursor.month % 12 + 1, 1)
+    for day, amount in month_rows:
+        key = f"{day.year:04d}-{day.month:02d}"
+        if key in months:
+            months[key] += Decimal(amount or 0)
+
+    currencies = Counter(b.currency for b in budgets)
+    currency = currencies.most_common(1)[0][0] if currencies else "INR"
+    rows = sorted(
+        (
+            BudgetSummaryRow(
+                budget_id=b.id, code=b.code, name=b.name, status=b.status, scope_unit_id=b.scope_unit_id,
+                scope_vertical_id=b.scope_vertical_id, currency=b.currency,
+                planned=float(per_budget[b.id][0]), approved=float(per_budget[b.id][1]), actual=float(per_budget[b.id][2]),
+            )
+            for b in budgets
+        ),
+        key=lambda r: (-r.actual, -r.approved, r.name),
+    )
+    return BudgetSummaryResponse(
+        fiscal_year_id=year.id, fiscal_year_code=year.code, start_date=year.start_date, end_date=year.end_date,
+        currency=currency, mixed_currencies=len(currencies) > 1,
+        planned=sum(r.planned for r in rows), approved=sum(r.approved for r in rows), actual=sum(r.actual for r in rows),
+        budgets=rows,
+        by_category=sorted(
+            (BudgetCategoryRow(category=c, planned=float(p), approved=float(a), actual=float(s)) for c, (p, a, s) in per_category.items()),
+            key=lambda r: (-r.actual, -r.approved, r.category),
+        ),
+        actual_by_month=[BudgetMonth(month=k, actual=float(v)) for k, v in months.items()],
+    )
+
+
+async def _summary_year(session: AsyncSession, org_id: uuid.UUID, fiscal_year_id: Optional[uuid.UUID], today: date) -> FiscalYear:
+    if fiscal_year_id is not None:
+        year = await session.get(FiscalYear, fiscal_year_id)
+        if year is None or year.organization_id != org_id:
+            raise FiscalYearNotFoundError(fiscal_year_id)
+        return year
+    years = (
+        await session.execute(select(FiscalYear).where(FiscalYear.organization_id == org_id).order_by(FiscalYear.start_date.desc()))
+    ).scalars().all()
+    current = next((y for y in years if y.start_date <= today <= y.end_date), None)
+    if current is None and not years:
+        raise FiscalYearNotFoundError(None)
+    return current or years[0]

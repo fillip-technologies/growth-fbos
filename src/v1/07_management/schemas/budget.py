@@ -143,3 +143,46 @@ class VarianceResponse(BaseModel):
     unpriced_bookings: int
     lines: list[VarianceLine]
     totals: VarianceLine
+
+
+# --- Summary: every budget of a fiscal year, for the console's insights ---------------
+
+
+class BudgetSummaryRow(BaseModel):
+    budget_id: uuid.UUID
+    code: str
+    name: str
+    status: str
+    scope_unit_id: Optional[uuid.UUID] = None
+    scope_vertical_id: Optional[uuid.UUID] = None
+    currency: str
+    planned: float
+    approved: float
+    actual: float
+
+
+class BudgetCategoryRow(BaseModel):
+    category: str
+    planned: float
+    approved: float
+    actual: float
+
+
+class BudgetMonth(BaseModel):
+    month: str  # YYYY-MM
+    actual: float
+
+
+class BudgetSummaryResponse(BaseModel):
+    fiscal_year_id: uuid.UUID
+    fiscal_year_code: str
+    start_date: date
+    end_date: date
+    currency: str  # the one most budgets use; `mixed_currencies` when some use another
+    mixed_currencies: bool
+    planned: float
+    approved: float
+    actual: float
+    budgets: list[BudgetSummaryRow]  # most spent first
+    by_category: list[BudgetCategoryRow]  # most spent first
+    actual_by_month: list[BudgetMonth]  # every month of the year, in order

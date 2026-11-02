@@ -10,6 +10,7 @@ from dependencies import Control, CurrentActor, DatabaseSession, OrgId, require_
 from schemas.budget import (
     BudgetActualCreate,
     BudgetActualResponse,
+    BudgetSummaryResponse,
     BudgetAllocationCreate,
     BudgetAllocationResponse,
     BudgetCreate,
@@ -44,6 +45,16 @@ async def create_budget(payload: BudgetCreate, session: DatabaseSession, org_id:
     budget = await service.create_budget(session, org_id, payload)
     await session.commit()
     return budget
+
+
+@router.get("/budgets/summary", response_model=BudgetSummaryResponse, dependencies=[CAN_READ])
+async def get_budget_summary(
+    session: DatabaseSession,
+    org_id: OrgId,
+    fiscal_year_id: Optional[uuid.UUID] = Query(None, description="Omit for the fiscal year today falls in"),
+) -> BudgetSummaryResponse:
+    """Planned, approved and spent per budget (each with its unit or vertical), per category and per month."""
+    return await service.budget_summary(session, org_id, fiscal_year_id)
 
 
 @router.get("/budgets/{budget_id}", response_model=BudgetResponse, dependencies=[CAN_READ])

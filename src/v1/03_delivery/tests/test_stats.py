@@ -119,3 +119,96 @@ async def test_stats_need_the_read_permission(act_as, path: str, code: str):
     res = await nobody.get(f"{BASE}{path}")
     assert res.status_code == 403
     assert res.json()["detail"]["meta"]["required_permission"] == code
+
+
+async def test_task_stats_also_count_per_owning_team(act_as, db_session: AsyncSession):
+    admin = act_as(ADMIN)
+    team_a, team_b = uuid.uuid4(), uuid.uuid4()
+    for unit, assignee, status, completed in [
+        (team_a, ASHA, "in_progress", None),
+        (team_a, RAVI, "blocked", None),
+        (team_a, ASHA, "done", -2),
+        (team_b, ASHA, "assigned", None),
+    ]:
+        task = await create_task(admin, owning_unit_id=str(unit), assignee_user_id=str(assignee))
+        await _set(db_session, task, status=status, completed_at=NOW + timedelta(days=completed) if completed else None)
+
+    result = await stats.task_stats(db_session, TEST_ORG_ID, TEST_USER_ID, TaskFilters(), done_within_days=30, weeks=4, now=NOW)
+
+    units = {u.unit_id: u for u in result.units}
+    assert (units[team_a].in_progress, units[team_a].blocked, units[team_a].open, units[team_a].done_recent) == (1, 1, 2, 1)
+    assert (units[team_b].todo, units[team_b].open) == (1, 1)
+    assert result.units[0].unit_id == team_a
+    people = {p.user_id: p for p in result.people}
+    assert (people[ASHA].open, people[ASHA].done_recent) == (2, 1)
+
+
+async def test_project_stats_per_unit_and_running_list(act_as, db_session: AsyncSession):
+    admin = act_as(ADMIN)
+    today = date(2026, 11, 18)
+    unit_a, unit_b = uuid.uuid4(), uuid.uuid4()
+    for unit, status, health, progress, end in [
+        (unit_a, "active", "green", 80, today + timedelta(days=9)),
+        (unit_a, "active", "red", 20, today - timedelta(days=1)),
+        (unit_a, "completed", "green", 100, today - timedelta(days=30)),
+        (unit_b, "planned", "amber", 0, None),
+    ]:
+        project = await create_project(admin, owning_unit_id=str(unit))
+        await db_session.execute(
+            update(WorkUnit).where(WorkUnit.id == uuid.UUID(project["id"]))
+            .values(status=status, health=health, progress_pct=progress, planned_end=end)
+        )
+    await db_session.commit()
+
+    result = await stats.project_stats(db_session, TEST_ORG_ID, view=None, today=today)
+
+    units = {u.unit_id: u for u in result.units}
+    a = units[unit_a]
+    assert (a.total, a.running, a.completed, a.average_progress_pct, a.green, a.red, a.late) == (3, 2, 1, 50.0, 1, 1, 1)
+    assert (units[unit_b].running, units[unit_b].amber) == (1, 1)
+    assert [p.progress_pct for p in result.running_projects] == [0, 20, 80]
+    assert {p.owning_unit_id for p in result.running_projects} == {unit_a, unit_b}
+
+
+async def test_time_summary_per_person_team_and_week_and_own_records_only(act_as, db_session: AsyncSession):
+    from models.task_tracking import TimeEntry
+
+    admin = act_as(ADMIN)
+    team = uuid.uuid4()
+    task = await create_task(admin, owning_unit_id=str(team))
+    other = await create_task(admin)
+    my_id = me(frozenset()).user_id
+    for user, on, day, minutes, billable in [
+        (ASHA, task, date(2026, 11, 2), 120, True),
+        (ASHA, other, date(2026, 11, 3), 60, False),
+        (my_id, task, date(2026, 11, 10), 90, True),
+        (my_id, task, date(2026, 10, 1), 999, True),  # before the range
+    ]:
+        db_session.add(TimeEntry(
+            organization_id=TEST_ORG_ID, task_id=uuid.UUID(on["id"]), user_id=user, work_date=day, minutes=minutes, billable=billable,
+        ))
+    await db_session.commit()
+
+    params = {"date_from": "2026-11-01", "date_to": "2026-11-15"}
+    body = await ok(await admin.get(f"{BASE}/time-entries/summary", params=params))
+    assert (body["from"], body["minutes"], body["billable_minutes"]) == ("2026-11-01", 270, 210)
+    assert [(u["user_id"], u["minutes"], u["tasks"]) for u in body["by_user"]] == [(str(ASHA), 180, 2), (str(my_id), 90, 1)]
+    assert {u["unit_id"]: u["minutes"] for u in body["by_unit"]}[str(team)] == 210
+    assert [(w["week_start"], w["minutes"]) for w in body["by_week"]] == [("2026-10-26", 0), ("2026-11-02", 180), ("2026-11-09", 90)]
+
+    one_team = await ok(await admin.get(f"{BASE}/time-entries/summary", params={**params, "unit_id": str(team)}))
+    assert one_team["minutes"] == 210
+    one_person = await ok(await admin.get(f"{BASE}/time-entries/summary", params={**params, "user_id": str(ASHA)}))
+    assert (one_person["minutes"], one_person["billable_minutes"]) == (180, 120)
+
+    readers = frozenset({permissions.TIME_ENTRY_READ})
+    from services.identity_client import Actor
+
+    own = act_as(Actor(user_id=my_id, organization_id=TEST_ORG_ID, user_type="employee", name="Me", permissions=readers, own_records_only=readers))
+    mine = await ok(await own.get(f"{BASE}/time-entries/summary", params=params))
+    assert mine["minutes"] == 90 and [u["user_id"] for u in mine["by_user"]] == [str(my_id)]
+
+    bad = await own.get(f"{BASE}/time-entries/summary", params={"date_from": "2026-11-15", "date_to": "2026-11-01"})
+    assert bad.status_code == 422
+    nobody = act_as(Actor(user_id=uuid.uuid4(), organization_id=TEST_ORG_ID, user_type="employee", name="N", permissions=frozenset({permissions.TASK_READ})))
+    assert (await nobody.get(f"{BASE}/time-entries/summary", params=params)).status_code == 403
