@@ -1,3 +1,4 @@
+import hashlib
 from datetime import datetime, timedelta, timezone
 import secrets
 from typing import Any, Optional
@@ -74,7 +75,7 @@ def create_access_token(
     organization, so its token omits the `org_id` claim entirely.
     """
     now = datetime.now(timezone.utc)
-    delta = expires_delta or timedelta(minutes=15)
+    delta = expires_delta or timedelta(minutes=settings.access_token_expire_minutes)
     payload: dict[str, Any] = {
         "sub": str(user_id),
         "email": email,
@@ -200,6 +201,11 @@ def decode_mfa_token(token: str) -> dict[str, Any]:
         raise InvalidCredentialsError()
 
 
+def hash_reset_token(token: str) -> str:
+    """What is stored for a password-reset token: its SHA-256. The token is long and random, so no salt is needed."""
+    return hashlib.sha256(token.encode()).hexdigest()
+
+
 # ---------------------------------------------------------------------------
 # TOTP (Time-Based One-Time Password)
 # ---------------------------------------------------------------------------
@@ -215,6 +221,55 @@ def verify_totp_code(secret: str, code: str) -> bool:
         return bool(totp.verify(code, valid_window=1))
     except Exception:
         return False
+
+
+# ---------------------------------------------------------------------------
+# MFA recovery codes
+# ---------------------------------------------------------------------------
+RECOVERY_CODE_COUNT = 8
+# No 0/O, 1/I/L: easy to read off paper and type. 31 characters, ten of them: about 49 bits per code.
+_RECOVERY_ALPHABET = "ABCDEFGHJKMNPQRSTUVWXYZ23456789"
+_RECOVERY_LENGTH = 10
+
+
+def generate_recovery_codes() -> list[str]:
+    """Single-use codes shown once when MFA is turned on, as `XXXXX-XXXXX`."""
+    codes = []
+    for _ in range(RECOVERY_CODE_COUNT):
+        raw = "".join(secrets.choice(_RECOVERY_ALPHABET) for _ in range(_RECOVERY_LENGTH))
+        codes.append(f"{raw[:5]}-{raw[5:]}")
+    return codes
+
+
+def normalize_recovery_code(code: str) -> str:
+    """How a code is compared: case, spaces and dashes as typed do not matter."""
+    return "".join(ch for ch in code.upper() if ch.isalnum())
+
+
+def hash_recovery_codes(codes: list[str]) -> str:
+    """What is stored: one argon2 hash per code, a line each (a hash itself holds commas)."""
+    return "\n".join(hash_password(normalize_recovery_code(code)) for code in codes)
+
+
+def consume_recovery_code(stored: Optional[str], code: str) -> Optional[str]:
+    """
+    The stored codes without the one given, when it is one of them; None when it is not. The code is then
+    used up: what is returned is what remains (empty when it was the last).
+    """
+    hashes = [h for h in (stored or "").split("\n") if h]
+    candidate = normalize_recovery_code(code)
+    if not candidate:
+        return None
+    for position, hashed in enumerate(hashes):
+        if verify_password(candidate, hashed):
+            return "\n".join(hashes[:position] + hashes[position + 1:])
+    return None
+
+
+def is_totp_code(code: str) -> bool:
+    """A code from the authenticator app: six digits. Anything else is taken as a recovery code."""
+    stripped = code.strip()
+    return len(stripped) == 6 and stripped.isdigit()
 
 
 # ---------------------------------------------------------------------------

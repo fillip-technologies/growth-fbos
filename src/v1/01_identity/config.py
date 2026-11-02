@@ -5,6 +5,10 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 _CURRENT_DIR = Path(__file__).resolve().parent
 
+# Secrets published in this repository's examples: they sign nothing outside development.
+KNOWN_DEFAULT_JWT_SECRETS = frozenset({"", "changeme", "fbos-local-secret-key-change-in-production"})
+MIN_JWT_SECRET_LENGTH = 32
+
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
         env_file=(_CURRENT_DIR / ".env", ".env"),
@@ -21,7 +25,7 @@ class Settings(BaseSettings):
     # JWT Authentication
     jwt_secret: str = "changeme"
     jwt_algorithm: str = "HS256"
-    access_token_expire_minutes: int = 60
+    access_token_expire_minutes: int = 15  # every access token; `expires_in` tells clients the same
     refresh_token_expire_days: int = 30
     mfa_token_expire_minutes: int = 5  # short-lived 5-minute MFA token
 
@@ -41,6 +45,9 @@ class Settings(BaseSettings):
 
     # Rate Limiting
     auth_rate_limit_per_minute: int = 60
+    # Proxies between the caller and Identity that append to X-Forwarded-For (Caddy, then the gateway).
+    # The caller's address is the entry just before theirs; anything further left the caller wrote.
+    trusted_proxy_count: int = 2
 
     # Database
     database_url: str = ""
@@ -56,6 +63,18 @@ class Settings(BaseSettings):
     db_session_wait_timeout: int = 3600
     db_pool_recycle: int = 3300  # must stay below db_session_wait_timeout
     db_pool_pre_ping: bool = True
+
+    @model_validator(mode="after")
+    def _real_jwt_secret_outside_development(self) -> "Settings":
+        # Anyone who knows the signing secret can mint tokens for any user: never run outside development
+        # with a published default or a guessable value.
+        weak = self.jwt_secret in KNOWN_DEFAULT_JWT_SECRETS or len(self.jwt_secret) < MIN_JWT_SECRET_LENGTH
+        if self.app_env != "development" and weak:
+            raise ValueError(
+                f"JWT_SECRET must be a private random value of at least {MIN_JWT_SECRET_LENGTH} characters "
+                "outside development (e.g. `python -c \"import secrets; print(secrets.token_urlsafe(48))\"`)"
+            )
+        return self
 
     @model_validator(mode="after")
     def _recycle_before_server_drops_connection(self) -> "Settings":

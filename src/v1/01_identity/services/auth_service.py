@@ -20,6 +20,7 @@ from exceptions import (
     CsrfTokenInvalidError,
     InvalidCredentialsError,
     InvitationInvalidError,
+    MfaAlreadyEnabledError,
     MfaCodeInvalidError,
     OrganizationAmbiguousError,
     PasswordTooWeakError,
@@ -27,6 +28,7 @@ from exceptions import (
     RefreshTokenReusedError,
     ResetTokenInvalidError,
     UserNotFoundError,
+    ValidationFailedError,
 )
 from models.client import Client
 from models.auth import ApiClient, RefreshToken, UserCredential
@@ -75,6 +77,11 @@ from utils.security import (
     verify_dummy_password,
     verify_password,
     verify_totp_code,
+    hash_reset_token,
+    consume_recovery_code,
+    generate_recovery_codes,
+    hash_recovery_codes,
+    is_totp_code,
 )
 
 logger = logging.getLogger("identity.auth")
@@ -220,6 +227,34 @@ class AuthService:
         )
         return successor.first() is not None
 
+    @staticmethod
+    def _note_failed_attempt(credential: UserCredential, now: datetime) -> bool:
+        """
+        Count a wrong password or MFA code against the account; True when this one locks it. Both
+        share the counter, so a known password does not open unlimited guesses at the code.
+        """
+        last_failed = credential.last_failed_at
+        if last_failed is not None and last_failed.tzinfo is None:
+            last_failed = last_failed.replace(tzinfo=timezone.utc)
+        if last_failed is None or (now - last_failed) > timedelta(minutes=settings.lockout_window_minutes):
+            credential.failed_attempts = 1
+        else:
+            credential.failed_attempts = (credential.failed_attempts or 0) + 1
+        credential.last_failed_at = now
+        if credential.failed_attempts < settings.lockout_threshold:
+            return False
+        credential.locked_until = now + timedelta(minutes=settings.lockout_duration_minutes)
+        return True
+
+    @staticmethod
+    def _is_locked(credential: UserCredential, now: datetime) -> bool:
+        locked_until = credential.locked_until
+        if locked_until is None:
+            return False
+        if locked_until.tzinfo is None:
+            locked_until = locked_until.replace(tzinfo=timezone.utc)
+        return locked_until > now
+
     async def _organization_of(self, session: AsyncSession, user_id: Optional[uuid.UUID]) -> Optional[uuid.UUID]:
         """Organization of a user, so audit entries can be found per organization."""
         if user_id is None:
@@ -353,37 +388,6 @@ class AuthService:
                     await session.commit()
                     raise InvalidCredentialsError()
 
-        # 2b. Client subscription window (expired / inactive client -> 403 SUBSCRIPTION_EXPIRED)
-        await self._assert_subscription_active(session, user)
-
-        # 3. Check account active status (invited, suspended, deactivated -> 403)
-        user_status = getattr(user, "status", "active")
-        if user_status != "active" or user.user_type in ("invited", "suspended", "deactivated"):
-            await audit_service.record_attempt(
-                session=session,
-                event_type="identity.session.login_failed.v1",
-                action="login_failed",
-                status="failed",
-                ip_address=client_ip,
-                user_agent=user_agent,
-                organization_id=user.organization_id,
-                user_id=user.id,
-                details={"email": user.email, "reason": "ACCOUNT_NOT_ACTIVE"},
-            )
-            await event_publisher.publish(
-                "identity.session.login_failed.v1",
-                {
-                    "user_id": str(user.id),
-                    "email": user.email,
-                    "organization_id": str(user.organization_id),
-                    "ip_address": client_ip,
-                    "user_agent": user_agent,
-                    "reason": "ACCOUNT_NOT_ACTIVE",
-                },
-            )
-            await session.commit()
-            raise AccountNotActiveError()
-
         # 4. Fetch user credentials
         credential = await session.get(UserCredential, user.id)
         if not credential:
@@ -452,24 +456,13 @@ class AuthService:
         is_password_valid = verify_password(request_data.password, credential.password_hash)
 
         if not is_password_valid:
-            last_failed = getattr(credential, "last_failed_at", None)
-            if last_failed is not None and last_failed.tzinfo is None:
-                last_failed = last_failed.replace(tzinfo=timezone.utc)
-
-            if last_failed is None or (now - last_failed) > timedelta(minutes=15):
-                credential.failed_attempts = 1
-            else:
-                credential.failed_attempts += 1
-
-            if hasattr(credential, "last_failed_at"):
-                setattr(credential, "last_failed_at", now)
-
-            if credential.failed_attempts >= 5:
-                credential.locked_until = now + timedelta(minutes=15)
-
+            if self._note_failed_attempt(credential, now):
                 await alert_service.send_security_alert_email(
                     email=user.email,
-                    reason="Five failed sign-in attempts within 15 minutes.",
+                    reason=(
+                        f"{settings.lockout_threshold} failed sign-in attempts within "
+                        f"{settings.lockout_window_minutes} minutes."
+                    ),
                     ip_address=client_ip,
                     user_agent=user_agent,
                 )
@@ -524,12 +517,43 @@ class AuthService:
                 await session.commit()
                 raise InvalidCredentialsError()
 
+        # Account and subscription state is told only to someone who knows the password: before it,
+        # these answers would confirm that an address exists.
+        # 2b. Client subscription window (expired / inactive client -> 403 SUBSCRIPTION_EXPIRED)
+        await self._assert_subscription_active(session, user)
+
+        # 3. Check account active status (invited, suspended, deactivated -> 403)
+        user_status = getattr(user, "status", "active")
+        if user_status != "active" or user.user_type in ("invited", "suspended", "deactivated"):
+            await audit_service.record_attempt(
+                session=session,
+                event_type="identity.session.login_failed.v1",
+                action="login_failed",
+                status="failed",
+                ip_address=client_ip,
+                user_agent=user_agent,
+                organization_id=user.organization_id,
+                user_id=user.id,
+                details={"email": user.email, "reason": "ACCOUNT_NOT_ACTIVE"},
+            )
+            await event_publisher.publish(
+                "identity.session.login_failed.v1",
+                {
+                    "user_id": str(user.id),
+                    "email": user.email,
+                    "organization_id": str(user.organization_id),
+                    "ip_address": client_ip,
+                    "user_agent": user_agent,
+                    "reason": "ACCOUNT_NOT_ACTIVE",
+                },
+            )
+            await session.commit()
+            raise AccountNotActiveError()
+
         # 7. Password verified: reset failure counters
         credential.failed_attempts = 0
         credential.locked_until = None
-        if hasattr(credential, "last_failed_at"):
-            setattr(credential, "last_failed_at", None)
-        user.last_login_at = now
+        credential.last_failed_at = None
 
         # 8. Check if MFA is enabled
         if credential.otp_enabled:
@@ -557,6 +581,7 @@ class AuthService:
             ), None
 
         # 9. MFA not enabled: complete sign-in immediately
+        user.last_login_at = now
         family_id = uuid.uuid4()
         token_id = uuid.uuid4()
         refresh_token_str = create_refresh_token(
@@ -607,7 +632,7 @@ class AuthService:
             access_token=access_token_str,
             refresh_token=None if client_is_browser else refresh_token_str,
             token_type="bearer",
-            expires_in=900,
+            expires_in=settings.access_token_expire_minutes * 60,
             user=me,
         )
         return response_body, refresh_token_str
@@ -639,67 +664,62 @@ class AuthService:
         if not credential or not credential.otp_secret_enc:
             raise MfaCodeInvalidError()
 
-        is_code_valid = verify_totp_code(credential.otp_secret_enc, request_data.code)
-        if not is_code_valid:
-            await audit_service.record_attempt(
-                session=session,
-                event_type="identity.session.login_failed.v1",
-                action="mfa_verify_failed",
-                status="failed",
-                ip_address=client_ip,
-                user_agent=user_agent,
-                organization_id=user.organization_id,
-                user_id=user.id,
-                details={"reason": "MFA_CODE_INVALID"},
-            )
-            await event_publisher.publish(
-                "identity.session.login_failed.v1",
-                {
-                    "user_id": str(user.id),
-                    "email": user.email,
-                    "organization_id": str(user.organization_id),
-                    "ip_address": client_ip,
-                    "user_agent": user_agent,
-                    "reason": "MFA_CODE_INVALID",
-                },
-            )
-            await session.commit()
-            raise MfaCodeInvalidError()
-
-        # Anti-replay: prevent reusing the same TOTP code
-        last_code = getattr(credential, "last_totp_code", None)
-        if last_code == request_data.code:
-            await audit_service.record_attempt(
-                session=session,
-                event_type="identity.session.login_failed.v1",
-                action="mfa_replay_detected",
-                status="failed",
-                ip_address=client_ip,
-                user_agent=user_agent,
-                organization_id=user.organization_id,
-                user_id=user.id,
-                details={"reason": "MFA_CODE_REUSED"},
-            )
-            await event_publisher.publish(
-                "identity.session.login_failed.v1",
-                {
-                    "user_id": str(user.id),
-                    "email": user.email,
-                    "organization_id": str(user.organization_id),
-                    "ip_address": client_ip,
-                    "user_agent": user_agent,
-                    "reason": "MFA_CODE_INVALID",
-                },
-            )
-            await session.commit()
-            raise MfaCodeInvalidError()
-
-        if hasattr(credential, "last_totp_code"):
-            setattr(credential, "last_totp_code", request_data.code)
-
         now = datetime.now(timezone.utc)
+        if self._is_locked(credential, now):
+            raise AccountLockedError()
+
+        # A six-digit code is from the authenticator app; anything else is one of the recovery codes, used once.
+        # A replayed or wrong code of either kind counts toward the lock.
+        by_recovery_code = not is_totp_code(request_data.code)
+        remaining_recovery_codes = None
+        if by_recovery_code:
+            remaining_recovery_codes = consume_recovery_code(credential.recovery_codes, request_data.code)
+            is_code_valid = remaining_recovery_codes is not None
+        else:
+            is_code_valid = (
+                request_data.code != credential.last_totp_code
+                and verify_totp_code(credential.otp_secret_enc, request_data.code)
+            )
+        if not is_code_valid:
+            locked = self._note_failed_attempt(credential, now)
+            reason = "MFA_CODE_REUSED" if request_data.code == credential.last_totp_code else "MFA_CODE_INVALID"
+            await audit_service.record_attempt(
+                session=session,
+                event_type="identity.session.login_failed.v1",
+                action="account_locked" if locked else "mfa_verify_failed",
+                status="locked" if locked else "failed",
+                ip_address=client_ip,
+                user_agent=user_agent,
+                organization_id=user.organization_id,
+                user_id=user.id,
+                details={"reason": "ACCOUNT_LOCKED" if locked else reason},
+            )
+            await event_publisher.publish(
+                "identity.session.login_failed.v1",
+                {
+                    "user_id": str(user.id),
+                    "email": user.email,
+                    "organization_id": str(user.organization_id),
+                    "ip_address": client_ip,
+                    "user_agent": user_agent,
+                    "reason": "ACCOUNT_LOCKED" if locked else "MFA_CODE_INVALID",
+                },
+            )
+            await session.commit()
+            if locked:
+                raise AccountLockedError()
+            raise MfaCodeInvalidError()
+
+        recovery_note: dict = {}
+        if by_recovery_code:
+            credential.recovery_codes = remaining_recovery_codes or None  # that code is used up
+            recovery_note = {"recovery_codes_left": len([h for h in (remaining_recovery_codes or "").split("\n") if h])}
+        else:
+            credential.last_totp_code = request_data.code
+
         credential.failed_attempts = 0
         credential.locked_until = None
+        credential.last_failed_at = None
         user.last_login_at = now
 
         family_id = uuid.uuid4()
@@ -730,7 +750,7 @@ class AuthService:
             user_agent=user_agent,
             organization_id=user.organization_id,
             user_id=user.id,
-            details={"email": user.email, "auth_method": "mfa"},
+            details={"email": user.email, "auth_method": "recovery_code" if by_recovery_code else "mfa", **recovery_note},
         )
         await event_publisher.publish(
             "identity.session.login_succeeded.v1",
@@ -750,7 +770,7 @@ class AuthService:
         response_body = TokenResponse(
             access_token=access_token_str,
             token_type="bearer",
-            expires_in=900,
+            expires_in=settings.access_token_expire_minutes * 60,
             refresh_token=None if client_is_browser else refresh_token_str,
             user=me,
         )
@@ -888,7 +908,7 @@ class AuthService:
         response_body = TokenResponse(
             access_token=new_access_token_str,
             token_type="bearer",
-            expires_in=900,
+            expires_in=settings.access_token_expire_minutes * 60,
             refresh_token=None if client_is_browser else new_refresh_token_str,
             user=me,
         )
@@ -979,20 +999,25 @@ class AuthService:
         result = await session.execute(stmt)
         users = list(result.scalars().all())
 
-        if request_data.organization_code and len(users) > 1:
-            org_stmt = select(Organization).where(Organization.code == request_data.organization_code)
-            org_res = await session.execute(org_stmt)
-            org = org_res.scalar_one_or_none()
-            if org:
-                users = [u for u in users if u.organization_id == org.id]
+        # Same answer either way (202), so this never confirms an address. A few requests an hour per address.
+        rate_limiter.check(f"{request_data.email.lower()}:password_forgot", rate_class="invitation")
 
-        if users:
+        if len(users) > 1:
+            # The address is used in several organizations: only the one named gets a link, never a guess.
+            org = None
+            if request_data.organization_code:
+                org_res = await session.execute(select(Organization).where(Organization.code == request_data.organization_code))
+                org = org_res.scalar_one_or_none()
+            users = [u for u in users if org is not None and u.organization_id == org.id]
+
+        if len(users) == 1:
             target_user = users[0]
-            token = f"prt_{secrets.token_urlsafe(18)}"
+            token = f"prt_{secrets.token_urlsafe(32)}"
             now = datetime.now(timezone.utc)
             cred = await session.get(UserCredential, target_user.id)
             if cred:
-                cred.reset_token = token
+                # Only a hash is stored: a copy of the database does not give working reset links.
+                cred.reset_token = hash_reset_token(token)
                 cred.reset_token_expires_at = now + timedelta(minutes=30)
                 await session.commit()
 
@@ -1013,7 +1038,7 @@ class AuthService:
         if len(request_data.new_password) < 12:
             raise PasswordTooWeakError("Password must be at least 12 characters long")
 
-        stmt = select(UserCredential).where(UserCredential.reset_token == request_data.token)
+        stmt = select(UserCredential).where(UserCredential.reset_token == hash_reset_token(request_data.token))
         result = await session.execute(stmt)
         cred = result.scalar_one_or_none()
 
@@ -1110,8 +1135,11 @@ class AuthService:
         if not user:
             raise UserNotFoundError()
 
-        secret = pyotp.random_base32()
         cred = await session.get(UserCredential, user_id)
+        if cred is not None and cred.otp_enabled:
+            # Replacing the secret would let a stolen session take over the second factor.
+            raise MfaAlreadyEnabledError()
+        secret = pyotp.random_base32()
         if not cred:
             cred = UserCredential(
                 user_id=user_id,
@@ -1152,8 +1180,9 @@ class AuthService:
             raise MfaCodeInvalidError()
 
         cred.otp_enabled = True
-        codes = [f"{secrets.token_hex(2).upper()}-{secrets.token_hex(2).upper()}" for _ in range(8)]
-        cred.recovery_codes = ",".join(codes)
+        cred.last_totp_code = code  # the code that turned it on cannot also sign in
+        codes = generate_recovery_codes()
+        cred.recovery_codes = hash_recovery_codes(codes)  # shown once, stored only as hashes
         await session.commit()
 
         await event_publisher.publish(
@@ -1173,10 +1202,21 @@ class AuthService:
         client = result.scalar_one_or_none()
 
         if not client or client.status != "active":
+            verify_dummy_password(data.client_secret or "")  # same cost whether or not the client exists
             raise ClientCredentialsInvalidError()
 
-        if client.client_secret_hash and not verify_password(data.client_secret, client.client_secret_hash):
+        # A client with no secret on record is not usable: never accept whatever secret is sent.
+        if not client.client_secret_hash or not verify_password(data.client_secret or "", client.client_secret_hash):
             raise ClientCredentialsInvalidError()
+
+        # A token carries at most the scopes the client was given.
+        allowed = set((client.allowed_scopes or "").split())
+        requested = set((data.scope or "").split()) or allowed
+        if not requested <= allowed:
+            raise ValidationFailedError.for_field(
+                "scope", f"Not allowed for this client: {' '.join(sorted(requested - allowed))}"
+            )
+        granted_scope = " ".join(sorted(requested))
 
         now = datetime.now(timezone.utc)
         exp = now + timedelta(seconds=900)
@@ -1184,7 +1224,7 @@ class AuthService:
             "sub": client.client_id,
             "org_id": str(client.organization_id),
             "type": "client_credentials",
-            "scope": data.scope or client.allowed_scopes or "",
+            "scope": granted_scope,
             "iat": int(now.timestamp()),
             "exp": int(exp.timestamp()),
         }
@@ -1193,8 +1233,8 @@ class AuthService:
         return ClientTokenResponse(
             access_token=token,
             token_type="Bearer",
-            expires_in=900,
-            scope=data.scope or client.allowed_scopes,
+            expires_in=settings.access_token_expire_minutes * 60,
+            scope=granted_scope or None,
         )
 
     def get_jwks(self) -> JwksResponse:

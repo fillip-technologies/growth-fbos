@@ -48,11 +48,16 @@ def verify_internal_caller(token: Optional[str]) -> None:
 
 
 def get_client_ip(request: Request) -> str:
-    """Extract real client IP address respecting reverse proxies."""
-    forwarded_for = request.headers.get("x-forwarded-for")
-    if forwarded_for:
-        return forwarded_for.split(",")[0].strip()
-    return request.client.host if request.client else "127.0.0.1"
+    """
+    The caller's address, for rate limits and the audit log. Each of our proxies (Caddy, the gateway)
+    appends the address it received from to X-Forwarded-For, so the entries a caller wrote come first
+    and cannot be trusted: skip the `trusted_proxy_count` hops nearest to us and take the one before.
+    """
+    peer = request.client.host if request.client else "127.0.0.1"
+    forwarded = [entry.strip() for entry in request.headers.get("x-forwarded-for", "").split(",") if entry.strip()]
+    chain = forwarded + [peer]
+    position = len(chain) - 1 - settings.trusted_proxy_count
+    return chain[max(position, 0)]
 
 
 def get_user_agent(request: Request) -> str:
