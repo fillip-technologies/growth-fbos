@@ -19,13 +19,32 @@ branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
 
+def _exists(table: str, column: str = None) -> bool:
+    """
+    Whether the table (or the column) is already there. People creates missing tables when it starts
+    (`create_all`), so a table this migration would create may exist already; a column cannot be.
+    """
+    inspector = sa.inspect(op.get_bind())
+    if table not in inspector.get_table_names():
+        return False
+    return column is None or column in {c['name'] for c in inspector.get_columns(table)}
+
+
+
 def upgrade() -> None:
-    op.add_column('role_changes', sa.Column('post_ref', database.types.UUIDType(length=36), nullable=True))
-    op.add_column('role_changes', sa.Column('post_type', sa.String(length=20), nullable=True))
-    op.add_column('role_changes', sa.Column('new_time_share', sa.Numeric(precision=5, scale=2), nullable=True))
-    op.add_column('role_changes', sa.Column('new_monthly_allowance', sa.Numeric(precision=14, scale=2), nullable=True))
-    op.add_column('role_changes', sa.Column('end_date', sa.Date(), nullable=True))
-    op.create_index(op.f('ix_role_changes_post_ref'), 'role_changes', ['post_ref'], unique=False)
+    columns = {
+        'post_ref': database.types.UUIDType(length=36),
+        'post_type': sa.String(length=20),
+        'new_time_share': sa.Numeric(precision=5, scale=2),
+        'new_monthly_allowance': sa.Numeric(precision=14, scale=2),
+        'end_date': sa.Date(),
+    }
+    for name, kind in columns.items():
+        if not _exists('role_changes', name):
+            op.add_column('role_changes', sa.Column(name, kind, nullable=True))
+    indexes = {i['name'] for i in sa.inspect(op.get_bind()).get_indexes('role_changes')}
+    if 'ix_role_changes_post_ref' not in indexes:
+        op.create_index(op.f('ix_role_changes_post_ref'), 'role_changes', ['post_ref'], unique=False)
 
 
 def downgrade() -> None:

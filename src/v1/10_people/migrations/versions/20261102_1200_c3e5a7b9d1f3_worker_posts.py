@@ -22,8 +22,26 @@ branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
 
+def _exists(table: str, column: str = None) -> bool:
+    """
+    Whether the table (or the column) is already there. People creates missing tables when it starts
+    (`create_all`), so a table this migration would create may exist already; a column cannot be.
+    """
+    inspector = sa.inspect(op.get_bind())
+    if table not in inspector.get_table_names():
+        return False
+    return column is None or column in {c['name'] for c in inspector.get_columns(table)}
+
+
+
 def upgrade() -> None:
-    posts = op.create_table('worker_posts',
+    if not _exists('worker_posts'):
+        _create_worker_posts()
+    _backfill_primary_posts()
+
+
+def _create_worker_posts() -> None:
+    op.create_table('worker_posts',
     sa.Column('id', database.types.UUIDType(length=36), nullable=False),
     sa.Column('organization_id', database.types.UUIDType(length=36), nullable=False),
     sa.Column('worker_id', database.types.UUIDType(length=36), nullable=False),
@@ -49,12 +67,17 @@ def upgrade() -> None:
         op.create_index(op.f(f'ix_worker_posts_{column}'), 'worker_posts', [column], unique=False)
     op.create_index('ix_worker_posts_worker_status', 'worker_posts', ['worker_id', 'status'], unique=False)
 
-    _backfill_primary_posts(posts)
 
-
-def _backfill_primary_posts(posts: sa.Table) -> None:
-    """One primary post per employee. Employees who already left get an ended one."""
+def _backfill_primary_posts() -> None:
+    """One primary post for each employee who has none. Employees who already left get an ended one."""
     bind = op.get_bind()
+    posts = sa.table(
+        'worker_posts',
+        sa.column('id'), sa.column('organization_id'), sa.column('worker_id'), sa.column('post_ref'), sa.column('post_type'),
+        sa.column('title'), sa.column('unit_id'), sa.column('position_id'), sa.column('manager_id'),
+        sa.column('start_date', sa.Date), sa.column('end_date', sa.Date), sa.column('status'),
+    )
+    has_post = sa.select(posts.c.worker_id)
     workers = sa.table(
         'workers',
         sa.column('id'), sa.column('organization_id'), sa.column('designation'), sa.column('unit_id'),
@@ -71,7 +94,7 @@ def _backfill_primary_posts(posts: sa.Table) -> None:
         )
     }
     rows = []
-    for worker in bind.execute(sa.select(workers)):
+    for worker in bind.execute(sa.select(workers).where(workers.c.id.not_in(has_post))):
         exited = worker.status == 'exited'
         rows.append({
             'id': str(uuid.uuid4()),
