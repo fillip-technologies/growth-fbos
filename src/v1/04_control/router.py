@@ -1,6 +1,7 @@
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
 
-from dependencies import DatabaseSession, OrgId, UserId
+from dependencies import DatabaseSession, OrgId, UserId, require_permission
+import permissions
 from routes.approvals import router as approvals_router
 from routes.sla import router as sla_router
 import services.approvals as approval_service
@@ -10,8 +11,8 @@ core_router.include_router(approvals_router)
 core_router.include_router(sla_router)
 
 
-@core_router.get("/approval-requests/summary")
-@core_router.get("/approvals/requests/summary")
+@core_router.get("/approval-requests/summary", dependencies=[Depends(require_permission(permissions.APPROVAL_READ))])
+@core_router.get("/approvals/requests/summary", dependencies=[Depends(require_permission(permissions.APPROVAL_READ))])
 async def get_approvals_summary(
     session: DatabaseSession,
     org_id: OrgId,

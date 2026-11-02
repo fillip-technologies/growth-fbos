@@ -101,3 +101,23 @@ async def test_task_subject_access(async_client):
     # Read and attach on open task
     assert (await async_client.get(access_url("delivery.task", task["id"], "read"))).status_code == 200
     assert (await async_client.get(access_url("delivery.task", task["id"], "attach"))).status_code == 200
+
+
+async def test_internal_effort_sums_minutes_per_person_day_and_billable_flag(async_client):
+    task = await create_task(async_client)
+    for day, minutes, billable in [("2026-01-05", 60, True), ("2026-01-05", 30, True), ("2026-01-05", 45, False), ("2026-02-10", 20, True)]:
+        res = await async_client.post(
+            f"{BASE}/tasks/{task['id']}/time-entries", json={"work_date": day, "minutes": minutes, "billable": billable}
+        )
+        assert res.status_code == 201, res.text
+
+    params = {"organization_id": str(TEST_ORG_ID), "from": "2026-01-01", "to": "2026-01-31"}
+    res = await async_client.get(f"{BASE}/internal/effort", params=params)
+    assert res.status_code == 200, res.text
+    rows = {(r["day"], r["billable"]): r["minutes"] for r in res.json()["data"]}
+    assert rows == {("2026-01-05", True): 90, ("2026-01-05", False): 45}
+
+    other = await async_client.get(f"{BASE}/internal/effort", params={**params, "organization_id": str(uuid.uuid4())})
+    assert other.json()["data"] == []
+    bad = await async_client.get(f"{BASE}/internal/effort", params={**params, "from": "2026-02-01"})
+    assert bad.status_code == 422
