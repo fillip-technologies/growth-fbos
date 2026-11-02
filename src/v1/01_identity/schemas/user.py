@@ -166,6 +166,8 @@ class UserResponse(BaseModel):
     teams: list[TeamRef] = Field(default_factory=list)
     manager: Optional[ManagerRef] = None
     mfa_enabled: bool = False
+    # Their roles come from their posts in People; access given here is extra access, with an end date.
+    managed_by_people: bool = False
     last_login_at: Optional[str] = None
     version: int = 0
     created_at: Optional[str] = None

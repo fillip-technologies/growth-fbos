@@ -121,6 +121,22 @@ class MfaAlreadyEnabledError(IdentityServiceError):
         )
 
 
+class ExtraAccessNeedsEndDateError(IdentityServiceError):
+    """422: The user's roles come from their job in People; access given by hand must end, within the limit."""
+
+    def __init__(self, max_days: int, details: list[dict[str, Any]]) -> None:
+        super().__init__(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            code="EXTRA_ACCESS_NEEDS_END_DATE",
+            message=(
+                "This person's roles come from their job in People: change them with a role change there. "
+                f"Access given here is extra access and needs an end date within {max_days} days."
+            ),
+            details=details,
+            meta={"max_days": max_days},
+        )
+
+
 class MfaNotEnabledError(IdentityServiceError):
     """404: The user has no two-factor sign-in to turn off."""
 

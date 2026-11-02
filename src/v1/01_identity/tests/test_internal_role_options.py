@@ -2,6 +2,7 @@
 /internal/people: the roles People may offer, taking over hand-granted roles, and the check that a requester
 could grant a role themselves. The guard that keeps People from granting system or admin roles.
 """
+from datetime import datetime, timedelta, timezone
 import uuid
 
 import pytest
@@ -19,7 +20,11 @@ ORG = {"organization_id": str(TEST_ORG_ID)}
 
 
 async def grant_by_hand(client, user, role_obj):
-    res = await client.post(f"{API}/role-assignments", json={"user_id": str(user.id), "role_id": str(role_obj.id), "reason": "By hand"})
+    # Someone People manages may get only extra access by hand: it has an end date.
+    ends = (datetime.now(timezone.utc) + timedelta(days=30)).isoformat()
+    res = await client.post(f"{API}/role-assignments", json={
+        "user_id": str(user.id), "role_id": str(role_obj.id), "reason": "By hand", "valid_to": ends,
+    })
     assert res.status_code == 201, res.text
 
 
@@ -156,12 +161,14 @@ async def test_a_role_that_comes_from_people_cannot_be_revoked_or_replaced_under
 
     # Replacing the user's presets under Users keeps the one that comes from People.
     res = await async_client.put(f"{API}/users/{person.id}/permissions", json={
-        "permissions": [], "role_assignments": [{"role_code": "report_viewer"}], "reason": "Edit",
+        "permissions": [], "reason": "Edit",
+        "role_assignments": [{"role_code": "report_viewer", "valid_to": (datetime.now(timezone.utc) + timedelta(days=30)).isoformat()}],
     })
     assert res.status_code == 200, res.text
     kept = (await db_session.execute(select(RoleAssignment).where(RoleAssignment.user_id == person.id))).unique().scalars().all()
     assert sorted(a.role.code for a in kept) == ["report_viewer", "sales_manager"]
 
     # A role granted by hand can still be revoked.
+    listed = (await async_client.get(f"{API}/role-assignments", params={"user_id": str(person.id)})).json()["data"]
     by_hand_row = next(a for a in listed if a["source"] is None)
     assert (await async_client.delete(f"{API}/role-assignments/{by_hand_row['id']}", params={"reason": "Done"})).status_code == 204
