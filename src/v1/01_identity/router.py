@@ -4,6 +4,7 @@ from routes.auth import router as auth_router
 from routes.calendars import router as calendars_router
 from routes.clients import router as clients_router
 from routes.organizations import router as organizations_router
+from routes.internal_employment import router as internal_employment_router
 from routes.org_units import router as org_units_router
 from routes.rbac import (
     internal_router,
@@ -35,6 +36,7 @@ core_router.include_router(field_definitions_router, prefix="/field-definitions"
 core_router.include_router(vertical_packs_router, prefix="/vertical-packs", tags=["vertical-packs"])
 core_router.include_router(audit_logs_router, prefix="/audit-logs", tags=["audit-logs"])
 core_router.include_router(internal_router, prefix="/internal", tags=["internal"])
+core_router.include_router(internal_employment_router, prefix="/internal", tags=["internal"])
 
 
 

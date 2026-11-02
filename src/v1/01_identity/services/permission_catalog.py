@@ -155,6 +155,7 @@ PERMISSION_CATALOG: list[tuple[str, str, str]] = [
     ("people.compensation.read", "people", "View salary structures, payslips and reimbursement claims"),
     ("people.compensation.manage", "people", "Manage payroll runs, salary hikes, bonuses and expense claims"),
     ("people.role_change.approve", "people", "Approve or reject promotions, demotions and transfers that someone else requested"),
+    ("people.role_change.manage", "people", "Choose the standing approvers for role changes (HR head, finance)"),
     ("people.separation.manage", "people", "Manage employee resignations, clearances, and full-and-final settlements"),
 ]
 

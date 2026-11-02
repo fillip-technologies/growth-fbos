@@ -256,12 +256,15 @@ class UserPermissionService:
     def add_to_user(
         self,
         session: AsyncSession,
-        actor: Actor,
+        granted_by_id: Optional[uuid.UUID],
         user: User,
         grants: list[ResolvedGrant],
         presets: list[ResolvedPreset],
         reason: str,
+        source: Optional[str] = None,
+        source_ref: Optional[str] = None,
     ) -> None:
+        """`granted_by_id` is empty when a service, not a person, grants it. `source` tags the presets it records."""
         now = datetime.now(timezone.utc)
         for grant in grants:
             session.add(UserPermission(
@@ -272,7 +275,7 @@ class UserPermissionService:
                 scope_unit_id=grant.scope_unit_id,
                 self_only=grant.self_only,
                 source_role_id=grant.source_role_id,
-                granted_by_id=actor.user_id,
+                granted_by_id=granted_by_id,
                 granted_at=now,
                 valid_to=grant.valid_to,
             ))
@@ -289,8 +292,10 @@ class UserPermissionService:
                 self_only=preset.self_only,
                 valid_from=now,
                 valid_to=preset.valid_to,
-                granted_by_id=actor.user_id,
+                granted_by_id=granted_by_id,
                 reason=reason,
+                source=source,
+                source_ref=source_ref,
             ))
 
     async def replace_for_user(
@@ -373,7 +378,7 @@ class UserPermissionService:
             if not role_codes or any((code, assignment.scope_unit_id) not in wanted for code in role_codes):
                 await session.delete(assignment)
         await session.flush()
-        self.add_to_user(session, actor, user, added, new_presets, reason)
+        self.add_to_user(session, actor.user_id, user, added, new_presets, reason)
         return sorted({g.code for g in added + changed}), sorted({r.permission_code for r in removed_rows})
 
     async def list_for_user(self, session: AsyncSession, user: User) -> UserPermissionsResponse:
