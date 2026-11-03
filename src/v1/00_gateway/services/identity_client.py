@@ -47,6 +47,7 @@ class Actor:
 class Organization:
     id: uuid.UUID
     name: str
+    relationship: str = "own"  # own, associate, investment (identity's organizations.relationship)
 
 
 class IdentityClient:
@@ -78,7 +79,7 @@ class IdentityClient:
             params = {"limit": str(ORGANIZATIONS_PAGE)} | ({"cursor": cursor} if cursor else {})
             body = await self._get(ORGANIZATIONS_PATH, {"Authorization": authorization}, params)
             organizations += [
-                Organization(id=uuid.UUID(row["id"]), name=row["name"])
+                Organization(id=uuid.UUID(row["id"]), name=row["name"], relationship=row.get("relationship") or "own")
                 for row in body.get("data", [])
                 if row.get("status") not in INACTIVE_ORGANIZATION_STATUSES
             ]

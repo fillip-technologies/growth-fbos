@@ -53,6 +53,7 @@ class OrganizationService:
             timezone=org.timezone,
             calendar_id=org.calendar_id,
             status=org.status,
+            relationship=org.relationship,
             created_at=org.created_at.isoformat() if org.created_at else None,
         )
 
@@ -217,6 +218,7 @@ class OrganizationService:
             fiscal_year_start=data.fiscal_year_start,
             timezone=data.timezone,
             status="active",
+            relationship=data.relationship,
         )
         session.add(org)
         await session.flush()
@@ -368,6 +370,8 @@ class OrganizationService:
             org.timezone = data.timezone
         if data.status is not None:
             org.status = data.status
+        if data.relationship is not None:
+            org.relationship = data.relationship
         if data.calendar_id is not None and data.calendar_id != org.calendar_id:
             await self._switch_calendar(session, org, data.calendar_id)
 

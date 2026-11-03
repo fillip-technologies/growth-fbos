@@ -16,6 +16,15 @@ class Period(BaseModel):
     to_date: date
 
 
+class WorkingToday(BaseModel):
+    """People marked at work today (present, half day or regularized), by where they work."""
+
+    office: int = 0
+    field: int = 0
+    remote: int = 0
+    not_said: int = 0
+
+
 class PeopleBusinessSummary(BaseModel):
     as_of: date
     period: Period
@@ -23,6 +32,7 @@ class PeopleBusinessSummary(BaseModel):
     headcount: int  # everyone who has not left
     by_employment_type: List[CountBucket]
     on_leave_today: int  # approved leave covering today
+    working_today: WorkingToday
     currency: str
     # Gross pay of approved or disbursed payroll runs for months that overlap the period (a run
     # covers a whole month, so a period ending mid-month counts that month's run in full).

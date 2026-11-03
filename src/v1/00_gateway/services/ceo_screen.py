@@ -17,6 +17,8 @@ from schemas.ceo import (
     Amount,
     AmcCard,
     AssetCostsSection,
+    AssociateRow,
+    AssociatesSection,
     Bucket,
     BudgetSection,
     CeoScreen,
@@ -36,8 +38,12 @@ from schemas.ceo import (
     PeopleSection,
     Period,
     ProcurementSection,
+    RelationshipTotal,
     RevenueSection,
+    SegmentAmount,
+    SegmentCount,
     StatusAmount,
+    WorkingToday,
 )
 from services.ceo_sources import CompanySources, SourceResult
 from services.identity_client import Organization
@@ -46,6 +52,9 @@ DEFAULT_CURRENCY = "INR"
 # (lowest score, label), best first: the same bands as Management's business health.
 HEALTH_LABELS = ((85, "excellent"), (70, "good"), (50, "needs_attention"), (0, "critical"))
 NO_ACCESS = {"available": False, "reason": "no_access"}
+RELATIONSHIP_ORDER = ("own", "associate", "investment")
+FREELANCER = "freelancer"
+OTHER_COMPANY = "Other company"
 
 
 def build_screen(
@@ -70,10 +79,11 @@ def build_screen(
         currency=currency,
         mixed_currencies=mixed,
         can_see_financials=can_see_financials,
-        organizations=[OrganizationRef(id=org.id, name=org.name) for org in organizations],
+        organizations=[OrganizationRef(id=org.id, name=org.name, relationship=org.relationship) for org in organizations],
         kpis=_kpis(sources, health, expenses, can_see_financials),
         revenue=revenue,
         companies=_companies_section(organizations, sources),
+        associates=_associates_section(organizations, sources, can_see_financials),
         delivery=delivery,
         people=people,
         health=health,
@@ -156,6 +166,32 @@ def _currency(sources: list[CompanySources], inventory: SourceResult) -> tuple[s
     return currencies[0], mixed
 
 
+def _merge_segments(rows: list[dict[str, Any]], field: str) -> list[SegmentAmount]:
+    totals: dict[tuple[str, str], float] = defaultdict(float)
+    for row in rows:
+        for segment in row.get(field, []):
+            totals[(segment["sector"], segment["market"])] += money(segment["amount"])
+    ordered = sorted(totals.items(), key=lambda item: -item[1])
+    return [SegmentAmount(sector=sector, market=market, amount=round(amount, 2)) for (sector, market), amount in ordered]
+
+
+def _merge_segment_counts(rows: list[dict[str, Any]]) -> list[SegmentCount]:
+    totals: dict[tuple[str, str], int] = defaultdict(int)
+    for row in rows:
+        for segment in row.get("clients_by_segment", []):
+            totals[(segment["sector"], segment["market"])] += int(segment["count"])
+    ordered = sorted(totals.items(), key=lambda item: -item[1])
+    return [SegmentCount(sector=sector, market=market, count=count) for (sector, market), count in ordered]
+
+
+def _merge_counts(lists: Iterable[Optional[list[dict[str, Any]]]]) -> list[CountBucket]:
+    totals: dict[str, int] = defaultdict(int)
+    for rows in lists:
+        for row in rows or []:
+            totals[str(row["key"])] += int(row["count"])
+    return [CountBucket(key=k, count=v) for k, v in sorted(totals.items(), key=lambda item: -item[1])]
+
+
 # --------------------------------------------------------------------------- sections
 
 
@@ -176,6 +212,10 @@ def _revenue_section(sources: list[CompanySources]) -> RevenueSection:
         by_state=merge_buckets((r.get("revenue_by_state") for r in rows), "key", "amount"),
         by_client_type=merge_buckets((r.get("revenue_by_client_type") for r in rows), "key", "amount"),
         by_contract_type=merge_buckets((r.get("revenue_by_contract_type") for r in rows), "key", "amount"),
+        by_segment=_merge_segments(rows, "revenue_by_segment"),
+        by_product_line=merge_buckets((r.get("revenue_by_product_line") for r in rows), "key", "amount"),
+        clients_by_segment=_merge_segment_counts(rows),
+        clients_by_state=_merge_counts(r.get("clients_by_state") for r in rows),
         amc=AmcCard(
             active_contracts=int(_sum(amc, "active_contracts")),
             active_value=_sum(amc, "active_value"),
@@ -214,7 +254,11 @@ def _people_section(sources: list[CompanySources], financials: bool) -> PeopleSe
         **section_state(results),
         headcount=int(_sum(rows, "headcount")),
         by_employment_type=[CountBucket(key=k, count=v) for k, v in sorted(types.items(), key=lambda item: -item[1])],
+        freelancers=types.get(FREELANCER, 0),
         on_leave_today=int(_sum(rows, "on_leave_today")),
+        working_today=WorkingToday(
+            **{place: int(_sum(rows, "working_today", place)) for place in ("office", "field", "remote", "not_said")}
+        ),
         payroll=_amount(rows, ("payroll",), ("payroll_previous",)) if financials else None,
     )
 
@@ -351,6 +395,7 @@ def _companies_section(organizations: list[Organization], sources: list[CompanyS
             CompanyRow(
                 organization_id=org.id,
                 name=org.name,
+                relationship=org.relationship,
                 revenue=Amount(amount=money(revenue.get("revenue")), previous=money(revenue.get("revenue_previous")))
                 if s.revenue.ok
                 else None,
@@ -366,7 +411,63 @@ def _companies_section(organizations: list[Organization], sources: list[CompanyS
         1 for s in sources if not (s.revenue.ok or s.delivery.ok or s.people.ok)
     ) if state["available"] else 0
     rows.sort(key=lambda row: -(row.revenue.amount if row.revenue else 0))
-    return CompaniesSection(**state, rows=rows)
+    return CompaniesSection(**state, rows=rows, by_relationship=_relationship_totals(rows))
+
+
+def _relationship_totals(rows: list[CompanyRow]) -> list[RelationshipTotal]:
+    """The "own companies" and "associate companies (total)" rows."""
+    totals: dict[str, list] = {}
+    for row in rows:
+        total = totals.setdefault(row.relationship, [0, 0.0])
+        total[0] += 1
+        total[1] += row.revenue.amount if row.revenue else 0
+    order = [r for r in RELATIONSHIP_ORDER if r in totals] + sorted(r for r in totals if r not in RELATIONSHIP_ORDER)
+    return [RelationshipTotal(relationship=r, companies=totals[r][0], revenue=round(totals[r][1], 2)) for r in order]
+
+
+def _associates_section(
+    organizations: list[Organization], sources: list[CompanySources], financials: bool
+) -> AssociatesSection:
+    """Projects each company gave to an associate (Delivery's partners) with what was invoiced on
+    them (Revenue's revenue by project) and what the associate was paid (subcontract costs)."""
+    delivery_results = [s.delivery for s in sources]
+    if not any(r.ok for r in delivery_results):
+        return AssociatesSection(**section_state(delivery_results))
+    names = {org.id: org.name for org in organizations}
+    totals: dict[str, dict[str, float]] = {}
+    revenue_known = all(s.revenue.ok for s in sources if s.delivery.ok and (s.delivery.data or {}).get("partners"))
+    for s in sources:
+        if not s.delivery.ok:
+            continue
+        project_revenue = {row["key"]: money(row["amount"]) for row in (s.revenue.data or {}).get("revenue_by_work_unit", [])}
+        for partner in (s.delivery.data or {}).get("partners", []):
+            row = totals.setdefault(partner["organization_id"], {"projects": 0, "running": 0, "revenue": 0.0, "paid": 0.0})
+            row["projects"] += int(partner["projects"])
+            row["running"] += int(partner["running"])
+            row["paid"] += money(partner["subcontract_costs"])
+            row["revenue"] += sum(project_revenue.get(str(work_unit), 0.0) for work_unit in partner["work_unit_ids"])
+    show_money = financials and revenue_known
+    rows = [
+        AssociateRow(
+            organization_id=uuid.UUID(org_id),
+            name=names.get(uuid.UUID(org_id), OTHER_COMPANY),
+            projects=row["projects"],
+            running=row["running"],
+            revenue=round(row["revenue"], 2) if show_money else None,
+            paid=round(row["paid"], 2) if financials else None,
+            margin=round(row["revenue"] - row["paid"], 2) if show_money else None,
+        )
+        for org_id, row in totals.items()
+    ]
+    rows.sort(key=lambda r: (-(r.revenue or 0), -r.projects))
+    return AssociatesSection(
+        **section_state(delivery_results),
+        rows=rows,
+        projects=sum(r.projects for r in rows),
+        revenue=round(sum(r.revenue or 0 for r in rows), 2) if show_money else None,
+        paid=round(sum(r.paid or 0 for r in rows), 2) if financials else None,
+        margin=round(sum(r.margin or 0 for r in rows), 2) if show_money else None,
+    )
 
 
 def _metric(results: list[SourceResult], value: Optional[Amount]) -> Metric:

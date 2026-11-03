@@ -164,6 +164,7 @@ async def clock_in(
             is_late=is_late,
             late_minutes=late_minutes,
             status="present",
+            work_location=data.work_location,
         )
         try:
             async with session.begin_nested():
@@ -175,6 +176,8 @@ async def clock_in(
         att.clock_in_time = clock_in_dt
         att.is_late = is_late
         att.late_minutes = late_minutes
+        if data.work_location is not None:
+            att.work_location = data.work_location
 
     await session.flush()
     await session.refresh(att)
@@ -304,6 +307,7 @@ async def create_attendance_record(
         clock_out_time=data.clock_out_time,
         working_minutes=working_minutes,
         status=data.status,
+        work_location=data.work_location,
         notes=data.notes,
     )
     session.add(att)

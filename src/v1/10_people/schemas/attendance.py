@@ -3,7 +3,7 @@
 import uuid
 from datetime import date, datetime, time
 from decimal import Decimal
-from typing import List, Optional
+from typing import List, Literal, Optional
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -36,9 +36,13 @@ class WorkShiftResponse(WorkShiftCreate):
 # ---------------------------------------------------------
 # Daily Attendance
 # ---------------------------------------------------------
+WorkLocation = Literal["office", "field", "remote"]
+
+
 class ClockInRequest(BaseModel):
     worker_id: uuid.UUID
     clock_in_time: Optional[datetime] = None  # None = now, or explicit time for back-dating
+    work_location: Optional[WorkLocation] = None
 
 
 class ClockOutRequest(BaseModel):
@@ -55,6 +59,7 @@ class AttendanceRecordCreate(BaseModel):
     clock_out_time: Optional[datetime] = None
     shift_id: Optional[uuid.UUID] = None
     status: str = "present"  # present, half_day, absent, holiday, on_leave, regularized
+    work_location: Optional[WorkLocation] = None
     notes: Optional[str] = None
 
     @model_validator(mode="after")
@@ -79,6 +84,7 @@ class DailyAttendanceResponse(BaseModel):
     is_late: bool
     late_minutes: int
     status: str
+    work_location: Optional[str] = None
     notes: Optional[str] = None
     created_at: datetime
     updated_at: datetime

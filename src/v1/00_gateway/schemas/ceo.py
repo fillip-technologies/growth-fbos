@@ -52,6 +52,7 @@ class MonthAmount(BaseModel):
 class OrganizationRef(BaseModel):
     id: uuid.UUID
     name: str
+    relationship: str = "own"
 
 
 class Metric(Section):
@@ -81,18 +82,35 @@ class AmcCard(BaseModel):
     revenue: float = 0
 
 
+class SegmentAmount(BaseModel):
+    sector: str  # government, private
+    market: str  # india, international
+    amount: float
+
+
+class SegmentCount(BaseModel):
+    sector: str
+    market: str
+    count: int
+
+
 class RevenueSection(Section):
     by_month: list[MonthAmount] = []
     by_vertical: list[Bucket] = []  # key = Identity vertical id, or "none"
     by_state: list[Bucket] = []  # key = place of supply
     by_client_type: list[Bucket] = []
     by_contract_type: list[Bucket] = []
+    by_segment: list[SegmentAmount] = []  # government / private x India / international
+    by_product_line: list[Bucket] = []  # hardware, software, services, amc, training, other, none
+    clients_by_segment: list[SegmentCount] = []
+    clients_by_state: list[CountBucket] = []  # key = GST state code, or "none"
     amc: Optional[AmcCard] = None
 
 
 class CompanyRow(BaseModel):
     organization_id: uuid.UUID
     name: str
+    relationship: str = "own"
     revenue: Optional[Amount] = None  # None when that company's revenue could not be read
     receivables: Optional[float] = None
     active_projects: Optional[int] = None
@@ -100,8 +118,35 @@ class CompanyRow(BaseModel):
     headcount: Optional[int] = None
 
 
+class RelationshipTotal(BaseModel):
+    relationship: str  # own, associate, investment
+    companies: int
+    revenue: float  # of the companies whose revenue could be read
+
+
 class CompaniesSection(Section):
     rows: list[CompanyRow] = []
+    by_relationship: list[RelationshipTotal] = []
+
+
+class AssociateRow(BaseModel):
+    organization_id: uuid.UUID
+    name: str  # "Other company" when it is not one of the caller's companies
+    projects: int
+    running: int
+    revenue: Optional[float] = None  # financials: invoiced on those projects in the period
+    paid: Optional[float] = None  # financials: subcontract costs paid to them in the period
+    margin: Optional[float] = None  # financials: revenue - paid
+
+
+class AssociatesSection(Section):
+    """Work the client's companies give to associates (CEO plan decision 1)."""
+
+    rows: list[AssociateRow] = []
+    projects: int = 0
+    revenue: Optional[float] = None
+    paid: Optional[float] = None
+    margin: Optional[float] = None
 
 
 class DeliverySection(Section):
@@ -112,10 +157,19 @@ class DeliverySection(Section):
     costs_by_category: Optional[list[Bucket]] = None  # financials
 
 
+class WorkingToday(BaseModel):
+    office: int = 0
+    field: int = 0
+    remote: int = 0
+    not_said: int = 0
+
+
 class PeopleSection(Section):
     headcount: int = 0
     by_employment_type: list[CountBucket] = []
+    freelancers: int = 0
     on_leave_today: int = 0
+    working_today: WorkingToday = WorkingToday()
     payroll: Optional[Amount] = None  # financials
 
 
@@ -205,6 +259,7 @@ class CeoScreen(BaseModel):
     kpis: Kpis
     revenue: RevenueSection
     companies: CompaniesSection
+    associates: AssociatesSection
     delivery: DeliverySection
     people: PeopleSection
     health: HealthSection

@@ -29,4 +29,6 @@ class Offering(Base):
     # What a won contract for it is delivered as: a delivery project, a client service, or
     # neither (the default). The contract page offers the matching next step.
     fulfilment: Mapped[str] = mapped_column(String(20), nullable=False, default="none", server_default="none")
+    # What kind of business the offering is: hardware, software, services, amc, training or other.
+    product_line: Mapped[Optional[str]] = mapped_column(String(30), nullable=True, index=True)
     status: Mapped[str] = mapped_column(String(50), nullable=False, default="active")

@@ -84,3 +84,32 @@ async def test_summary_needs_its_permission(async_client):
 def test_summary_code_is_in_identitys_catalog():
     catalog = Path(__file__).resolve().parents[2] / "01_identity" / "services" / "permission_catalog.py"
     assert f'"{permissions.SUMMARY_READ}"' in catalog.read_text(encoding="utf-8")
+
+
+async def test_working_today_counts_where_people_are(async_client, db_session: AsyncSession):
+    from models.attendance import DailyAttendance
+
+    workers = [uuid.UUID((await make_worker(async_client, f"w{i}@x.com"))["id"]) for i in range(5)]
+    rows = [("present", "field"), ("present", "field"), ("half_day", "office"), ("present", None), ("absent", "field")]
+    for worker_id, (status, location) in zip(workers, rows):
+        db_session.add(DailyAttendance(organization_id=TEST_ORG_ID, worker_id=worker_id, work_date=TODAY,
+                                       status=status, work_location=location))
+    await db_session.commit()
+
+    summary = await people_summary(db_session, TEST_ORG_ID, date(2026, 11, 1), date(2026, 11, 30), today=TODAY)
+
+    today = summary.working_today
+    assert (today.field, today.office, today.remote, today.not_said) == (2, 1, 0, 1)
+
+
+async def test_clock_in_records_where_the_day_is_worked_and_freelancer_is_a_type(async_client):
+    worker = await make_worker(async_client, "field@x.com")
+    res = await async_client.post("/v1/attendance/clock-in", json={"worker_id": worker["id"], "work_location": "field"})
+    assert res.status_code in (200, 201), res.text
+    assert res.json()["work_location"] == "field"
+    assert (await async_client.post("/v1/attendance/clock-in", json={"worker_id": worker["id"], "work_location": "moon"})).status_code == 422
+
+    changed = await async_client.patch(f"/v1/workers/{worker['id']}", json={"employment_type": "freelancer"})
+    assert changed.status_code == 200, changed.text
+    assert changed.json()["employment_type"] == "freelancer"
+    assert (await async_client.patch(f"/v1/workers/{worker['id']}", json={"employment_type": "gig"})).status_code == 422

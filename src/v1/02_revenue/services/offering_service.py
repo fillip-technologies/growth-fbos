@@ -53,6 +53,7 @@ def format_offering_response(offering: Offering, snapshot: Optional[ConfigSnapsh
         list_price=price,
         default_work_template_code=offering.default_work_template_code,
         fulfilment=offering.fulfilment or "none",
+        product_line=offering.product_line,
         status=offering.status,
     )
 
@@ -125,6 +126,7 @@ class OfferingService:
             list_price=payload.list_price.amount if payload.list_price else None,
             default_work_template_code=payload.default_work_template_code,
             fulfilment=payload.fulfilment,
+            product_line=payload.product_line,
             status="active",
         )
         session.add(offering)
@@ -159,5 +161,7 @@ class OfferingService:
             raise OfferingNotFoundError(str(offering_id))
         if payload.fulfilment is not None:
             offering.fulfilment = payload.fulfilment
+        if "product_line" in payload.model_fields_set:
+            offering.product_line = payload.product_line
         await session.flush()
         return format_offering_response(offering, await _snapshot_if_needed(session, org_id, [offering]))

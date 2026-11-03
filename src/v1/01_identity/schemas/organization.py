@@ -1,11 +1,13 @@
 import uuid
-from typing import Optional
+from typing import Literal, Optional
 
 from pydantic import BaseModel, ConfigDict, EmailStr, Field
 
 # Fiscal year start as DD-MM (e.g. "01-04" = 1 April). Set by the client admin.
 FISCAL_YEAR_START_PATTERN = r"^(0[1-9]|[12][0-9]|3[01])-(0[1-9]|1[0-2])$"
 DEFAULT_FISCAL_YEAR_START = "01-04"
+# own: the client's own company; associate: a company it gives work to; investment: one it has a stake in.
+OrganizationRelationship = Literal["own", "associate", "investment"]
 
 
 class OrganizationCreateRequest(BaseModel):
@@ -18,6 +20,7 @@ class OrganizationCreateRequest(BaseModel):
     base_currency: str
     fiscal_year_start: str = Field(default=DEFAULT_FISCAL_YEAR_START, pattern=FISCAL_YEAR_START_PATTERN)  # DD-MM
     timezone: str
+    relationship: OrganizationRelationship = "own"
     # When provided, a first admin user is invited into the new organization.
     admin_email: Optional[EmailStr] = None
     admin_name: Optional[str] = None
@@ -32,6 +35,7 @@ class OrganizationUpdateRequest(BaseModel):
     fiscal_year_start: Optional[str] = Field(default=None, pattern=FISCAL_YEAR_START_PATTERN)  # DD-MM
     timezone: Optional[str] = None
     status: Optional[str] = None
+    relationship: Optional[OrganizationRelationship] = None
     # One of this organization's calendars. Can be replaced, not removed.
     calendar_id: Optional[uuid.UUID] = None
 
@@ -49,4 +53,5 @@ class OrganizationResponse(BaseModel):
     timezone: str
     calendar_id: Optional[uuid.UUID] = None
     status: str
+    relationship: str = "own"
     created_at: Optional[str] = None

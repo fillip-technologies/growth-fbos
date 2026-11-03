@@ -12,12 +12,22 @@ from sqlalchemy import case, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from models.client import Client
+from models.client_tax_profile import ClientTaxProfile
 from models.contract import Contract
 from models.invoice import Invoice, InvoiceLine
 from models.offering import Offering
 from models.opportunity import Opportunity
 from models.renewal import Renewal
-from schemas.business_summary import AmcSummary, AmountBucket, ClientCounts, Period, RevenueBusinessSummary
+from schemas.business_summary import (
+    AmcSummary,
+    AmountBucket,
+    ClientCounts,
+    Period,
+    RevenueBusinessSummary,
+    SegmentAmount,
+    SegmentCount,
+    StateCount,
+)
 from schemas.summary import MonthAmount
 from services.revenue_rules import NEGATIVE_DOC_TYPES, REVENUE_DOC_TYPES, UNISSUED_STATUSES
 from services.summary_service import RECEIVABLE_STATUSES, _main_currency, _money, _month_of
@@ -28,6 +38,8 @@ RENEWAL_WINDOW_DAYS = 30
 # outside the stage list, which the opportunity summary counts as "proposal".
 CLOSED_STAGES = ("won", "lost")
 NONE_KEY = "none"
+HOME_COUNTRY = "IN"
+GOVERNMENT_CLIENT_TYPE = "government"
 
 
 def previous_period(from_date: date, to_date: date) -> tuple[date, date]:
@@ -120,6 +132,18 @@ class BusinessSummaryService:
                     .outerjoin(Contract, Contract.id == Invoice.contract_id)
                     .where(*earned)
                     .group_by(Contract.contract_type)
+                )).all(),
+                currency,
+            ),
+            revenue_by_segment=await _revenue_by_segment(session, earned, currency),
+            revenue_by_product_line=_buckets(await _by_product_line(session, org_id, earned), currency),
+            clients_by_segment=await _clients_by_segment(session, org_id),
+            clients_by_state=await _clients_by_state(session, org_id),
+            revenue_by_work_unit=_buckets(
+                (await session.execute(
+                    select(Invoice.work_unit_id, signed_taxable)
+                    .where(*earned, Invoice.work_unit_id.is_not(None))
+                    .group_by(Invoice.work_unit_id)
                 )).all(),
                 currency,
             ),
@@ -237,3 +261,63 @@ async def _amc(session: AsyncSession, org_id: uuid.UUID, earned: tuple, today: d
         renewals_due=int(renewals_due or 0),
         revenue=_money(amc_revenue, currency),
     )
+
+
+def _sector():
+    return case((Client.client_type == GOVERNMENT_CLIENT_TYPE, "government"), else_="private")
+
+
+def _market():
+    """India or abroad: the tax profile's country first, else the billing address's (the tax engine's rule)."""
+    country = func.coalesce(ClientTaxProfile.country, Client.country, HOME_COUNTRY)
+    return case((func.upper(country) == HOME_COUNTRY, "india"), else_="international")
+
+
+async def _revenue_by_segment(session: AsyncSession, earned: tuple, currency: str) -> list[SegmentAmount]:
+    rows = (
+        await session.execute(
+            select(_sector(), _market(), func.coalesce(func.sum(_signed(Invoice.taxable_total)), 0))
+            .select_from(Invoice)
+            .join(Client, Client.id == Invoice.client_id)
+            .outerjoin(ClientTaxProfile, ClientTaxProfile.client_id == Client.id)
+            .where(*earned)
+            .group_by(_sector(), _market())
+        )
+    ).all()
+    ordered = sorted(rows, key=lambda row: -Decimal(str(row[2] or 0)))
+    return [SegmentAmount(sector=sector, market=market, amount=_money(amount, currency)) for sector, market, amount in ordered]
+
+
+async def _by_product_line(session: AsyncSession, org_id: uuid.UUID, earned: tuple) -> list:
+    return (
+        await session.execute(
+            select(Offering.product_line, func.coalesce(func.sum(_signed(InvoiceLine.taxable_value)), 0))
+            .select_from(InvoiceLine)
+            .join(Invoice, Invoice.id == InvoiceLine.invoice_id)
+            .outerjoin(Offering, (Offering.id == InvoiceLine.offering_id) & (Offering.organization_id == org_id))
+            .where(*earned)
+            .group_by(Offering.product_line)
+        )
+    ).all()
+
+
+async def _clients_by_segment(session: AsyncSession, org_id: uuid.UUID) -> list[SegmentCount]:
+    rows = (
+        await session.execute(
+            select(_sector(), _market(), func.count())
+            .select_from(Client)
+            .outerjoin(ClientTaxProfile, ClientTaxProfile.client_id == Client.id)
+            .where(Client.organization_id == org_id)
+            .group_by(_sector(), _market())
+        )
+    ).all()
+    return [SegmentCount(sector=sector, market=market, count=int(count)) for sector, market, count in sorted(rows, key=lambda r: -r[2])]
+
+
+async def _clients_by_state(session: AsyncSession, org_id: uuid.UUID) -> list[StateCount]:
+    rows = (
+        await session.execute(
+            select(Client.state_code, func.count()).where(Client.organization_id == org_id).group_by(Client.state_code)
+        )
+    ).all()
+    return [StateCount(key=state or NONE_KEY, count=int(count)) for state, count in sorted(rows, key=lambda r: -r[1])]

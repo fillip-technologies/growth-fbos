@@ -13,11 +13,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from models.financial import CostEntry
 from models.work_unit import WorkUnit
-from schemas.business_summary import CategoryCost, DeliveryBusinessSummary, Period, ProjectCounts
+from schemas.business_summary import CategoryCost, DeliveryBusinessSummary, PartnerWork, Period, ProjectCounts
 from services.stats import RUNNING_PROJECT_STATUSES
 
 DEFAULT_CURRENCY = "INR"
 AT_RISK_HEALTH = ("red", "amber")
+# What the client pays an associate for work is recorded as cost entries of this category.
+SUBCONTRACT_CATEGORY = "subcontract"
 
 
 def previous_period(from_date: date, to_date: date) -> tuple[date, date]:
@@ -46,6 +48,7 @@ async def delivery_summary(
             CategoryCost(category=category, amount=_round(amount))
             for category, amount in sorted(by_category.items(), key=lambda item: -item[1])
         ],
+        partners=await _partners(session, org_id, from_date, to_date),
     )
 
 
@@ -97,3 +100,48 @@ async def _main_currency(session: AsyncSession, org_id: uuid.UUID) -> tuple[str,
     if not rows:
         return DEFAULT_CURRENCY, False
     return max(rows, key=lambda row: row[1])[0] or DEFAULT_CURRENCY, len(rows) > 1
+
+
+async def _partners(session: AsyncSession, org_id: uuid.UUID, from_date: date, to_date: date) -> list[PartnerWork]:
+    projects = (
+        await session.execute(
+            select(WorkUnit.id, WorkUnit.partner_organization_id, WorkUnit.status).where(
+                WorkUnit.organization_id == org_id, WorkUnit.partner_organization_id.is_not(None)
+            )
+        )
+    ).all()
+    if not projects:
+        return []
+    paid = dict(
+        (
+            await session.execute(
+                select(CostEntry.work_unit_id, func.coalesce(func.sum(CostEntry.amount), 0))
+                .where(
+                    CostEntry.work_unit_id.in_([row.id for row in projects]),
+                    CostEntry.category == SUBCONTRACT_CATEGORY,
+                    CostEntry.occurred_on >= from_date,
+                    CostEntry.occurred_on <= to_date,
+                )
+                .group_by(CostEntry.work_unit_id)
+            )
+        ).all()
+    )
+    by_partner: dict[uuid.UUID, dict] = {}
+    for project_id, partner_id, status in projects:
+        partner = by_partner.setdefault(partner_id, {"ids": [], "running": 0, "paid": Decimal(0)})
+        partner["ids"].append(project_id)
+        partner["running"] += status in RUNNING_PROJECT_STATUSES
+        partner["paid"] += Decimal(str(paid.get(project_id, 0)))
+    return sorted(
+        (
+            PartnerWork(
+                organization_id=partner_id,
+                projects=len(work["ids"]),
+                running=work["running"],
+                subcontract_costs=_round(work["paid"]),
+                work_unit_ids=work["ids"],
+            )
+            for partner_id, work in by_partner.items()
+        ),
+        key=lambda p: -p.subcontract_costs,
+    )

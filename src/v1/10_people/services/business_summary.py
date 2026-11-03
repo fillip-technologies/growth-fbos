@@ -11,14 +11,17 @@ from sqlalchemy import and_, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from models.absence import LeaveRequest
+from models.attendance import DailyAttendance
 from models.payroll import PayrollRun, Payslip
 from models.worker import Worker
-from schemas.business_summary import PeopleBusinessSummary, Period
+from schemas.business_summary import PeopleBusinessSummary, Period, WorkingToday
 from schemas.summary import CountBucket
 
 # A run counts once someone approved it; draft and calculated runs can still change.
 FINAL_PAYROLL_STATUSES = ("approved", "disbursed")
 DEFAULT_CURRENCY = "INR"
+AT_WORK_STATUSES = ("present", "half_day", "regularized")
+WORK_LOCATIONS = ("office", "field", "remote")
 
 
 def previous_period(from_date: date, to_date: date) -> tuple[date, date]:
@@ -59,6 +62,7 @@ async def people_summary(
         headcount=sum(bucket.count for bucket in by_type),
         by_employment_type=by_type,
         on_leave_today=await _on_leave(session, org_id, today),
+        working_today=await _working_today(session, org_id, today),
         currency=await _payroll_currency(session, org_id),
         payroll=round(float(payroll), 2),
         payroll_previous=round(float(payroll_previous), 2),
@@ -104,3 +108,22 @@ async def _payroll_currency(session: AsyncSession, org_id: uuid.UUID) -> str:
     if not rows:
         return DEFAULT_CURRENCY
     return max(rows, key=lambda row: row[1])[0] or DEFAULT_CURRENCY
+
+
+async def _working_today(session: AsyncSession, org_id: uuid.UUID, today: date) -> WorkingToday:
+    rows = (
+        await session.execute(
+            select(DailyAttendance.work_location, func.count()).where(
+                DailyAttendance.organization_id == org_id,
+                DailyAttendance.work_date == today,
+                DailyAttendance.status.in_(AT_WORK_STATUSES),
+            ).group_by(DailyAttendance.work_location)
+        )
+    ).all()
+    counts = {location: int(count) for location, count in rows}
+    return WorkingToday(
+        office=counts.get("office", 0),
+        field=counts.get("field", 0),
+        remote=counts.get("remote", 0),
+        not_said=sum(count for location, count in counts.items() if location not in WORK_LOCATIONS),
+    )

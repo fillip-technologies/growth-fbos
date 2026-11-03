@@ -6,6 +6,7 @@ by the administrator. Amounts are plain sums in `currency`, the one most cost en
 """
 from datetime import date
 from typing import List
+import uuid
 
 from pydantic import BaseModel
 
@@ -26,6 +27,16 @@ class ProjectCounts(BaseModel):
     late: int  # running and past its planned end
 
 
+class PartnerWork(BaseModel):
+    """Work given to one associate company (decision 1 of the CEO plan)."""
+
+    organization_id: uuid.UUID
+    projects: int  # projects the associate works on, any status
+    running: int
+    subcontract_costs: float  # "subcontract" cost entries on those projects, dated in the period
+    work_unit_ids: List[uuid.UUID]  # to match the projects' invoices in Revenue
+
+
 class DeliveryBusinessSummary(BaseModel):
     currency: str
     mixed_currencies: bool
@@ -35,3 +46,4 @@ class DeliveryBusinessSummary(BaseModel):
     costs: float  # cost entries dated in the period
     costs_previous: float
     costs_by_category: List[CategoryCost]  # in the period, largest first
+    partners: List[PartnerWork]  # most paid first

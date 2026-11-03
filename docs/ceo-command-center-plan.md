@@ -247,8 +247,11 @@ These are recorded so the design leaves room for them. **They are not built now.
 
 ## Progress
 - [ ] A — Fillip unlimited: A1–A6, A8, A9 done 2026-11-03 (migration `b6d8f0a2c4e5`, tests in
-  `01_identity/tests/test_client_unlimited.py`). **A7 pending:** run the migration, restart
-  Identity, then set the Fillip client to unlimited in superadmin.
+  `01_identity/tests/test_client_unlimited.py`). **A7 interim (2026-11-03):** on live, Fillip (client
+  `FT`) was raised from 2 orgs / 100 users / ends 2027-10-07 to the highest values the current code
+  accepts: 1000 / 10000 / 2099-12-31. **After Identity with migration `b6d8f0a2c4e5` is deployed:**
+  `UPDATE clients SET max_organizations = NULL, max_users_per_org = NULL, subscription_end = NULL
+  WHERE code = 'FT';` (NULL before that deploy would break the old code's subscription check).
 - [ ] B1 — Command Center v1: built and tested 2026-11-03, not deployed. Summary endpoints:
   Revenue `GET /summaries/revenue`, Delivery `GET /summaries/delivery`, People `GET /summaries/people`,
   Management `GET /summaries/health`, Assets `GET /summaries/costs`, Fixly `GET /reports/summary`
@@ -256,7 +259,16 @@ These are recorded so the design leaves room for them. **They are not built now.
   **To ship:** restart Identity (new catalog codes), set the gateway's `INTERNAL_SERVICE_TOKEN` and
   `INVENTORY_ORGANIZATION_ID`, deploy Fixly. Business health picks one planning period: the shortest
   containing the period's last day, else the latest overlapping one. Group health = average company.
-- [ ] B2 — Schema additions
+- [ ] B2 — Schema additions: built and tested 2026-11-03, not deployed. Migrations: Identity
+  `c7e9a1b3d5f6` (organizations.relationship), Revenue `e4b8c2f6a9d1` (clients.country/state_code,
+  backfilled from the billing address, else the GSTIN; offerings.product_line), Delivery `a8c4e2d6f0b3`
+  (work_units.partner_organization_id), People `d9f1b3c5e7a2` (daily_attendance.work_location);
+  `freelancer` employment type (worker create/update now accept only the five known types).
+  Revenue summary adds revenue by segment / product line / project and customers by segment / state;
+  Delivery adds partners (subcontract costs per associate); People adds working_today; the gateway adds
+  `associates` (margin = associate projects' revenue − subcontract costs, financials only) and companies
+  by relationship. Client country follows the tax engine: tax profile first, then billing address.
+  Not done: projects by state (Delivery would need the customer's state).
 - [ ] B3 — `11_finance` (expenses + investments)
 - [ ] B4 — Snapshots in Insight
 - Future scope: Decision Matrix, Ask FBOS AI

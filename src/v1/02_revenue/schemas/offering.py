@@ -6,6 +6,8 @@ from schemas.common import Money
 from schemas.opportunity import VerticalRef
 
 Fulfilment = Literal["project", "service", "none"]
+# The kind of business an offering is, for revenue by product line.
+ProductLine = Literal["hardware", "software", "services", "amc", "training", "other"]
 
 
 class OfferingCreate(BaseModel):
@@ -20,6 +22,7 @@ class OfferingCreate(BaseModel):
     list_price: Money
     default_work_template_code: Optional[str] = None
     fulfilment: Fulfilment = "none"
+    product_line: Optional[ProductLine] = None
 
     @model_validator(mode="after")
     def taxed_somehow(self) -> "OfferingCreate":
@@ -44,6 +47,7 @@ class OfferingResponse(BaseModel):
     list_price: Money
     default_work_template_code: Optional[str] = None
     fulfilment: Fulfilment = "none"
+    product_line: Optional[ProductLine] = None
     status: Literal["active", "retired"]
 
 
@@ -53,3 +57,5 @@ class OfferingUpdate(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     fulfilment: Optional[Fulfilment] = None
+    # An explicit null clears it.
+    product_line: Optional[ProductLine] = None

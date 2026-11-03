@@ -153,3 +153,83 @@ def test_a_company_that_could_not_be_read_is_counted_as_missing():
     assert result.kpis.total_revenue.organizations_missing == 1
     assert result.companies.organizations_missing == 1
     assert result.companies.rows[1].revenue is None
+
+
+# --------------------------------------------------------------------------- B2: segments, associates, field
+
+
+def test_companies_are_grouped_by_relationship():
+    own, associate = Organization(uuid.uuid4(), "Fillip"), Organization(uuid.uuid4(), "Partner Co", "associate")
+    result = screen({own.id: company(revenue=revenue(100, 0)), associate.id: company(revenue=revenue(30, 0))},
+                    organizations=(own, associate))
+    assert [(t.relationship, t.companies, t.revenue) for t in result.companies.by_relationship] == [
+        ("own", 1, 100), ("associate", 1, 30),
+    ]
+    assert [o.relationship for o in result.organizations] == ["own", "associate"]
+
+
+def _delivery_with_partner(partner_id: uuid.UUID, project_id: uuid.UUID, paid: float) -> SourceResult:
+    data = delivery(1, 0, paid).data | {"partners": [
+        {"organization_id": str(partner_id), "projects": 1, "running": 1, "subcontract_costs": paid, "work_unit_ids": [str(project_id)]},
+    ]}
+    return SourceResult("ok", data)
+
+
+def _revenue_with_project(project_id: uuid.UUID, amount: float) -> SourceResult:
+    data = revenue(amount, 0).data | {"revenue_by_work_unit": [{"key": str(project_id), "amount": _money(amount)}]}
+    return SourceResult("ok", data)
+
+
+def test_work_given_to_associates_shows_revenue_paid_and_margin():
+    own, associate = Organization(uuid.uuid4(), "Fillip"), Organization(uuid.uuid4(), "Partner Co", "associate")
+    project = uuid.uuid4()
+    sources = {
+        own.id: company(revenue=_revenue_with_project(project, 100_000), delivery=_delivery_with_partner(associate.id, project, 60_000)),
+        associate.id: company(revenue=revenue(0, 0), delivery=delivery(0, 0, 0)),
+    }
+    result = screen(sources, organizations=(own, associate))
+    [row] = result.associates.rows
+    assert (row.name, row.projects, row.revenue, row.paid, row.margin) == ("Partner Co", 1, 100_000, 60_000, 40_000)
+    assert (result.associates.projects, result.associates.margin) == (1, 40_000)
+
+    hidden = screen(sources, organizations=(own, associate), financials=False)
+    [row] = hidden.associates.rows
+    assert (row.projects, row.revenue, row.paid, row.margin) == (1, None, None, None)
+    assert "60000" not in hidden.associates.model_dump_json()
+
+
+def test_an_associate_outside_the_callers_companies_is_named_other_company():
+    project, stranger = uuid.uuid4(), uuid.uuid4()
+    result = screen({A.id: company(revenue=_revenue_with_project(project, 10), delivery=_delivery_with_partner(stranger, project, 4))},
+                    organizations=(A,))
+    assert result.associates.rows[0].name == "Other company"
+
+
+def test_segments_states_and_where_people_work_add_up():
+    def rev(segments, states):
+        return SourceResult("ok", revenue(0, 0).data | {
+            "revenue_by_segment": segments, "clients_by_state": states,
+            "clients_by_segment": [{"sector": "government", "market": "india", "count": 1}],
+            "revenue_by_product_line": [{"key": "hardware", "amount": _money(10)}],
+        })
+
+    def ppl(field, office, freelancers):
+        data = people(field + office, 0).data | {
+            "by_employment_type": [{"key": "full_time", "count": field + office}, {"key": "freelancer", "count": freelancers}],
+            "working_today": {"office": office, "field": field, "remote": 0, "not_said": 0},
+        }
+        return SourceResult("ok", data)
+
+    gov_in = {"sector": "government", "market": "india", "amount": _money(500)}
+    result = screen({
+        A.id: company(revenue=rev([gov_in], [{"key": "29", "count": 2}]), people=ppl(3, 1, 2)),
+        B.id: company(revenue=rev([gov_in, {"sector": "private", "market": "international", "amount": _money(50)}],
+                                  [{"key": "29", "count": 1}, {"key": "27", "count": 4}]), people=ppl(1, 2, 0)),
+    })
+    assert [(s.sector, s.market, s.amount) for s in result.revenue.by_segment] == [
+        ("government", "india", 1000), ("private", "international", 50),
+    ]
+    assert [(c.key, c.count) for c in result.revenue.clients_by_state] == [("27", 4), ("29", 3)]
+    assert result.revenue.clients_by_segment[0].count == 2
+    assert result.revenue.by_product_line[0].amount == 20
+    assert (result.people.working_today.field, result.people.working_today.office, result.people.freelancers) == (4, 3, 2)

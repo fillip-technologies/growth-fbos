@@ -28,6 +28,23 @@ class ClientCounts(BaseModel):
     active: int
 
 
+class SegmentAmount(BaseModel):
+    sector: str  # government, private
+    market: str  # india, international
+    amount: Money
+
+
+class SegmentCount(BaseModel):
+    sector: str
+    market: str
+    count: int
+
+
+class StateCount(BaseModel):
+    key: str  # GST state code, or "none"
+    count: int
+
+
 class AmcSummary(BaseModel):
     active_contracts: int
     active_value: Money
@@ -52,4 +69,13 @@ class RevenueBusinessSummary(BaseModel):
     revenue_by_state: List[AmountBucket]  # key = the invoice's place of supply
     revenue_by_client_type: List[AmountBucket]
     revenue_by_contract_type: List[AmountBucket]
+    # Customer's sector (government or not) x market (India or abroad, the tax profile's country
+    # before the billing address's), the same country rule as the tax engine.
+    revenue_by_segment: List[SegmentAmount]
+    revenue_by_product_line: List[AmountBucket]  # line by line, the offering's product line
+    clients_by_segment: List[SegmentCount]
+    clients_by_state: List[StateCount]  # customers by billing state
+    # Invoices in the period that name a Delivery project (key = work unit id): the gateway sets them
+    # against the subcontract costs of projects given to associates.
+    revenue_by_work_unit: List[AmountBucket]
     amc: AmcSummary
