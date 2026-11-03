@@ -188,3 +188,23 @@ QuotationEmailDraft = CustomerEmailDraft
 
 class QuotationEmailSent(CustomerEmailSent):
     quotation: QuotationResponse
+
+
+class OpportunityRef(BaseModel):
+    id: uuid.UUID
+    name: str
+
+
+class QuotationListItem(BaseModel):
+    """A quotation in a list across opportunities, e.g. those waiting for approval."""
+
+    id: uuid.UUID
+    quote_no: str
+    revision_no: int
+    name: Optional[str] = None
+    status: str
+    grand_total: Money
+    client: ClientRef
+    opportunity: Optional[OpportunityRef] = None
+    valid_until: Optional[date] = None
+    created_at: datetime

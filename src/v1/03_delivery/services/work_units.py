@@ -512,6 +512,7 @@ async def list_work_units(
     limit: int,
     cursor: Optional[str],
     view: Optional["ProjectView"] = None,
+    contract_id: Optional[uuid.UUID] = None,
 ) -> PageResponse[WorkUnitResponse]:
     """Projects matching the filters; only those in `view` when someone may not see every project."""
     query = select(WorkUnit).where(WorkUnit.organization_id == org_id)
@@ -525,6 +526,8 @@ async def list_work_units(
         query = query.where(WorkUnit.vertical_id == vertical_id)
     if client_id is not None:
         query = query.where(WorkUnit.client_id == client_id)
+    if contract_id is not None:
+        query = query.where(WorkUnit.contract_id == contract_id)
     if manager_user_id is not None:
         query = query.where(WorkUnit.manager_user_id == manager_user_id)
     if health is not None:

@@ -141,6 +141,7 @@ async def list_work_units(
     owning_unit_id: Optional[uuid.UUID] = Query(None),
     vertical_id: Optional[uuid.UUID] = Query(None),
     client_id: Optional[uuid.UUID] = Query(None),
+    contract_id: Optional[uuid.UUID] = Query(None, description="Projects delivering this contract (Revenue's id)"),
     manager_user_id: Optional[uuid.UUID] = Query(None),
     health: Optional[str] = Query(None),
     q: Optional[str] = Query(None),
@@ -151,7 +152,7 @@ async def list_work_units(
     """List work units: only those the caller may see (services/views.py)."""
     return await service.list_work_units(
         session, org_id, status_, owning_unit_id, vertical_id, client_id, manager_user_id, health, q, limit, cursor,
-        view=await project_view(session, actor),
+        view=await project_view(session, actor), contract_id=contract_id,
     )
 
 

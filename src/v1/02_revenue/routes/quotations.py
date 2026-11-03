@@ -1,7 +1,7 @@
 import uuid
 from typing import Optional
 
-from fastapi import APIRouter, Depends, Header, Response, status
+from fastapi import APIRouter, Depends, Header, Query, Response, status
 
 from dependencies import Authorization, CurrentActor, DatabaseSession, Documents, OrgId, require_permission
 from schemas.quotation import (
@@ -11,6 +11,7 @@ from schemas.quotation import (
     QuotationChangeRequest,
     QuotationEventResponse,
     QuotationItemsReplace,
+    QuotationListItem,
     QuotationReject,
     QuotationResponse,
     QuotationUpdate,
@@ -19,13 +20,30 @@ from schemas.quotation import (
 )
 from services import notifications, quotation_email_service, quotation_events
 from services.documents_client import SubjectRef
-from services.quotation_service import QuotationService, get_quote_in_org
+from schemas.common import PageResponse
+from services.quotation_service import QuotationService, get_quote_in_org, list_quotations
 
 router = APIRouter(prefix="/quotations", tags=["quotations"])
 
 CAN_READ = Depends(require_permission("revenue.opportunity.read"))
 CAN_WRITE = Depends(require_permission("revenue.opportunity.write"))
 CAN_APPROVE = Depends(require_permission("revenue.quotation.approve"))
+
+
+@router.get("", response_model=PageResponse[QuotationListItem], dependencies=[CAN_READ])
+async def list_all_quotations(
+    session: DatabaseSession,
+    org_id: OrgId,
+    status_filter: Optional[str] = Query(
+        None, alias="status", description="Comma-separated, e.g. pending_approval or sent,changes_requested"
+    ),
+    client_id: Optional[uuid.UUID] = Query(None, description="Filter by client id"),
+    limit: int = Query(25, ge=1, le=100, description="Page limit (1-100)"),
+    cursor: Optional[str] = Query(None, description="Opaque cursor token"),
+) -> PageResponse[QuotationListItem]:
+    """Quotations across opportunities, newest first: e.g. those waiting for approval."""
+    statuses = [s.strip() for s in status_filter.split(",") if s.strip()] if status_filter else None
+    return await list_quotations(session, org_id, statuses=statuses, client_id=client_id, limit=limit, cursor=cursor)
 
 
 @router.get(

@@ -26,7 +26,7 @@ from models.document_tax import DocumentTaxLine
 from models.offering import Offering
 from models.opportunity import Opportunity
 from models.quotation import NegotiationNote, Quotation, QuotationItem
-from schemas.common import Money
+from schemas.common import Money, PageMeta, PageResponse, decode_cursor, encode_cursor
 from schemas.opportunity import ClientRef
 from schemas.quotation import (
     QuotationChangeRequest,
@@ -34,12 +34,14 @@ from schemas.quotation import (
     QuotationItemInput,
     QuotationItemResponse,
     QuotationItemsReplace,
+    QuotationListItem,
     QuotationReject,
     QuotationResponse,
     QuotationTotals,
     QuotationUpdate,
     QuotationValidityUpdate,
     QuotationWithdrawal,
+    OpportunityRef,
 )
 from schemas.tax import LineTax, TaxAmount, WithholdingPreview
 from services import quotation_events
@@ -895,3 +897,58 @@ class QuotationService:
             quote.version += 1
             await session.flush()
         return await QuotationService.get_quotation(session, quotation_id, org_id)
+
+
+async def list_quotations(
+    session: AsyncSession,
+    org_id: uuid.UUID,
+    statuses: Optional[List[str]] = None,
+    client_id: Optional[uuid.UUID] = None,
+    limit: int = 25,
+    cursor: Optional[str] = None,
+) -> PageResponse[QuotationListItem]:
+    """Quotations across opportunities, newest first: e.g. those waiting for approval."""
+    query = (
+        select(Quotation, Client, Opportunity)
+        .join(Client, Client.id == Quotation.client_id)
+        .outerjoin(Opportunity, Opportunity.id == Quotation.opportunity_id)
+        .where(Client.organization_id == org_id)
+    )
+    if statuses:
+        query = query.where(Quotation.status.in_(statuses))
+    if client_id:
+        query = query.where(Quotation.client_id == client_id)
+    after = decode_cursor(cursor) if cursor else {}
+    if after.get("created_at") and after.get("id"):
+        created_at, last_id = datetime.fromisoformat(after["created_at"]), uuid.UUID(after["id"])
+        query = query.where(
+            (Quotation.created_at < created_at) | ((Quotation.created_at == created_at) & (Quotation.id < last_id))
+        )
+
+    rows = list(
+        (await session.execute(query.order_by(Quotation.created_at.desc(), Quotation.id.desc()).limit(limit + 1))).all()
+    )
+    has_more = len(rows) > limit
+    rows = rows[:limit]
+    last = rows[-1][0] if rows else None
+    next_cursor = (
+        encode_cursor({"created_at": last.created_at.isoformat(), "id": str(last.id)}) if has_more and last else None
+    )
+    return PageResponse(
+        data=[
+            QuotationListItem(
+                id=quote.id,
+                quote_no=quote.quote_no,
+                revision_no=quote.revision_no,
+                name=quote.name,
+                status=quote.status,
+                grand_total=Money(amount=float(quote.grand_total or 0), currency=quote.currency),
+                client=ClientRef(id=client.id, name=client.name),
+                opportunity=OpportunityRef(id=opp.id, name=opp.name) if opp else None,
+                valid_until=quote.valid_until,
+                created_at=quote.created_at,
+            )
+            for quote, client, opp in rows
+        ],
+        page=PageMeta(next_cursor=next_cursor, has_more=has_more, limit=limit),
+    )
