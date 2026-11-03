@@ -54,3 +54,49 @@ class RateLimitExceededError(GatewayServiceError):
             code="RATE_LIMIT_EXCEEDED",
             message="Too many requests. Please try again later",
         )
+
+
+class AuthenticationRequiredError(GatewayServiceError):
+    """401: No bearer token."""
+
+    def __init__(self) -> None:
+        super().__init__(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            code="AUTHENTICATION_REQUIRED",
+            message="Sign in to continue.",
+        )
+
+
+class PermissionDeniedError(GatewayServiceError):
+    """403: The caller lacks the permission the screen needs."""
+
+    def __init__(self, permission: str) -> None:
+        super().__init__(
+            status_code=status.HTTP_403_FORBIDDEN,
+            code="PERMISSION_DENIED",
+            message="You don't have permission to open this screen.",
+            meta={"required_permission": permission},
+        )
+
+
+class AuthServiceUnavailableError(GatewayServiceError):
+    """503: Identity could not be reached to say who is calling."""
+
+    def __init__(self) -> None:
+        super().__init__(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            code="AUTH_SERVICE_UNAVAILABLE",
+            message="Sign-in could not be checked right now. Try again shortly.",
+        )
+
+
+class InvalidPeriodError(GatewayServiceError):
+    """422: The screen's period is backwards or too long."""
+
+    def __init__(self, field: str, issue: str) -> None:
+        super().__init__(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            code="VALIDATION_ERROR",
+            message="One or more fields are invalid.",
+            details=[{"field": field, "issue": issue}],
+        )

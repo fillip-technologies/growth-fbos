@@ -22,3 +22,6 @@ TDS_RECEIVABLE_WRITE = "revenue.tds_receivable.write"
 # Existing codes the new routes reuse.
 CLIENT_READ = "revenue.client.read"
 CLIENT_WRITE = "revenue.client.write"
+
+# The business summary (CEO Command Center): revenue, receivables, pipeline, AMC, totals only.
+SUMMARY_READ = "revenue.summary.read"

@@ -28,7 +28,7 @@ def _client(org=TEST_ORG_ID, name="Acme") -> Client:
 def _invoice(client: Client, status: str, total: float, balance: float, due: date | None, issued: date | None, **extra) -> Invoice:
     return Invoice(
         organization_id=client.organization_id, client_id=client.id, doc_type=extra.pop("doc_type", "tax_invoice"),
-        supplier_gstin=TEST_SUPPLIER_GSTIN, place_of_supply="29", status=status, grand_total=total, balance_due=balance,
+        supplier_gstin=TEST_SUPPLIER_GSTIN, place_of_supply=extra.pop("place_of_supply", "29"), status=status, grand_total=total, balance_due=balance,
         due_date=due, issue_date=issued, **extra,
     )
 
@@ -187,6 +187,7 @@ SUMMARY_ROUTES = [
     ("/contracts/summary", "revenue.contract.read"),
     ("/invoices/summary", "revenue.invoice.read"),
     ("/payments/summary", "revenue.payment.read"),
+    ("/summaries/revenue?from=2026-11-01&to=2026-11-30", "revenue.summary.read"),
 ]
 
 
@@ -198,3 +199,75 @@ async def test_each_summary_needs_its_resources_read_permission(client_as, path:
     assert res.status_code == 403
     assert res.json()["detail"]["meta"]["required_permission"] == code
     assert (await client_as(code).get(f"{BASE}{path}")).status_code == 200
+
+
+# --------------------------------------------------------------------------- business summary
+
+
+@pytest.mark.asyncio
+async def test_business_summary_revenue_is_net_of_tax_with_credit_notes_negative(db_session: AsyncSession):
+    from models.contract import Contract
+    from models.invoice import InvoiceLine
+    from models.offering import Offering
+    from models.renewal import Renewal
+    from services.business_summary import BusinessSummaryService
+
+    vertical = uuid.uuid4()
+    acme = _client(name="Acme")
+    acme.status = "prospect"
+    govt = Client(organization_id=TEST_ORG_ID, code="G-1", name="State", client_type="government", owner_user_id=TEST_USER_ID, status="active")
+    elsewhere = _client(org=OTHER_ORG)
+    db_session.add_all([acme, govt, elsewhere])
+    await db_session.flush()
+    offering = Offering(organization_id=TEST_ORG_ID, vertical_id=vertical, code="AMC", name="AMC", billing_model="fixed")
+    amc = Contract(
+        organization_id=TEST_ORG_ID, client_id=govt.id, contract_no="K-1", contract_type="amc", status="active",
+        start_date=date(2026, 1, 1), total_value=120_000,
+    )
+    db_session.add_all([offering, amc])
+    await db_session.flush()
+    db_session.add(Renewal(contract_id=amc.id, date=TODAY + timedelta(days=10), status="pending", owner_user_id=TEST_USER_ID))
+
+    # In the period: 1000 + 500 (AMC, state 27) - 200 credit note = 1300 net. Tax is never revenue.
+    first = _invoice(acme, "paid", 1180, 0, None, date(2026, 10, 5), taxable_total=1000)
+    second = _invoice(govt, "issued", 590, 590, TODAY - timedelta(days=3), date(2026, 11, 2),
+                      taxable_total=500, contract_id=amc.id, place_of_supply="27")
+    credit = _invoice(acme, "issued", 236, 0, None, date(2026, 11, 3), taxable_total=200, doc_type="credit_note")
+    previous = _invoice(acme, "paid", 118, 0, None, date(2026, 8, 20), taxable_total=100)
+    draft = _invoice(acme, "draft", 9999, 9999, None, date(2026, 11, 4), taxable_total=9000)
+    other_org = _invoice(elsewhere, "issued", 5000, 5000, None, date(2026, 11, 4), taxable_total=4000)
+    db_session.add_all([first, second, credit, previous, draft, other_org])
+    await db_session.flush()
+    db_session.add(InvoiceLine(invoice_id=second.id, offering_id=offering.id, line_no=1, description="AMC",
+                               unit_price=500, taxable_value=500, line_total=590))
+    db_session.add(InvoiceLine(invoice_id=first.id, line_no=1, description="Misc", unit_price=1000, taxable_value=1000, line_total=1180))
+    db_session.add(Opportunity(organization_id=TEST_ORG_ID, client_id=acme.id, name="Open", status="proposal",
+                               expected_value=40_000, owner_user_id=TEST_USER_ID))
+    db_session.add(Opportunity(organization_id=TEST_ORG_ID, client_id=acme.id, name="Won", status="won",
+                               expected_value=70_000, owner_user_id=TEST_USER_ID))
+    await db_session.commit()
+
+    summary = await BusinessSummaryService.revenue(db_session, TEST_ORG_ID, date(2026, 10, 1), date(2026, 11, 30), today=TODAY)
+
+    assert summary.revenue.amount == 1300
+    assert (summary.previous_period.from_date, summary.previous_period.to_date) == (date(2026, 8, 1), date(2026, 9, 30))
+    assert summary.revenue_previous.amount == 100
+    assert summary.receivables.amount == 590
+    assert summary.overdue.amount == 590
+    assert summary.pipeline.amount == 40_000
+    assert (summary.clients.total, summary.clients.active) == (2, 1)
+    assert [(m.month, m.amount.amount) for m in summary.revenue_by_month] == [("2026-10", 1000), ("2026-11", 300)]
+    assert {b.key: b.amount.amount for b in summary.revenue_by_vertical} == {str(vertical): 500, "none": 1000}
+    assert {b.key: b.amount.amount for b in summary.revenue_by_state} == {"29": 800, "27": 500}
+    assert {b.key: b.amount.amount for b in summary.revenue_by_client_type} == {"company": 800, "government": 500}
+    assert {b.key: b.amount.amount for b in summary.revenue_by_contract_type} == {"none": 800, "amc": 500}
+    assert (summary.amc.active_contracts, summary.amc.clients, summary.amc.renewals_due) == (1, 1, 1)
+    assert summary.amc.active_value.amount == 120_000
+    assert summary.amc.revenue.amount == 500
+
+
+@pytest.mark.asyncio
+async def test_business_summary_refuses_a_backwards_or_too_long_period(client_as):
+    reader = client_as("revenue.summary.read")
+    assert (await reader.get(f"{BASE}/summaries/revenue?from=2026-11-30&to=2026-11-01")).status_code == 422
+    assert (await reader.get(f"{BASE}/summaries/revenue?from=2020-01-01&to=2026-11-01")).status_code == 422

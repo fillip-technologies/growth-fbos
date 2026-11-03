@@ -11,3 +11,6 @@ ASSET_DISPOSE = "assets.asset.dispose"
 SETUP_MANAGE = "assets.setup.manage"
 
 CREDENTIAL_REVEAL = "assets.credential.reveal"
+
+# The business summary (CEO Command Center): company-wide software and asset costs, totals only.
+SUMMARY_READ = "assets.summary.read"

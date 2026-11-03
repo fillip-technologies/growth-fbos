@@ -30,5 +30,18 @@ class Settings(BaseSettings):
     # Per-dependency timeout budget for aggregated screens (seconds).
     aggregation_timeout_seconds: float = 0.8
 
+    # Who is calling: Identity's internal /authz/actor. The token must match Identity's
+    # INTERNAL_SERVICE_TOKEN (Identity skips the check in development when it is unset).
+    internal_service_token: str = ""
+    identity_timeout_seconds: float = 5.0
+
+    # The CEO Command Center reads one summary per service and company; each call gets this long.
+    ceo_timeout_seconds: float = 5.0
+    # Most summary calls in flight at once, across every company.
+    ceo_max_parallel_calls: int = 20
+    # The organization the inventory service (Fixly) serves (its FBOS_ORGANIZATION_ID). Empty: the
+    # caller's own organization is asked, and any other answers ORGANIZATION_NOT_SERVED.
+    inventory_organization_id: str = ""
+
 
 settings = Settings()

@@ -12,11 +12,8 @@ from schemas.revenue_feed import RevenueActualListResponse, RevenueActualRow
 from schemas.activity import ActivityResponse, InternalActivityCreate
 from schemas.subject_access import SubjectAccessResponse
 from services.activity_service import log_from_source
+from services.revenue_rules import REVENUE_DOC_TYPES, UNISSUED_STATUSES
 from services.subject_access_service import check_subject_access
-
-# What counts as revenue for management, with the same rules as the GST-vs-cash report.
-REVENUE_DOC_TYPES = ("tax_invoice", "debit_note", "credit_note")
-UNISSUED_STATUSES = ("draft", "pending_approval")
 
 router = APIRouter(prefix="/internal", tags=["internal"], dependencies=[Depends(verify_internal_caller)])
 

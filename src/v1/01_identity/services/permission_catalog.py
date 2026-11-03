@@ -76,6 +76,7 @@ PERMISSION_CATALOG: list[tuple[str, str, str]] = [
     ("revenue.invoice.write_off", "revenue", "Write off invoice balances customers will not pay"),
     ("revenue.tds_receivable.read", "revenue", "View TDS customers withheld from their payments"),
     ("revenue.tds_receivable.write", "revenue", "Track TDS certificates and reconcile TDS against Form 26AS"),
+    ("revenue.summary.read", "revenue", "View company-wide revenue, receivables, pipeline and AMC totals (CEO Command Center)"),
     # Delivery: projects (work units), tasks, time, handovers and workflows
     ("delivery.work_unit.read", "delivery", "View projects with their milestones, team, risks and change requests (own records only: the projects you manage, are on or have tasks in)"),
     ("delivery.work_unit.write", "delivery", "Create and update projects, milestones, team, risks and change requests"),
@@ -92,6 +93,7 @@ PERMISSION_CATALOG: list[tuple[str, str, str]] = [
     ("delivery.workflow.manage", "delivery", "Design workflows and publish their versions"),
     ("delivery.workflow.operate", "delivery", "Start workflows and move them between stages"),
     ("delivery.workflow.approve", "delivery", "Approve or reject workflow steps that need approval"),
+    ("delivery.summary.read", "delivery", "View company-wide project counts and project costs by category (CEO Command Center)"),
     ("control.approval.read", "control", "View approval requests and policies, decide the requests waiting for you and delegate your own approvals (own records only: just the requests you raised or are asked to decide)"),
     ("control.approval.write", "control", "Raise approval requests and cancel the ones you raised"),
     ("control.approval.manage", "control", "Set up approval policies and cancel anyone's approval request"),
@@ -142,6 +144,7 @@ PERMISSION_CATALOG: list[tuple[str, str, str]] = [
     ("assets.asset.dispose", "assets", "Decommission and dispose of company assets"),
     ("assets.setup.manage", "assets", "Manage asset categories, types, vendors and accounts"),
     ("assets.credential.reveal", "assets", "Decrypt and reveal stored asset credentials"),
+    ("assets.summary.read", "assets", "View company-wide software and asset costs (CEO Command Center)"),
     # Management (planning, KPIs and scorecards, budgets, scenarios, resources and capacity)
     ("management.fiscal_year.read", "management", "View fiscal years"),
     ("management.fiscal_year.manage", "management", "Create, change and close fiscal years"),
@@ -175,6 +178,7 @@ PERMISSION_CATALOG: list[tuple[str, str, str]] = [
     ("management.allocation.manage", "management", "Book people's time (soft and hard), change and cancel bookings"),
     ("management.allocation.override", "management", "Book someone past their capacity, giving a reason"),
     ("management.cost.read", "management", "View and set internal cost rates (rate cards)"),
+    ("management.summary.read", "management", "View business health from the scorecard and budget vs actual (CEO Command Center)"),
     # People (HCM & ATS: recruitment, employee directory, shifts, attendance, overtime, leaves, compensation, separation)
     ("people.recruitment.read", "people", "View job requisitions, candidate pipeline and applications"),
     ("people.recruitment.manage", "people", "Manage job postings, schedule interviews, and issue offers"),
@@ -190,6 +194,14 @@ PERMISSION_CATALOG: list[tuple[str, str, str]] = [
     ("people.role_change.approve", "people", "Approve or reject promotions, demotions and transfers that someone else requested"),
     ("people.role_change.manage", "people", "Choose the standing approvers for role changes (HR head, finance)"),
     ("people.separation.manage", "people", "Manage employee resignations, clearances, and full-and-final settlements"),
+    ("people.summary.read", "people", "View headcount by employment type, who is on leave and the payroll total (CEO Command Center)"),
+    # The CEO Command Center screen (gateway). In no preset but admin: the administrator grants them.
+    ("insight.ceo_dashboard.read", "insight", "Open the CEO Command Center and see its non-financial cards"),
+    (
+        "insight.ceo_dashboard.financials",
+        "insight",
+        "See sensitive figures on the CEO Command Center: payroll, expenses, profit, margins, budgets, investments",
+    ),
 ]
 
 ADMIN_ROLE_CODE = "admin"
@@ -218,6 +230,13 @@ SENSITIVE_READ_CODES = {
     "management.kpi_target.read",
     "management.result.read",
     "management.capacity.read",
+    # Company-wide totals for the CEO Command Center: money, payroll and costs.
+    "revenue.summary.read",
+    "delivery.summary.read",
+    "people.summary.read",
+    "management.summary.read",
+    "assets.summary.read",
+    "insight.ceo_dashboard.read",
 }
 
 
