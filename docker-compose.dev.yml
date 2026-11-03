@@ -77,3 +77,8 @@ services:
     <<: *dev
     volumes:
       - ./src/v1/10_people:/app
+
+  finance:
+    <<: *dev
+    volumes:
+      - ./src/v1/11_finance:/app

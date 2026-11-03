@@ -5,8 +5,8 @@ No network here (that is services/ceo_sources.py), so every rule can be tested o
 - a section is available when at least one company's source answered; the companies that did
   not are counted in `organizations_missing`;
 - nothing unavailable is ever shown as zero;
-- without the financials permission, payroll, costs, expenses, profit, budgets and purchase
-  money are left out of the response.
+- without the financials permission, payroll, costs, expenses, profit, budgets, purchase money,
+  other income and investments are left out of the response.
 """
 from collections import defaultdict
 from typing import Any, Iterable, Optional
@@ -30,10 +30,13 @@ from schemas.ceo import (
     ExpenseComponent,
     ExpensesSection,
     FieldSection,
+    FinanceSection,
     HealthSection,
+    InvestmentsCard,
     Kpis,
     Metric,
     MonthAmount,
+    NamedBucket,
     OrganizationRef,
     PeopleSection,
     Period,
@@ -90,9 +93,10 @@ def build_screen(
         budget=_budget_section(sources) if can_see_financials else BudgetSection(**NO_ACCESS),
         expenses=expenses,
         asset_costs=_asset_costs_section(sources) if can_see_financials else AssetCostsSection(**NO_ACCESS),
+        finance=_finance_section(sources) if can_see_financials else FinanceSection(**NO_ACCESS),
         procurement=_procurement_section(inventory, can_see_financials),
         field=_field_section(inventory),
-        alerts=_alerts(sources, inventory),
+        alerts=_alerts(sources, inventory, can_see_financials),
     )
 
 
@@ -157,6 +161,7 @@ def _currency(sources: list[CompanySources], inventory: SourceResult) -> tuple[s
         *_ok(s.delivery for s in sources),
         *_ok(s.people for s in sources),
         *_ok(s.assets for s in sources),
+        *_ok(s.finance for s in sources),
         *_ok([inventory]),
     ]
     currencies = [row["currency"] for row in rows if row.get("currency")]
@@ -308,13 +313,14 @@ def _budget_section(sources: list[CompanySources]) -> BudgetSection:
 
 
 def _expenses_section(sources: list[CompanySources], inventory: SourceResult) -> ExpensesSection:
-    """Payroll + project costs + committed purchases + asset costs, each recorded in one place
-    only, so nothing is counted twice. Other operating expenses arrive with Finance (B3)."""
+    """Payroll + project costs + committed purchases + asset costs + operating expenses, each
+    recorded in one place only, so nothing is counted twice."""
     parts = {
         "payroll": ([s.people for s in sources], ("payroll",), ("payroll_previous",)),
         "project_costs": ([s.delivery for s in sources], ("costs",), ("costs_previous",)),
         "procurement": ([inventory], ("purchase_orders", "committed"), ("purchase_orders", "committed_previous")),
         "asset_costs": ([s.assets for s in sources], ("costs",), ("costs_previous",)),
+        "operating_expenses": ([s.finance for s in sources], ("expenses",), ("expenses_previous",)),
     }
     components: list[ExpenseComponent] = []
     for key, (results, current, previous) in parts.items():
@@ -333,7 +339,7 @@ def _expenses_section(sources: list[CompanySources], inventory: SourceResult) ->
             previous=round(sum(a.previous or 0 for a in counted), 2),
         ),
         components=components,
-        complete=False,
+        complete=all(c.available for c in components),
     )
 
 
@@ -349,6 +355,39 @@ def _asset_costs_section(sources: list[CompanySources]) -> AssetCostsSection:
         by_family=merge_buckets((r.get("costs_by_family") for r in rows), "key", "amount"),
         active_subscriptions=int(_sum(rows, "active_subscriptions")),
         subscriptions_monthly=_sum(rows, "subscriptions_monthly"),
+    )
+
+
+def _finance_section(sources: list[CompanySources]) -> FinanceSection:
+    results = [s.finance for s in sources]
+    rows = _ok(results)
+    if not rows:
+        return FinanceSection(**section_state(results))
+    categories: dict[str, list] = {}
+    for row in rows:
+        for bucket in row.get("expenses_by_category", []):
+            entry = categories.setdefault(bucket["key"], [bucket.get("name") or bucket["key"], 0.0])
+            entry[1] += money(bucket["amount"])
+    investments = [row.get("investments") or {} for row in rows]
+    return FinanceSection(
+        **section_state(results),
+        operating_expenses=_amount(rows, ("expenses",), ("expenses_previous",)),
+        by_category=[
+            NamedBucket(key=key, name=name, amount=round(amount, 2))
+            for key, (name, amount) in sorted(categories.items(), key=lambda item: -item[1][1])
+        ],
+        unpaid=_sum(rows, "expenses_unpaid"),
+        awaiting_approval=int(_sum(rows, "pending_approval", "count")),
+        awaiting_approval_amount=_sum(rows, "pending_approval", "amount"),
+        other_income=_amount(rows, ("income",), ("income_previous",)),
+        income_by_type=merge_buckets((r.get("income_by_type") for r in rows), "key", "amount"),
+        investments=InvestmentsCard(
+            active=int(_sum(investments, "active")),
+            principal=_sum(investments, "principal"),
+            current_value=_sum(investments, "current_value"),
+            by_type=merge_buckets((i.get("by_type") for i in investments), "key", "principal"),
+            maturing_soon=int(_sum(investments, "maturing_soon")),
+        ),
     )
 
 
@@ -519,8 +558,9 @@ def _profit(revenue_results: list[SourceResult], revenue: Amount, expenses: Expe
     )
 
 
-def _alerts(sources: list[CompanySources], inventory: SourceResult) -> AlertsSection:
+def _alerts(sources: list[CompanySources], inventory: SourceResult, financials: bool) -> AlertsSection:
     approvals = [r for s in sources for r in s.approvals]
+    finance_rows = _ok(s.finance for s in sources) if financials else []
     approval_rows = _ok(approvals)
     revenue_rows = _ok(s.revenue for s in sources)
     delivery_rows = _ok(s.delivery for s in sources)
@@ -531,5 +571,6 @@ def _alerts(sources: list[CompanySources], inventory: SourceResult) -> AlertsSec
         at_risk_projects=int(_sum(delivery_rows, "projects", "at_risk")) if delivery_rows else None,
         renewals_due=int(_sum(revenue_rows, "amc", "renewals_due")) if revenue_rows else None,
         open_repairs=int((inventory.data or {}).get("open_repairs") or 0) if inventory.ok else None,
+        expenses_awaiting_approval=int(_sum(finance_rows, "pending_approval", "count")) if finance_rows else None,
     )
 

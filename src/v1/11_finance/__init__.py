@@ -1,0 +1,1 @@
+"""Assets service root package."""

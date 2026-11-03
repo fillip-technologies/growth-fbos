@@ -195,6 +195,14 @@ PERMISSION_CATALOG: list[tuple[str, str, str]] = [
     ("people.role_change.manage", "people", "Choose the standing approvers for role changes (HR head, finance)"),
     ("people.separation.manage", "people", "Manage employee resignations, clearances, and full-and-final settlements"),
     ("people.summary.read", "people", "View headcount by employment type, who is on leave and the payroll total (CEO Command Center)"),
+    # Finance: operating expenses (rent, travel, marketing...), investments and income outside sales.
+    ("finance.expense.read", "finance", "View company operating expenses, their categories and approval status"),
+    ("finance.expense.write", "finance", "Record, edit and delete operating expenses"),
+    ("finance.expense.approve", "finance", "Approve or reject expenses above the approval threshold that someone else recorded"),
+    ("finance.investment.read", "finance", "View company investments (FDs, funds, equity, property) and income from them"),
+    ("finance.investment.write", "finance", "Record and update investments and income such as interest, dividends and rent"),
+    ("finance.setup.manage", "finance", "Manage expense categories and the expense approval threshold"),
+    ("finance.summary.read", "finance", "View company-wide expenses, other income and investments (CEO Command Center)"),
     # The CEO Command Center screen (gateway). In no preset but admin: the administrator grants them.
     ("insight.ceo_dashboard.read", "insight", "Open the CEO Command Center and see its non-financial cards"),
     (
@@ -236,7 +244,11 @@ SENSITIVE_READ_CODES = {
     "people.summary.read",
     "management.summary.read",
     "assets.summary.read",
+    "finance.summary.read",
     "insight.ceo_dashboard.read",
+    # Finance: every operating expense and the company's investments are company-wide money.
+    "finance.expense.read",
+    "finance.investment.read",
 }
 
 

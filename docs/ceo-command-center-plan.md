@@ -269,6 +269,21 @@ These are recorded so the design leaves room for them. **They are not built now.
   `associates` (margin = associate projects' revenue − subcontract costs, financials only) and companies
   by relationship. Client country follows the tax engine: tax profile first, then billing address.
   Not done: projects by state (Delivery would need the customer's state).
-- [ ] B3 — `11_finance` (expenses + investments)
+- [ ] B3 — `11_finance` (expenses + investments): built and tested 2026-11-03, not deployed. New service
+  `src/v1/11_finance` (port 8011, `/api/finance/v1`, database `fbos_finance`, migration `f1a2b3c4d5e6`):
+  expense categories (12 built in, no hardware / salary / project-cost category), expenses, investments,
+  income entries, settings (`expense_approval_threshold`), `GET /summaries/finance`, and
+  `/internal/subject-access` so documents attach to expenses and investments. Codes `finance.expense.read|write|approve`,
+  `finance.investment.read|write`, `finance.setup.manage`, `finance.summary.read` (reads sensitive).
+  **Approval is local, not via Control:** no service sends approvals to Control today (Control has no
+  callback to the requesting service), so an expense above the threshold waits for someone with
+  `finance.expense.approve` who did not record it, like Revenue's quotation approval. Gateway: `operating_expenses`
+  component in Total Expenses (`complete` is now true when all five sources answer), `finance` section,
+  `alerts.expenses_awaiting_approval`. Profit stays revenue − expenses; other income is shown beside it.
+  Revenue's `finance/` package (tax engine, numbering, settlement) stays in Revenue: it runs inside invoice,
+  quotation and payment transactions. **To ship:** create database `fbos_finance` on Hostinger and the service's
+  `.env` on the server, deploy (start.sh runs the migration), restart Identity (new codes), add
+  `finance` to Documents' `SUBJECT_SERVICES` there (compose already does). clientadmin screens: `/expenses`,
+  `/investments`, `/finance-setup` (`features/finance`); the Command Center cards link to them.
 - [ ] B4 — Snapshots in Insight
 - Future scope: Decision Matrix, Ask FBOS AI

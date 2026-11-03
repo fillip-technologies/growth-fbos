@@ -145,6 +145,7 @@ def test_what_could_not_be_read_is_never_shown_as_zero():
     assert result.kpis.total_expenses.value.amount == 100
     assert {c.key: c.available for c in result.expenses.components} == {
         "payroll": True, "project_costs": False, "procurement": False, "asset_costs": False,
+        "operating_expenses": False,
     }
 
 
@@ -233,3 +234,64 @@ def test_segments_states_and_where_people_work_add_up():
     assert result.revenue.clients_by_segment[0].count == 2
     assert result.revenue.by_product_line[0].amount == 20
     assert (result.people.working_today.field, result.people.working_today.office, result.people.freelancers) == (4, 3, 2)
+
+
+# --------------------------------------------------------------------------- B3: finance
+
+
+def finance(expenses: float, previous: float = 0, income: float = 0, pending: int = 0) -> SourceResult:
+    return SourceResult("ok", {
+        "currency": "INR", "mixed_currencies": False,
+        "expenses": expenses, "expenses_previous": previous, "expense_tax": 0, "expenses_unpaid": expenses / 2,
+        "expenses_by_category": [{"key": "rent", "name": "Rent & lease", "amount": expenses}],
+        "expenses_by_month": [], "pending_approval": {"count": pending, "amount": pending * 1000.0},
+        "income": income, "income_previous": 0, "income_by_type": [{"key": "interest", "amount": income}],
+        "investments": {"active": 1, "principal": 100_000, "current_value": 110_000,
+                        "by_type": [{"key": "fixed_deposit", "count": 1, "principal": 100_000}], "maturing_soon": 1},
+    })
+
+
+def every_source(**parts) -> CompanySources:
+    return company(revenue=revenue(200_000, 0), delivery=delivery(1, 0, 10_000), people=people(5, 50_000),
+                   management=management(80), assets=assets(5_000), **parts)
+
+
+def test_operating_expenses_complete_the_total_and_lower_profit():
+    result = screen({A.id: every_source(finance=finance(30_000, 12_000))}, organizations=(A,))
+    k = result.kpis
+    # payroll 50k + project costs 10k + purchases 20k + asset costs 5k + operating expenses 30k
+    assert k.total_expenses.value.amount == 115_000
+    assert k.total_profit.value.amount == 85_000
+    assert result.expenses.complete is True
+    operating = next(c for c in result.expenses.components if c.key == "operating_expenses")
+    assert (operating.amount.amount, operating.amount.previous) == (30_000, 12_000)
+
+
+def test_without_finance_the_total_is_marked_incomplete():
+    result = screen({A.id: every_source(finance=DOWN)}, organizations=(A,))
+    assert result.kpis.total_expenses.value.amount == 85_000
+    assert result.expenses.complete is False
+    assert (result.finance.available, result.finance.reason) == (False, "unavailable")
+
+
+def test_finance_section_adds_up_companies():
+    result = screen({
+        A.id: company(finance=finance(30_000, income=6_000, pending=2)),
+        B.id: company(finance=finance(10_000, income=1_000)),
+    })
+    f = result.finance
+    assert f.available and f.operating_expenses.amount == 40_000
+    assert [(b.key, b.name, b.amount) for b in f.by_category] == [("rent", "Rent & lease", 40_000)]
+    assert f.unpaid == 20_000 and f.awaiting_approval == 2 and f.awaiting_approval_amount == 2_000
+    assert f.other_income.amount == 7_000 and f.income_by_type[0].amount == 7_000
+    assert (f.investments.active, f.investments.principal, f.investments.current_value) == (2, 200_000, 220_000)
+    assert f.investments.by_type[0].amount == 200_000 and f.investments.maturing_soon == 2
+    assert result.alerts.expenses_awaiting_approval == 2
+
+
+def test_without_financials_finance_is_left_out():
+    result = screen({A.id: company(revenue=revenue(100, 0), finance=finance(777_777, income=888_888, pending=3))},
+                    financials=False, organizations=(A,))
+    assert (result.finance.available, result.finance.reason) == (False, "no_access")
+    assert result.alerts.expenses_awaiting_approval is None
+    assert "777777" not in result.model_dump_json() and "888888" not in result.model_dump_json()

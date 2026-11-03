@@ -135,8 +135,9 @@ async def test_an_employee_reads_only_their_own_company_without_financials(downs
     assert body["kpis"]["total_revenue"]["value"] == {"amount": 100.0, "previous": 40.0}
     assert body["kpis"]["total_employees"]["reason"] == "unavailable"
     assert body["kpis"]["total_expenses"]["reason"] == "no_access"
-    # Asset costs are all financial, so they are not even asked for.
+    # Asset costs and finance are all financial, so they are not even asked for.
     assert not fake.asked("/summaries/costs")
+    assert not fake.asked("/summaries/finance")
     revenue_call = fake.asked("/summaries/revenue")[0]
     assert revenue_call.headers["Authorization"] == "Bearer t"
     assert revenue_call.headers["X-Organization-Id"] == str(HOME_ORG)
@@ -154,6 +155,9 @@ async def test_a_client_admin_reads_every_active_company(downstream, monkeypatch
     assert body["can_see_financials"] is True
     assert {c.headers["X-Organization-Id"] for c in fake.asked("/summaries/revenue")} == {str(HOME_ORG), str(SISTER_ORG)}
     assert body["kpis"]["total_revenue"]["value"]["amount"] == 200.0
+    assert {c.headers["X-Organization-Id"] for c in fake.asked("/api/finance/v1/summaries/finance")} == {
+        str(HOME_ORG), str(SISTER_ORG)
+    }
     # The inventory service is asked once, for the company it serves.
     inventory_calls = fake.asked("/reports/summary")
     assert [c.headers["X-Organization-Id"] for c in inventory_calls] == [str(HOME_ORG)]

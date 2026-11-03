@@ -7,6 +7,7 @@ CEO_CODES = {
     "people.summary.read",
     "management.summary.read",
     "assets.summary.read",
+    "finance.summary.read",
     "insight.ceo_dashboard.read",
     "insight.ceo_dashboard.financials",
 }
@@ -19,3 +20,8 @@ def test_ceo_codes_are_in_the_catalog():
 def test_members_do_not_get_company_wide_totals():
     members = set(member_permission_codes([code for code, _, _ in PERMISSION_CATALOG]))
     assert not CEO_CODES & members
+
+
+def test_members_do_not_see_company_expenses_or_investments():
+    members = set(member_permission_codes([code for code, _, _ in PERMISSION_CATALOG]))
+    assert not {"finance.expense.read", "finance.investment.read"} & members

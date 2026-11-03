@@ -196,18 +196,48 @@ class BudgetSection(Section):
 
 
 class ExpenseComponent(BaseModel):
-    key: Literal["payroll", "project_costs", "procurement", "asset_costs"]
+    key: Literal["payroll", "project_costs", "procurement", "asset_costs", "operating_expenses"]
     available: bool
     amount: Optional[Amount] = None
 
 
 class ExpensesSection(Section):
-    """What FBOS records as spend so far. Office, travel, marketing and other operating expenses
-    arrive with the Finance service (plan phase B3); until then `complete` is false."""
+    """All spend FBOS records, each in one place only: payroll (people), project costs (delivery),
+    hardware purchases (inventory), asset costs (assets) and operating expenses such as rent,
+    travel and marketing (finance). `complete` is true when every one of them could be read."""
 
     total: Optional[Amount] = None
     components: list[ExpenseComponent] = []
     complete: bool = False
+
+
+class NamedBucket(BaseModel):
+    key: str
+    name: str
+    amount: float
+
+
+class InvestmentsCard(BaseModel):
+    """What the companies hold today (not a period figure)."""
+
+    active: int = 0
+    principal: float = 0
+    current_value: float = 0  # latest recorded value; principal where none was recorded
+    by_type: list[Bucket] = []  # principal per type: fixed_deposit, mutual_fund, equity, ...
+    maturing_soon: int = 0  # within 30 days after the period
+
+
+class FinanceSection(Section):
+    """Financials only: operating expenses (widget 12), other income and investments (widget 11)."""
+
+    operating_expenses: Optional[Amount] = None  # approved, before tax
+    by_category: list[NamedBucket] = []
+    unpaid: float = 0
+    awaiting_approval: int = 0
+    awaiting_approval_amount: float = 0
+    other_income: Optional[Amount] = None  # interest, dividends, rent... (not sales)
+    income_by_type: list[Bucket] = []
+    investments: Optional[InvestmentsCard] = None
 
 
 class AssetCostsSection(Section):
@@ -247,6 +277,7 @@ class AlertsSection(BaseModel):
     at_risk_projects: Optional[int] = None
     renewals_due: Optional[int] = None
     open_repairs: Optional[int] = None
+    expenses_awaiting_approval: Optional[int] = None  # financials: finance expenses above the threshold
 
 
 class CeoScreen(BaseModel):
@@ -266,6 +297,7 @@ class CeoScreen(BaseModel):
     budget: BudgetSection
     expenses: ExpensesSection
     asset_costs: AssetCostsSection
+    finance: FinanceSection
     procurement: ProcurementSection
     field: FieldSection
     alerts: AlertsSection

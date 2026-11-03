@@ -24,6 +24,7 @@ DELIVERY_PATH = "/api/delivery/v1/summaries/delivery"
 PEOPLE_PATH = "/api/people/v1/summaries/people"
 MANAGEMENT_PATH = "/api/management/v1/summaries/health"
 ASSETS_PATH = "/api/assets/v1/summaries/costs"
+FINANCE_PATH = "/api/finance/v1/summaries/finance"
 APPROVALS_PATH = "/api/control/v1/approvals/requests"
 INVENTORY_PATH = "/api/inventory/v1/reports/summary"
 # Control's open approval statuses; its list filters on one at a time.
@@ -41,6 +42,9 @@ class SourceResult:
         return self.status == "ok"
 
 
+NOT_ASKED = SourceResult("no_access")
+
+
 @dataclass
 class CompanySources:
     """Everything read for one company."""
@@ -51,9 +55,8 @@ class CompanySources:
     management: SourceResult
     assets: SourceResult
     approvals: list[SourceResult] = field(default_factory=list)
-
-
-NOT_ASKED = SourceResult("no_access")
+    # Operating expenses, other income and investments: all financial, read only with that permission.
+    finance: SourceResult = NOT_ASKED
 
 
 class SummaryReader:
@@ -73,6 +76,7 @@ class SummaryReader:
             self._get(settings.management_service_url, MANAGEMENT_PATH, period, organization_id),
             # Asset costs are all financial: without the permission they are not even read.
             self._get(settings.assets_service_url, ASSETS_PATH, period, organization_id) if with_financials else _not_asked(),
+            self._get(settings.finance_service_url, FINANCE_PATH, period, organization_id) if with_financials else _not_asked(),
             *(
                 self._get(
                     settings.control_service_url,
@@ -83,8 +87,8 @@ class SummaryReader:
                 for status in OPEN_APPROVAL_STATUSES
             ),
         ]
-        revenue, delivery, people, management, assets, *approvals = await asyncio.gather(*calls)
-        return CompanySources(revenue, delivery, people, management, assets, approvals)
+        revenue, delivery, people, management, assets, finance, *approvals = await asyncio.gather(*calls)
+        return CompanySources(revenue, delivery, people, management, assets, approvals, finance)
 
     async def inventory(self, organization_id: uuid.UUID, from_date: date, to_date: date) -> SourceResult:
         period = {"from": from_date.isoformat(), "to": to_date.isoformat()}

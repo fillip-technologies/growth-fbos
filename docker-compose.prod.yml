@@ -120,6 +120,14 @@ services:
       APP_ENV: production
       DEBUG: "false"
 
+  finance:
+    restart: always
+    ports:
+      - "127.0.0.1:8011:8000"
+    environment:
+      APP_ENV: production
+      DEBUG: "false"
+
   db:
     restart: always
 
