@@ -5,10 +5,11 @@ someone only what their lists would. Mounted before the resource routers, so `su
 read as a record id.
 """
 from datetime import date
+import uuid
 
 from fastapi import APIRouter, Depends, Query
 
-from dependencies import DatabaseSession, OrgId, require_permission
+from dependencies import DatabaseSession, OrgId, require_permission, verify_internal_caller
 from exceptions import InvalidDateRangeError
 import permissions
 from schemas.business_summary import RevenueBusinessSummary
@@ -21,6 +22,13 @@ router = APIRouter(tags=["summaries"])
 MONTHS = Query(6, ge=1, le=24, description="How many calendar months the month series cover, this one included")
 # Three years keeps the summary's GROUP BYs cheap; longer trends come from Insight snapshots.
 MAX_PERIOD_DAYS = 3 * 366
+
+
+def check_period(from_date: date, to_date: date) -> None:
+    if to_date < from_date:
+        raise InvalidDateRangeError("'to' must be on or after 'from'")
+    if (to_date - from_date).days >= MAX_PERIOD_DAYS:
+        raise InvalidDateRangeError(f"The period may cover at most {MAX_PERIOD_DAYS} days")
 
 
 @router.get("/leads/summary", response_model=LeadSummary, dependencies=[Depends(require_permission("revenue.lead.read"))])
@@ -76,8 +84,23 @@ async def revenue_business_summary(
 ) -> RevenueBusinessSummary:
     """Revenue net of tax in the period and the one before, money owed, pipeline, revenue by
     month / vertical / state / customer type / contract type, and AMC, for the CEO Command Center."""
-    if to_date < from_date:
-        raise InvalidDateRangeError("'to' must be on or after 'from'")
-    if (to_date - from_date).days >= MAX_PERIOD_DAYS:
-        raise InvalidDateRangeError(f"The period may cover at most {MAX_PERIOD_DAYS} days")
+    check_period(from_date, to_date)
     return await BusinessSummaryService.revenue(session, org_id, from_date, to_date)
+
+
+@router.get(
+    "/internal/summaries/revenue",
+    response_model=RevenueBusinessSummary,
+    tags=["internal"],
+    dependencies=[Depends(verify_internal_caller)],
+)
+async def revenue_business_summary_internal(
+    session: DatabaseSession,
+    organization_id: uuid.UUID = Query(..., description="The organization to summarise"),
+    from_date: date = Query(..., alias="from", description="First day of the period"),
+    to_date: date = Query(..., alias="to", description="Last day of the period"),
+) -> RevenueBusinessSummary:
+    """The same summary for another FBOS service with no user signed in (the gateway's nightly
+    CEO Command Center snapshots)."""
+    check_period(from_date, to_date)
+    return await BusinessSummaryService.revenue(session, organization_id, from_date, to_date)

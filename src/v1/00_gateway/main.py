@@ -1,16 +1,23 @@
+import asyncio
 from contextlib import asynccontextmanager
 from typing import AsyncIterator
 
 import httpx
 from fastapi import FastAPI
+
+from config import settings
 from router import router
+from services.ceo_snapshots import run_forever as run_ceo_snapshots
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     client = httpx.AsyncClient(timeout=30.0)
     app.state.http_client = client
+    snapshots = asyncio.create_task(run_ceo_snapshots(client)) if settings.ceo_snapshot_enabled else None
     yield
+    if snapshots is not None:
+        snapshots.cancel()
     await client.aclose()
 
 

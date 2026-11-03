@@ -2,10 +2,11 @@ import uuid
 from datetime import date
 from typing import Optional
 
-from fastapi import APIRouter, Header, Query, status
+from fastapi import APIRouter, Depends, Header, Query, status
 
 import services.analytics as service
-from dependencies import DatabaseSession, OrgId, UserId
+from dependencies import DatabaseSession, OrgId, UserId, require_permission
+import permissions
 from schemas.analytics import (
     DashboardResponse,
     MetricSeriesResponse,
@@ -16,8 +17,11 @@ from schemas.audit import JobResponse
 
 router = APIRouter(tags=["analytics"])
 
+CAN_READ = Depends(require_permission(permissions.ANALYTICS_READ))
+CAN_RUN_REPORTS = Depends(require_permission(permissions.REPORT_RUN))
 
-@router.get("/dashboards/{dashboard_code}", response_model=DashboardResponse)
+
+@router.get("/dashboards/{dashboard_code}", response_model=DashboardResponse, dependencies=[CAN_READ])
 async def get_dashboard(
     dashboard_code: str,
     session: DatabaseSession,
@@ -29,7 +33,7 @@ async def get_dashboard(
     return await service.get_dashboard(session, org_id, dashboard_code, period_id, vertical_id)
 
 
-@router.get("/metrics/{metric_code}", response_model=MetricSeriesResponse)
+@router.get("/metrics/{metric_code}", response_model=MetricSeriesResponse, dependencies=[CAN_READ])
 async def get_metric_series(
     metric_code: str,
     session: DatabaseSession,
@@ -50,6 +54,7 @@ async def get_metric_series(
     "/reports/{report_code}/runs",
     response_model=JobResponse,
     status_code=status.HTTP_202_ACCEPTED,
+    dependencies=[CAN_RUN_REPORTS],
 )
 async def run_report(
     report_code: str,
@@ -65,7 +70,7 @@ async def run_report(
     return job
 
 
-@router.get("/report-runs/{run_id}", response_model=ReportRunResponse)
+@router.get("/report-runs/{run_id}", response_model=ReportRunResponse, dependencies=[CAN_READ])
 async def get_report_run(
     run_id: uuid.UUID,
     session: DatabaseSession,

@@ -22,6 +22,35 @@ class InsightServiceError(HTTPException):
         super().__init__(status_code=status_code, detail=payload)
 
 
+# --- Authentication and permission (401, 403, 503) -----------------------------
+
+
+class AuthenticationRequiredError(InsightServiceError):
+    def __init__(self) -> None:
+        super().__init__(status.HTTP_401_UNAUTHORIZED, "AUTHENTICATION_REQUIRED", "Bearer token required")
+
+
+class AuthServiceUnavailableError(InsightServiceError):
+    """503: Identity could not be reached to authenticate the request."""
+
+    def __init__(self) -> None:
+        super().__init__(
+            status.HTTP_503_SERVICE_UNAVAILABLE,
+            "AUTH_SERVICE_UNAVAILABLE",
+            "Sign-in could not be checked right now. Try again shortly.",
+        )
+
+
+class PermissionDeniedError(InsightServiceError):
+    def __init__(self, required_permission: str) -> None:
+        super().__init__(
+            status.HTTP_403_FORBIDDEN,
+            "PERMISSION_DENIED",
+            f"You need the '{required_permission}' permission to do this",
+            meta={"required_permission": required_permission},
+        )
+
+
 # --- Not found (404) ---------------------------------------------------------
 
 

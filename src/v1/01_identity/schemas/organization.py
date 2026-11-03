@@ -55,3 +55,16 @@ class OrganizationResponse(BaseModel):
     status: str
     relationship: str = "own"
     created_at: Optional[str] = None
+
+
+class ActiveOrganization(BaseModel):
+    """One active company of an active client (internal: background jobs)."""
+
+    id: uuid.UUID
+    client_id: uuid.UUID
+    name: str
+    relationship: str
+
+
+class ActiveOrganizationsResponse(BaseModel):
+    data: list[ActiveOrganization]

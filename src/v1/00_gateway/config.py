@@ -1,3 +1,4 @@
+from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -43,6 +44,17 @@ class Settings(BaseSettings):
     # The organization the inventory service (Fixly) serves (its FBOS_ORGANIZATION_ID). Empty: the
     # caller's own organization is asked, and any other answers ORGANIZATION_NOT_SERVED.
     inventory_organization_id: str = ""
+
+    # Nightly snapshots of the Command Center's totals into Insight (CEO plan B4), which the
+    # screen's trend and comparisons read. Turn on in one gateway only.
+    ceo_snapshot_enabled: bool = False
+    # Server-local hour of the nightly run; it snapshots the day before.
+    ceo_snapshot_hour: int = Field(1, ge=0, le=23)
+    # Money that happened (revenue, costs) is read again this many days back, so entries
+    # recorded late still land on their own day. Positions (receivables, headcount) can't be.
+    ceo_snapshot_refresh_days: int = Field(7, ge=1, le=62)
+    # When identity can't list the companies, the night's run is tried again this much later.
+    ceo_snapshot_retry_seconds: int = Field(900, ge=60)
 
 
 settings = Settings()

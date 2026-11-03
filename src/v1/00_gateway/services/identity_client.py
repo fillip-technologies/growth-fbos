@@ -18,6 +18,7 @@ from exceptions import AuthServiceUnavailableError, GatewayServiceError
 ACTOR_PATH = "/api/identity/v1/internal/authz/actor"
 ORGANIZATIONS_PATH = "/api/identity/v1/organizations"
 ME_PATH = "/api/identity/v1/auth/me"
+ACTIVE_ORGANIZATIONS_PATH = "/api/identity/v1/internal/organizations"
 # Identity's page limit for organizations; a client with more is read page by page.
 ORGANIZATIONS_PAGE = 100
 INACTIVE_ORGANIZATION_STATUSES = ("deleted", "archived", "suspended")
@@ -95,6 +96,15 @@ class IdentityClient:
         if not organization:
             return None
         return Organization(id=uuid.UUID(organization["id"]), name=organization["name"])
+
+    async def active_organizations(self) -> list[Organization]:
+        """Every active company of every active client (internal: jobs with no one signed in)."""
+        headers = {"X-FBOS-Internal-Token": self._internal_token} if self._internal_token else {}
+        body = await self._get(ACTIVE_ORGANIZATIONS_PATH, headers)
+        return [
+            Organization(id=uuid.UUID(row["id"]), name=row["name"], relationship=row.get("relationship") or "own")
+            for row in body.get("data", [])
+        ]
 
     async def _get(self, path: str, headers: dict[str, str], params: Optional[dict[str, str]] = None) -> Any:
         try:

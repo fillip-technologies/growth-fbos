@@ -27,6 +27,7 @@ ASSETS_PATH = "/api/assets/v1/summaries/costs"
 FINANCE_PATH = "/api/finance/v1/summaries/finance"
 APPROVALS_PATH = "/api/control/v1/approvals/requests"
 INVENTORY_PATH = "/api/inventory/v1/reports/summary"
+SNAPSHOTS_PATH = "/api/insight/v1/metric-snapshots"
 # Control's open approval statuses; its list filters on one at a time.
 OPEN_APPROVAL_STATUSES = ("pending", "in_progress")
 APPROVALS_PAGE = 100
@@ -94,8 +95,12 @@ class SummaryReader:
         period = {"from": from_date.isoformat(), "to": to_date.isoformat()}
         return await self._get(settings.inventory_service_url, INVENTORY_PATH, period, organization_id)
 
+    async def snapshots(self, organization_id: uuid.UUID, params: dict[str, Any]) -> SourceResult:
+        """Insight's nightly snapshots of one company (`metric_code` may repeat)."""
+        return await self._get(settings.insight_service_url, SNAPSHOTS_PATH, params, organization_id)
+
     async def _get(
-        self, base_url: str, path: str, params: dict[str, str], organization_id: uuid.UUID
+        self, base_url: str, path: str, params: dict[str, Any], organization_id: uuid.UUID
     ) -> SourceResult:
         headers = {"Authorization": self._authorization, "X-Organization-Id": str(organization_id)}
         async with self._slots:

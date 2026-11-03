@@ -2,14 +2,18 @@ import uuid
 from datetime import date, datetime
 from typing import Optional
 
-from fastapi import APIRouter, Header, Query, status
+from fastapi import APIRouter, Depends, Header, Query, status
 
 import services.audit as service
-from dependencies import DatabaseSession, OrgId
+from dependencies import DatabaseSession, OrgId, require_permission
+import permissions
 from schemas.audit import AuditEventResponse, AuditExportRequest, AuditVerifyResult, JobResponse
 from schemas.common import PageResponse
 
-router = APIRouter(prefix="/audit", tags=["audit"])
+# Searching, verifying and exporting all read the same trail: one code covers them.
+router = APIRouter(
+    prefix="/audit", tags=["audit"], dependencies=[Depends(require_permission(permissions.AUDIT_READ))]
+)
 
 
 @router.get("/events", response_model=PageResponse[AuditEventResponse])

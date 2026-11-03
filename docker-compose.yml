@@ -206,6 +206,9 @@ services:
     ports:
       - "8008:8000"
     env_file: ./src/v1/08_insight/.env
+    environment:
+      # Service-to-service URL inside the compose network (overrides the .env's localhost default)
+      IDENTITY_SERVICE_URL: http://identity:8000
     depends_on:
       db:
         condition: service_healthy

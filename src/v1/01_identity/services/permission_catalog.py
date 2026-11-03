@@ -210,6 +210,10 @@ PERMISSION_CATALOG: list[tuple[str, str, str]] = [
         "insight",
         "See sensitive figures on the CEO Command Center: payroll, expenses, profit, margins, budgets, investments",
     ),
+    # Insight: the audit trail, analytics dashboards and metric series, and reports.
+    ("insight.audit.read", "insight", "Search, verify and export the audit trail of what everyone did"),
+    ("insight.analytics.read", "insight", "View analytics dashboards, metric series and report runs"),
+    ("insight.report.run", "insight", "Run analytics reports"),
 ]
 
 ADMIN_ROLE_CODE = "admin"
@@ -246,6 +250,9 @@ SENSITIVE_READ_CODES = {
     "assets.summary.read",
     "finance.summary.read",
     "insight.ceo_dashboard.read",
+    # Insight: everyone's actions, and company-wide metrics.
+    "insight.audit.read",
+    "insight.analytics.read",
     # Finance: every operating expense and the company's investments are company-wide money.
     "finance.expense.read",
     "finance.investment.read",

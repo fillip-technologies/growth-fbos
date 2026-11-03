@@ -280,6 +280,22 @@ class AlertsSection(BaseModel):
     expenses_awaiting_approval: Optional[int] = None  # financials: finance expenses above the threshold
 
 
+class TrendMonth(BaseModel):
+    month: str  # YYYY-MM
+    revenue: Optional[float] = None  # None: no company's revenue has a snapshot that month
+    expenses: Optional[float] = None  # financials: payroll, project costs, purchases, asset costs, operating expenses
+    profit: Optional[float] = None  # financials: revenue - expenses
+    complete: bool = False  # every figure of every company has a snapshot for each day of the month so far
+
+
+class TrendSection(Section):
+    """The 12 months to the period's end, from Insight's nightly snapshots (CEO plan B4). A month
+    the snapshots don't fully cover says so (`complete`); the current month runs to `through`."""
+
+    months: list[TrendMonth] = []
+    through: Optional[date] = None  # the last day the nightly snapshots cover
+
+
 class CeoScreen(BaseModel):
     period: Period
     previous_period: Period
@@ -301,3 +317,4 @@ class CeoScreen(BaseModel):
     procurement: ProcurementSection
     field: FieldSection
     alerts: AlertsSection
+    trend: TrendSection = TrendSection(reason="unavailable")

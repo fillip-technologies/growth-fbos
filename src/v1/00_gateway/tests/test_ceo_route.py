@@ -178,3 +178,20 @@ async def test_a_backwards_period_is_422(downstream):
     res = await get("/screens/ceo?from=2026-11-30&to=2026-11-01")
     assert res.status_code == 422
     assert (await get("/screens/ceo?compare=last_year")).status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_the_snapshots_are_read_with_the_callers_token_for_each_company(downstream):
+    fake = downstream(actor_body())
+    res = await get("/screens/ceo?from=2026-11-01&to=2026-11-30")
+    assert res.status_code == 200, res.text
+    reads = fake.asked("/api/insight/v1/metric-snapshots")
+    assert len(reads) == 2  # the trend's months and the previous period's last day
+    for read in reads:
+        assert read.headers["authorization"] == "Bearer t"
+        assert read.headers["x-organization-id"] == str(HOME_ORG)
+    trend = next(r for r in reads if r.url.params["granularity"] == "month")
+    # Without the financials permission only revenue is asked for.
+    assert trend.url.params.get_list("metric_code") == ["ceo.revenue"]
+    # Insight answered 503 here: the trend says so and the rest of the screen still answers.
+    assert res.json()["trend"]["reason"] == "unavailable"

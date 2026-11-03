@@ -16,9 +16,10 @@ import permissions
 from schemas.ceo import CeoScreen, Period
 from services.ceo_screen import build_screen
 from services.ceo_sources import SourceResult, SummaryReader
+from services.ceo_trend import CompanySnapshots, apply_snapshots, previous_query, trend_query
 from services.identity_client import Actor, IdentityClient, Organization
 
-# Three years keeps every service's summary cheap; longer trends come from Insight snapshots.
+# Three years keeps every service's summary cheap; the 12-month trend comes from Insight's snapshots.
 MAX_PERIOD_DAYS = 3 * 366
 OWN_COMPANY_FALLBACK_NAME = "Your company"
 
@@ -72,18 +73,41 @@ async def load_ceo_screen(
     inventory_read = (
         reader.inventory(served, period.from_date, period.to_date) if served else _not_set_up()
     )
-    *company_results, inventory = await asyncio.gather(
+    # The snapshots are read beside the live summaries, so they add no wait of their own.
+    live_reads = asyncio.gather(
         *(reader.company(org.id, period.from_date, period.to_date, financials) for org in organizations),
         inventory_read,
     )
-    return build_screen(
+    snapshot_reads = asyncio.gather(*(_snapshots(reader, org.id, period, previous, financials) for org in organizations))
+    (*company_results, inventory), snapshot_results = await asyncio.gather(live_reads, snapshot_reads)
+    companies = {org.id: result for org, result in zip(organizations, company_results)}
+    screen = build_screen(
         period=period,
         previous_period=previous,
         organizations=organizations,
-        companies={org.id: result for org, result in zip(organizations, company_results)},
+        companies=companies,
         inventory=inventory,
         can_see_financials=financials,
     )
+    return apply_snapshots(
+        screen,
+        companies=companies,
+        inventory=inventory,
+        inventory_company=served,
+        snapshots={org.id: result for org, result in zip(organizations, snapshot_results)},
+        can_see_financials=financials,
+        today=date.today(),
+    )
+
+
+async def _snapshots(
+    reader: SummaryReader, organization_id: uuid.UUID, period: Period, previous: Period, financials: bool
+) -> CompanySnapshots:
+    trend, previous_day = await asyncio.gather(
+        reader.snapshots(organization_id, trend_query(period, financials)),
+        reader.snapshots(organization_id, previous_query(previous)),
+    )
+    return CompanySnapshots(trend=trend, previous=previous_day)
 
 
 async def _not_set_up() -> SourceResult:

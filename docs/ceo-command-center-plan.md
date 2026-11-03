@@ -285,5 +285,23 @@ These are recorded so the design leaves room for them. **They are not built now.
   `.env` on the server, deploy (start.sh runs the migration), restart Identity (new codes), add
   `finance` to Documents' `SUBJECT_SERVICES` there (compose already does). clientadmin screens: `/expenses`,
   `/investments`, `/finance-setup` (`features/finance`); the Command Center cards link to them.
-- [ ] B4 — Snapshots in Insight
+- [ ] B4 — Snapshots in Insight: built and tested 2026-11-03, not deployed. The gateway's nightly job
+  (`00_gateway/services/ceo_snapshots.py`, `CEO_SNAPSHOT_ENABLED` in **one** gateway, `CEO_SNAPSHOT_HOUR`,
+  `CEO_SNAPSHOT_REFRESH_DAYS`) lists every active company (Identity `GET /internal/organizations`), reads each
+  service's new internal twin of its summary (`GET /internal/summaries/{revenue|delivery|people|health|costs|finance}`,
+  Fixly `GET /internal/reports/summary`, all behind the internal service token) for the day before, and writes
+  `ceo.*` rows to Insight `metric_daily` (`PUT /internal/metric-snapshots`; codes and how they add up in
+  `08_insight/services/ceo_metrics.py`). What happened (revenue, costs, purchases, expenses, other income) is re-read
+  for the last 7 days; payroll is stored on the month's 1st (a run belongs to a month); positions (receivables,
+  pipeline, clients, projects, headcount, health) are as of the run and can't be backfilled. Backfill:
+  `python -m services.ceo_snapshots --from YYYY-MM-DD` in the gateway. The screen reads `GET /metric-snapshots`
+  per company with the caller's token beside the live calls: `trend` (12 months of revenue, expenses, profit, with
+  `complete` per month) and `previous` for the position KPIs. A company's snapshot counts only where its live card
+  was read; money needs `insight.ceo_dashboard.financials`. The live summaries still give the period and the
+  period before (one query each), so the fan-out itself stays. Insight moved to Identity auth (it trusted
+  `X-FBOS-Org-Id` before): new codes `insight.audit.read`, `insight.analytics.read` (both sensitive),
+  `insight.report.run`; `/metrics/ceo.*` answers 404. clientadmin: the trend card, falling back to the period's
+  live months until snapshots exist. **To ship:** restart Identity (codes, new endpoint), deploy every service
+  with an internal summary and Fixly, set Insight's `IDENTITY_SERVICE_URL` / `INTERNAL_SERVICE_TOKEN`, set
+  `CEO_SNAPSHOT_ENABLED=true` and `INTERNAL_SERVICE_TOKEN` on one gateway, then run the backfill once.
 - Future scope: Decision Matrix, Ask FBOS AI
