@@ -21,10 +21,12 @@ class ClientCreateRequest(BaseModel):
     base_currency: str = "INR"
     timezone: str = "Asia/Kolkata"
     # Service window (inclusive) during which the client may use the platform.
-    # Defaults to today .. one year later (see client_service.create_client).
+    # Defaults to today .. one year later when subscription_end is omitted; an explicit
+    # null means no expiry (see client_service.create_client).
     subscription_start: Optional[date] = None
     subscription_end: Optional[date] = None
-    # Quotas controlled exclusively by platform_admin
+    # Quotas controlled exclusively by platform_admin. Omitted -> the default below;
+    # an explicit null means unlimited.
     max_organizations: Optional[int] = Field(default=2, ge=1, le=1000)
     max_users_per_org: Optional[int] = Field(default=50, ge=1, le=10000)
 
@@ -41,6 +43,8 @@ class ClientUpdateRequest(BaseModel):
     name: Optional[str] = None
     contact_email: Optional[EmailStr] = None
     status: Optional[str] = None
+    # For the quotas and subscription_end, an explicit null means unlimited / no expiry;
+    # an omitted field is left unchanged (see client_service.update_client).
     max_organizations: Optional[int] = Field(default=None, ge=1, le=1000)
     max_users_per_org: Optional[int] = Field(default=None, ge=1, le=10000)
     subscription_start: Optional[date] = None
@@ -55,11 +59,13 @@ class ClientResponse(BaseModel):
     code: str
     contact_email: str
     status: str
-    max_organizations: int = 2
-    max_users_per_org: int = 50
+    # None = unlimited
+    max_organizations: Optional[int] = None
+    max_users_per_org: Optional[int] = None
     subscription_start: Optional[date] = None
+    # None = no expiry
     subscription_end: Optional[date] = None
-    # "upcoming" | "active" | "expiring" (<= 30 days left) | "expired"
+    # "upcoming" | "active" | "expiring" (<= 30 days left) | "expired" | "unlimited" (no end date)
     subscription_state: Optional[str] = None
     active_organizations_count: Optional[int] = None
     created_at: Optional[str] = None

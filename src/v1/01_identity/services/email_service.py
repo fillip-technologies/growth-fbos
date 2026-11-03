@@ -109,6 +109,9 @@ class EmailService:
             start, end = self._fmt_date(data.get("subscription_start")), self._fmt_date(data.get("subscription_end"))
             if start and end:
                 rows.append(("Service period", f"{start} to {end}"))
+            elif start and "subscription_end" in data:
+                # The key is present but empty: the client has no end date.
+                rows.append(("Service period", f"From {start} · No expiry"))
         else:
             subject = f"You're invited to {org_name}" if org_name else "You're invited to FBOS"
             title = "You've been invited"
