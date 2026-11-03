@@ -406,3 +406,13 @@ async def test_workflow_design_and_run(async_client):
 
     history = await ok(await async_client.get(f"{BASE}/workflow/instances/{instance['id']}/history"))
     assert [(h["type"], h["stage_code"]) for h in history["data"]] == [("started", None), ("transition", "build"), ("cancelled", None)]
+
+
+async def test_projects_filter_by_the_contract_they_deliver(async_client):
+    contract_id = str(uuid.uuid4())
+    delivering = await create_project(async_client, name="Delivers it", client_id=str(uuid.uuid4()), contract_id=contract_id)
+    await create_project(async_client, name="Something else")
+
+    listed = await ok(await async_client.get(f"{BASE}/work-units", params={"contract_id": contract_id}))
+
+    assert [p["id"] for p in listed["data"]] == [delivering["id"]]
