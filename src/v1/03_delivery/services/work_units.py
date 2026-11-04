@@ -469,6 +469,7 @@ async def _work_unit_responses(session: AsyncSession, work_units: list[WorkUnit]
                 vertical=vertical_ref(work_unit.vertical_id),
                 client=client_ref(work_unit.client_id),
                 contract={"id": str(work_unit.contract_id)} if work_unit.contract_id else None,
+                partner_organization_id=work_unit.partner_organization_id,
                 manager=user_ref(work_unit.manager_user_id),
                 planned_start=work_unit.planned_start,
                 planned_end=work_unit.planned_end,
@@ -578,6 +579,7 @@ async def create_work_unit(
         owning_unit_id=data.owning_unit_id,
         client_id=data.client_id,
         contract_id=data.contract_id,
+        partner_organization_id=_partner(org_id, data.partner_organization_id),
         manager_user_id=data.manager_user_id,
         planned_start=data.planned_start,
         planned_end=data.planned_end,
@@ -755,6 +757,13 @@ async def get_work_unit(session: AsyncSession, org_id: uuid.UUID, work_unit_id: 
     return await _work_unit_response(session, work_unit)
 
 
+def _partner(org_id: uuid.UUID, partner_organization_id: Optional[uuid.UUID]) -> Optional[uuid.UUID]:
+    """An associate is another company: work can't be given to the organization that owns it."""
+    if partner_organization_id == org_id:
+        raise ValidationFailedError("partner_organization_id", "must be another company, not this one")
+    return partner_organization_id
+
+
 async def update_work_unit(
     session: AsyncSession,
     org_id: uuid.UUID,
@@ -782,6 +791,8 @@ async def update_work_unit(
         merged = dict(work_unit.attributes or {})
         merged.update(data.attributes)
         work_unit.attributes = merged
+    if "partner_organization_id" in data.model_fields_set:
+        work_unit.partner_organization_id = _partner(org_id, data.partner_organization_id)
 
     work_unit.updated_at = datetime.now(timezone.utc)
     work_unit.version += 1

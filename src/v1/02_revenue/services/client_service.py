@@ -19,6 +19,7 @@ from schemas.client import ClientCreate, ClientResponse, ClientUpdate, ContactCr
 from schemas.common import Address, PageMeta, PageResponse, decode_cursor, encode_cursor
 from schemas.opportunity import UserRef
 
+HOME_COUNTRY = "IN"
 GSTIN_REGEX = re.compile(r"^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z]{1}[1-9A-Z]{1}Z[0-9A-Z]{1}$")
 
 
@@ -31,6 +32,13 @@ def validate_gstin(gstin: Optional[str], state_code: str) -> None:
         raise GSTINInvalidError("Invalid GSTIN structure or checksum")
     if not cleaned.startswith(state_code):
         raise GSTINInvalidError(f"GSTIN state prefix '{cleaned[:2]}' does not match billing state code '{state_code}'")
+
+
+def address_location(address: Address) -> tuple[str, Optional[str]]:
+    """The (country, state_code) columns kept in step with a billing address."""
+    country = (address.country or HOME_COUNTRY).strip().upper()[:2] or HOME_COUNTRY
+    state_code = (address.state_code or "").strip()[:2] or None
+    return country, state_code
 
 
 def format_client_response(client: Client, contacts: list[ClientContact]) -> ClientResponse:
@@ -152,6 +160,7 @@ class ClientService:
             source=payload.source,
             version=1,
         )
+        client.country, client.state_code = address_location(payload.billing_address)
         if payload.created_on:
             client.created_at = datetime.combine(payload.created_on, datetime.min.time())
         session.add(client)
@@ -216,6 +225,7 @@ class ClientService:
             client.legal_name = payload.legal_name
         if payload.billing_address is not None:
             client.billing_address = payload.billing_address.model_dump_json()
+            client.country, client.state_code = address_location(payload.billing_address)
         if payload.owner_user_id is not None:
             client.owner_user_id = payload.owner_user_id
         if payload.status is not None:

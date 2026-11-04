@@ -43,6 +43,9 @@ class WorkUnit(Base):
     scope_path: Mapped[Optional[str]] = mapped_column(String(255), nullable=True, index=True)
     client_id: Mapped[Optional[uuid.UUID]] = mapped_column(UUIDType, nullable=True, index=True)
     contract_id: Mapped[Optional[uuid.UUID]] = mapped_column(UUIDType, nullable=True, index=True)
+    # The associate company (another organization of the client) doing this work for us: what we
+    # pay them is its "subcontract" cost entries. The CEO Command Center's "business from associates".
+    partner_organization_id: Mapped[Optional[uuid.UUID]] = mapped_column(UUIDType, nullable=True, index=True)
     deal_id: Mapped[Optional[uuid.UUID]] = mapped_column(UUIDType, nullable=True, index=True)
     manager_user_id: Mapped[Optional[uuid.UUID]] = mapped_column(UUIDType, nullable=True, index=True)
 

@@ -32,6 +32,9 @@ class Organization(Base):
         nullable=True,
     )
     status: Mapped[str] = mapped_column(String(50), nullable=False, default="active")
+    # How the client relates to this company: its own, an associate it gives work to, or one it
+    # has invested in. The CEO Command Center groups companies by it.
+    relationship: Mapped[str] = mapped_column(String(20), nullable=False, default="own", server_default="own")
     created_at: Mapped[datetime] = mapped_column(
         DateTime, server_default=func.now(), nullable=False
     )

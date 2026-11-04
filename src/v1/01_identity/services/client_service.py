@@ -1,3 +1,4 @@
+from datetime import date
 import logging
 from typing import Optional
 import uuid
@@ -51,6 +52,15 @@ class ClientService:
             created_at=client.created_at.isoformat() if client.created_at else None,
         )
 
+    @staticmethod
+    def _initial_subscription_end(data: ClientCreateRequest, start: date) -> Optional[date]:
+        """Omitted -> one year after start; explicit null -> None (no expiry)."""
+        if data.subscription_end is not None:
+            return data.subscription_end
+        if "subscription_end" in data.model_fields_set:
+            return None
+        return add_one_year(start)
+
     async def create_client(
         self,
         session: AsyncSession,
@@ -69,8 +79,8 @@ class ClientService:
             raise ClientCodeAlreadyExistsError(data.code)
 
         start = data.subscription_start or today_utc()
-        end = data.subscription_end or add_one_year(start)
-        if end < start:
+        end = self._initial_subscription_end(data, start)
+        if end is not None and end < start:
             raise InvalidSubscriptionWindowError()
 
         client = Client(
@@ -79,8 +89,9 @@ class ClientService:
             code=data.code,
             contact_email=data.contact_email,
             status="active",
-            max_organizations=data.max_organizations if data.max_organizations is not None else 2,
-            max_users_per_org=data.max_users_per_org if data.max_users_per_org is not None else 50,
+            # The schema defaults an omitted quota; an explicit null stays None (unlimited).
+            max_organizations=data.max_organizations,
+            max_users_per_org=data.max_users_per_org,
             subscription_start=start,
             subscription_end=end,
         )
@@ -123,7 +134,9 @@ class ClientService:
                     **payload,
                     "client_name": client.name,
                     "subscription_start": client.subscription_start.isoformat(),
-                    "subscription_end": client.subscription_end.isoformat(),
+                    "subscription_end": (
+                        client.subscription_end.isoformat() if client.subscription_end else None
+                    ),
                 }
             await event_publisher.publish(topic, payload)
 
@@ -271,15 +284,18 @@ class ClientService:
             client.contact_email = data.contact_email
         if data.status is not None:
             client.status = data.status
-        if data.max_organizations is not None:
+        # For these fields an explicit null means unlimited / no expiry, so "provided" decides,
+        # not "is not None".
+        provided = data.model_fields_set
+        if "max_organizations" in provided:
             client.max_organizations = data.max_organizations
-        if data.max_users_per_org is not None:
+        if "max_users_per_org" in provided:
             client.max_users_per_org = data.max_users_per_org
         if data.subscription_start is not None:
             client.subscription_start = data.subscription_start
-        if data.subscription_end is not None:
+        if "subscription_end" in provided:
             client.subscription_end = data.subscription_end
-        if client.subscription_end < client.subscription_start:
+        if client.subscription_end is not None and client.subscription_end < client.subscription_start:
             await session.rollback()
             raise InvalidSubscriptionWindowError()
 

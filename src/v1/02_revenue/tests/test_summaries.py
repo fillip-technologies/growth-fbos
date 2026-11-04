@@ -28,7 +28,7 @@ def _client(org=TEST_ORG_ID, name="Acme") -> Client:
 def _invoice(client: Client, status: str, total: float, balance: float, due: date | None, issued: date | None, **extra) -> Invoice:
     return Invoice(
         organization_id=client.organization_id, client_id=client.id, doc_type=extra.pop("doc_type", "tax_invoice"),
-        supplier_gstin=TEST_SUPPLIER_GSTIN, place_of_supply="29", status=status, grand_total=total, balance_due=balance,
+        supplier_gstin=TEST_SUPPLIER_GSTIN, place_of_supply=extra.pop("place_of_supply", "29"), status=status, grand_total=total, balance_due=balance,
         due_date=due, issue_date=issued, **extra,
     )
 
@@ -187,6 +187,7 @@ SUMMARY_ROUTES = [
     ("/contracts/summary", "revenue.contract.read"),
     ("/invoices/summary", "revenue.invoice.read"),
     ("/payments/summary", "revenue.payment.read"),
+    ("/summaries/revenue?from=2026-11-01&to=2026-11-30", "revenue.summary.read"),
 ]
 
 
@@ -198,3 +199,170 @@ async def test_each_summary_needs_its_resources_read_permission(client_as, path:
     assert res.status_code == 403
     assert res.json()["detail"]["meta"]["required_permission"] == code
     assert (await client_as(code).get(f"{BASE}{path}")).status_code == 200
+
+
+# --------------------------------------------------------------------------- business summary
+
+
+@pytest.mark.asyncio
+async def test_business_summary_revenue_is_net_of_tax_with_credit_notes_negative(db_session: AsyncSession):
+    from models.contract import Contract
+    from models.invoice import InvoiceLine
+    from models.offering import Offering
+    from models.renewal import Renewal
+    from services.business_summary import BusinessSummaryService
+
+    vertical = uuid.uuid4()
+    acme = _client(name="Acme")
+    acme.status = "prospect"
+    govt = Client(organization_id=TEST_ORG_ID, code="G-1", name="State", client_type="government", owner_user_id=TEST_USER_ID, status="active")
+    elsewhere = _client(org=OTHER_ORG)
+    db_session.add_all([acme, govt, elsewhere])
+    await db_session.flush()
+    offering = Offering(organization_id=TEST_ORG_ID, vertical_id=vertical, code="AMC", name="AMC", billing_model="fixed")
+    amc = Contract(
+        organization_id=TEST_ORG_ID, client_id=govt.id, contract_no="K-1", contract_type="amc", status="active",
+        start_date=date(2026, 1, 1), total_value=120_000,
+    )
+    db_session.add_all([offering, amc])
+    await db_session.flush()
+    db_session.add(Renewal(contract_id=amc.id, date=TODAY + timedelta(days=10), status="pending", owner_user_id=TEST_USER_ID))
+
+    # In the period: 1000 + 500 (AMC, state 27) - 200 credit note = 1300 net. Tax is never revenue.
+    first = _invoice(acme, "paid", 1180, 0, None, date(2026, 10, 5), taxable_total=1000)
+    second = _invoice(govt, "issued", 590, 590, TODAY - timedelta(days=3), date(2026, 11, 2),
+                      taxable_total=500, contract_id=amc.id, place_of_supply="27")
+    credit = _invoice(acme, "issued", 236, 0, None, date(2026, 11, 3), taxable_total=200, doc_type="credit_note")
+    previous = _invoice(acme, "paid", 118, 0, None, date(2026, 8, 20), taxable_total=100)
+    draft = _invoice(acme, "draft", 9999, 9999, None, date(2026, 11, 4), taxable_total=9000)
+    other_org = _invoice(elsewhere, "issued", 5000, 5000, None, date(2026, 11, 4), taxable_total=4000)
+    db_session.add_all([first, second, credit, previous, draft, other_org])
+    await db_session.flush()
+    db_session.add(InvoiceLine(invoice_id=second.id, offering_id=offering.id, line_no=1, description="AMC",
+                               unit_price=500, taxable_value=500, line_total=590))
+    db_session.add(InvoiceLine(invoice_id=first.id, line_no=1, description="Misc", unit_price=1000, taxable_value=1000, line_total=1180))
+    db_session.add(Opportunity(organization_id=TEST_ORG_ID, client_id=acme.id, name="Open", status="proposal",
+                               expected_value=40_000, owner_user_id=TEST_USER_ID))
+    db_session.add(Opportunity(organization_id=TEST_ORG_ID, client_id=acme.id, name="Won", status="won",
+                               expected_value=70_000, owner_user_id=TEST_USER_ID))
+    await db_session.commit()
+
+    summary = await BusinessSummaryService.revenue(db_session, TEST_ORG_ID, date(2026, 10, 1), date(2026, 11, 30), today=TODAY)
+
+    assert summary.revenue.amount == 1300
+    assert (summary.previous_period.from_date, summary.previous_period.to_date) == (date(2026, 8, 1), date(2026, 9, 30))
+    assert summary.revenue_previous.amount == 100
+    assert summary.receivables.amount == 590
+    assert summary.overdue.amount == 590
+    assert summary.pipeline.amount == 40_000
+    assert (summary.clients.total, summary.clients.active) == (2, 1)
+    assert [(m.month, m.amount.amount) for m in summary.revenue_by_month] == [("2026-10", 1000), ("2026-11", 300)]
+    assert {b.key: b.amount.amount for b in summary.revenue_by_vertical} == {str(vertical): 500, "none": 1000}
+    assert {b.key: b.amount.amount for b in summary.revenue_by_state} == {"29": 800, "27": 500}
+    assert {b.key: b.amount.amount for b in summary.revenue_by_client_type} == {"company": 800, "government": 500}
+    assert {b.key: b.amount.amount for b in summary.revenue_by_contract_type} == {"none": 800, "amc": 500}
+    assert (summary.amc.active_contracts, summary.amc.clients, summary.amc.renewals_due) == (1, 1, 1)
+    assert summary.amc.active_value.amount == 120_000
+    assert summary.amc.revenue.amount == 500
+    assert summary.revenue_by_work_unit == []
+
+
+@pytest.mark.asyncio
+async def test_business_summary_refuses_a_backwards_or_too_long_period(client_as):
+    reader = client_as("revenue.summary.read")
+    assert (await reader.get(f"{BASE}/summaries/revenue?from=2026-11-30&to=2026-11-01")).status_code == 422
+    assert (await reader.get(f"{BASE}/summaries/revenue?from=2020-01-01&to=2026-11-01")).status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_business_summary_splits_by_segment_product_line_and_state(db_session: AsyncSession):
+    from models.client_tax_profile import ClientTaxProfile
+    from models.invoice import InvoiceLine
+    from models.offering import Offering
+    from services.business_summary import BusinessSummaryService
+
+    private_in = Client(organization_id=TEST_ORG_ID, code="P-1", name="Acme", client_type="company",
+                        owner_user_id=TEST_USER_ID, country="IN", state_code="29")
+    govt_in = Client(organization_id=TEST_ORG_ID, code="G-1", name="State", client_type="government",
+                     owner_user_id=TEST_USER_ID, country="IN", state_code="27")
+    # The address says India, but the tax profile says the customer is abroad: the profile wins.
+    abroad = Client(organization_id=TEST_ORG_ID, code="X-1", name="Overseas", client_type="company",
+                    owner_user_id=TEST_USER_ID, country="IN", state_code=None)
+    db_session.add_all([private_in, govt_in, abroad])
+    await db_session.flush()
+    db_session.add(ClientTaxProfile(client_id=abroad.id, organization_id=TEST_ORG_ID, country="US"))
+    hardware = Offering(organization_id=TEST_ORG_ID, code="CAM", name="Camera", billing_model="one_time", product_line="hardware")
+    amc = Offering(organization_id=TEST_ORG_ID, code="AMC", name="AMC", billing_model="recurring", product_line="amc")
+    db_session.add_all([hardware, amc])
+    await db_session.flush()
+
+    issued = date(2026, 11, 2)
+    project = uuid.uuid4()
+    first = _invoice(private_in, "issued", 1180, 1180, None, issued, taxable_total=1000, work_unit_id=project)
+    second = _invoice(govt_in, "issued", 590, 590, None, issued, taxable_total=500)
+    third = _invoice(abroad, "issued", 300, 300, None, issued, taxable_total=300)
+    db_session.add_all([first, second, third])
+    await db_session.flush()
+    db_session.add_all([
+        InvoiceLine(invoice_id=first.id, offering_id=hardware.id, line_no=1, description="Cams", unit_price=1000, taxable_value=1000, line_total=1180),
+        InvoiceLine(invoice_id=second.id, offering_id=amc.id, line_no=1, description="AMC", unit_price=500, taxable_value=500, line_total=590),
+        InvoiceLine(invoice_id=third.id, line_no=1, description="Misc", unit_price=300, taxable_value=300, line_total=300),
+    ])
+    await db_session.commit()
+
+    summary = await BusinessSummaryService.revenue(db_session, TEST_ORG_ID, date(2026, 11, 1), date(2026, 11, 30), today=TODAY)
+
+    assert {(s.sector, s.market): s.amount.amount for s in summary.revenue_by_segment} == {
+        ("private", "india"): 1000, ("government", "india"): 500, ("private", "international"): 300,
+    }
+    assert {b.key: b.amount.amount for b in summary.revenue_by_product_line} == {"hardware": 1000, "amc": 500, "none": 300}
+    assert {(s.sector, s.market): s.count for s in summary.clients_by_segment} == {
+        ("private", "india"): 1, ("government", "india"): 1, ("private", "international"): 1,
+    }
+    assert {s.key: s.count for s in summary.clients_by_state} == {"29": 1, "27": 1, "none": 1}
+    assert {b.key: b.amount.amount for b in summary.revenue_by_work_unit} == {str(project): 1000}
+
+
+@pytest.mark.asyncio
+async def test_customer_location_follows_the_billing_address(async_client):
+    address = {"line1": "1 MG Road", "city": "Mumbai", "state": "Maharashtra", "state_code": "27", "postal_code": "400001"}
+    created = await async_client.post(f"{BASE}/clients", json={
+        "name": "Loc Co", "legal_name": "Loc Co Pvt Ltd", "billing_address": address, "owner_user_id": str(TEST_USER_ID),
+    })
+    assert created.status_code == 201, created.text
+    client_id = created.json()["id"]
+    from sqlalchemy import select
+    from database.session import get_db_session
+    from main import app
+
+    session_gen = app.dependency_overrides[get_db_session]()
+    session = await session_gen.__anext__()
+    stored = (await session.execute(select(Client).where(Client.id == uuid.UUID(client_id)))).scalar_one()
+    assert (stored.country, stored.state_code) == ("IN", "27")
+
+    moved = {**address, "state": "Karnataka", "state_code": "29", "country": "in"}
+    res = await async_client.patch(f"{BASE}/clients/{client_id}", json={"billing_address": moved}, headers={"If-Match": '"1"'})
+    assert res.status_code == 200, res.text
+    await session.refresh(stored)
+    assert (stored.country, stored.state_code) == ("IN", "29")
+
+
+@pytest.mark.asyncio
+async def test_offering_product_line_is_set_changed_and_cleared(async_client):
+    created = await async_client.post(f"{BASE}/offerings", json={
+        "code": "CAM-1", "name": "Camera", "vertical_id": str(uuid.uuid4()), "gst_rate": 18,
+        "list_price": {"amount": "1000.00", "currency": "INR"}, "product_line": "hardware",
+    })
+    assert created.status_code == 201, created.text
+    assert created.json()["product_line"] == "hardware"
+    offering_id = created.json()["id"]
+    assert (await async_client.post(f"{BASE}/offerings", json={
+        "code": "BAD-1", "name": "Bad", "vertical_id": str(uuid.uuid4()), "gst_rate": 18,
+        "list_price": {"amount": "1.00", "currency": "INR"}, "product_line": "furniture",
+    })).status_code == 422
+    changed = await async_client.patch(f"{BASE}/offerings/{offering_id}", json={"product_line": "amc"})
+    assert changed.status_code == 200 and changed.json()["product_line"] == "amc"
+    untouched = await async_client.patch(f"{BASE}/offerings/{offering_id}", json={"fulfilment": "service"})
+    assert untouched.json()["product_line"] == "amc"
+    cleared = await async_client.patch(f"{BASE}/offerings/{offering_id}", json={"product_line": None})
+    assert cleared.json()["product_line"] is None

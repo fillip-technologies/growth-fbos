@@ -18,6 +18,7 @@ SERVICE_URL_MAP: Final[dict[str, str]] = {
     "insight": settings.insight_service_url,
     "assets": settings.assets_service_url,
     "people": settings.people_service_url,
+    "finance": settings.finance_service_url,
     "inventory": settings.inventory_service_url,
 }
 

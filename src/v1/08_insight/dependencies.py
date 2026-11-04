@@ -1,35 +1,69 @@
+import secrets
 import uuid
-from typing import Annotated, Optional
+from typing import Annotated, Awaitable, Callable, Optional
 
-from fastapi import Depends, Header
+from fastapi import Depends, Header, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from config import settings
 from database.session import get_db_session
-
-DEFAULT_ORG_ID = uuid.UUID("0191f3a2-0011-7011-8077-0000001b2aa9")
-DEFAULT_USER_ID = uuid.UUID("0191f3a2-0015-7015-8093-000000218f0d")
-
-
-async def get_organization_id(
-    x_fbos_org_id: Optional[str] = Header(None, alias="X-FBOS-Org-Id"),
-) -> uuid.UUID:
-    if x_fbos_org_id:
-        try:
-            return uuid.UUID(x_fbos_org_id)
-        except ValueError:
-            pass
-    return DEFAULT_ORG_ID
+from exceptions import AuthenticationRequiredError, PermissionDeniedError
+from services.identity_client import Actor, IdentityClient
 
 
-async def get_current_user_id(
-    x_fbos_user_id: Optional[str] = Header(None, alias="X-FBOS-User-Id"),
-) -> uuid.UUID:
-    if x_fbos_user_id:
-        try:
-            return uuid.UUID(x_fbos_user_id)
-        except ValueError:
-            pass
-    return DEFAULT_USER_ID
+def get_identity_client(request: Request) -> IdentityClient:
+    return request.app.state.identity_client
+
+
+async def get_actor(
+    identity: Annotated[IdentityClient, Depends(get_identity_client)],
+    authorization: Optional[str] = Header(None),
+    x_organization_id: Optional[uuid.UUID] = Header(None, alias="X-Organization-Id"),
+) -> Actor:
+    """
+    Who is calling and which organization they act in, as decided by identity. A client
+    admin may target any organization of their client via `X-Organization-Id`; everyone
+    else acts in their own.
+    """
+    if not authorization or not authorization.lower().startswith("bearer "):
+        raise AuthenticationRequiredError()
+    return await identity.resolve_actor(authorization, x_organization_id)
+
+
+CurrentActor = Annotated[Actor, Depends(get_actor)]
+
+
+def require_permission(permission: str) -> Callable[..., Awaitable[Actor]]:
+    """Route guard: the actor must hold `permission`."""
+
+    async def guard(actor: CurrentActor) -> Actor:
+        if not actor.has(permission):
+            raise PermissionDeniedError(permission)
+        return actor
+
+    guard.__name__ = f"require_{permission.replace('.', '_')}"
+    return guard
+
+
+def verify_internal_caller(
+    x_fbos_internal_token: Optional[str] = Header(None, alias="X-FBOS-Internal-Token"),
+) -> None:
+    """Guard for /internal/* endpoints: only other FBOS services may call them."""
+    expected = settings.internal_service_token
+    if not expected:
+        if settings.app_env == "development":
+            return
+        raise PermissionDeniedError("internal")
+    if not x_fbos_internal_token or not secrets.compare_digest(x_fbos_internal_token, expected):
+        raise PermissionDeniedError("internal")
+
+
+async def get_organization_id(actor: CurrentActor) -> uuid.UUID:
+    return actor.organization_id
+
+
+async def get_current_user_id(actor: CurrentActor) -> uuid.UUID:
+    return actor.user_id
 
 
 DatabaseSession = Annotated[AsyncSession, Depends(get_db_session)]
@@ -38,9 +72,12 @@ UserId = Annotated[uuid.UUID, Depends(get_current_user_id)]
 
 __all__ = [
     "get_db_session",
+    "get_actor",
+    "get_identity_client",
+    "require_permission",
+    "verify_internal_caller",
+    "CurrentActor",
     "DatabaseSession",
     "OrgId",
     "UserId",
-    "get_organization_id",
-    "get_current_user_id",
 ]

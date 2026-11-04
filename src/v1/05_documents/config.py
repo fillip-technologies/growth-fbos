@@ -24,6 +24,7 @@ class Settings(BaseSettings):
         "delivery": "http://localhost:8003/api/delivery/v1",
         "inventory": "http://localhost:3000/api/inventory/v1",
         "people": "http://localhost:8010/api/people/v1",
+        "finance": "http://localhost:8011/api/finance/v1",
     }
     subject_check_timeout_seconds: float = 5.0
     # Read checks are cached this long per user and subject; attach checks never are.

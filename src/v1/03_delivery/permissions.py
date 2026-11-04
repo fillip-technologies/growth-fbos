@@ -25,3 +25,6 @@ WORKFLOW_READ = "delivery.workflow.read"
 WORKFLOW_MANAGE = "delivery.workflow.manage"
 WORKFLOW_OPERATE = "delivery.workflow.operate"
 WORKFLOW_APPROVE = "delivery.workflow.approve"
+
+# The business summary (CEO Command Center): company-wide project counts and costs, totals only.
+SUMMARY_READ = "delivery.summary.read"

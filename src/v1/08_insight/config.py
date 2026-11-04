@@ -16,5 +16,9 @@ class Settings(BaseSettings):
     db_pool_timeout: int = 30
     db_pool_recycle: int = 1800
 
+    identity_service_url: str = "http://identity:8000"
+    internal_service_token: str = ""
+    identity_timeout_seconds: float = 5.0
+
 
 settings = Settings()

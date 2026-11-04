@@ -35,3 +35,6 @@ SEPARATION_MANAGE = "people.separation.manage"
 
 # Identity's own code for applying a role to a user: needed to decide which jobs bring which roles.
 IDENTITY_ROLE_ASSIGNMENT_CREATE = "identity.role_assignment.create"
+
+# The business summary (CEO Command Center): company-wide headcount, leave today and payroll total.
+SUMMARY_READ = "people.summary.read"

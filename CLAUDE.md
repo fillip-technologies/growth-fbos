@@ -89,6 +89,12 @@ Before analyzing, writing, modifying, or reviewing any code in this repository, 
 
   # Assets service (port 8009)
   uvicorn main:app --app-dir src/v1/09_assets --reload --host 0.0.0.0 --port 8009
+
+  # People service (port 8010) — Workers, attendance, leave, payroll, recruitment
+  uvicorn main:app --app-dir src/v1/10_people --reload --host 0.0.0.0 --port 8010
+
+  # Finance service (port 8011) — Operating expenses, investments, other income
+  uvicorn main:app --app-dir src/v1/11_finance --reload --host 0.0.0.0 --port 8011
   ```
 - **Run Tests** (per service — tests must be run from within the service directory):
   ```bash
@@ -127,8 +133,15 @@ src/v1/
 ├── 06_communication/     # Communication service (port 8006) — /api/communication/v1 — Notifications, inbox and webhooks
 ├── 07_management/        # Management service (port 8007) — /api/management/v1 — Planning, Performance (KPIs), Resources and capacity
 ├── 08_insight/           # Insight service (port 8008) — /api/insight/v1 — Audit, Analytics
-└── 09_assets/            # Assets service (port 8009) — /api/assets/v1 — Assets
+├── 09_assets/            # Assets service (port 8009) — /api/assets/v1 — Assets
+├── 10_people/            # People service (port 8010) — /api/people/v1 — HCM and recruitment
+└── 11_finance/           # Finance service (port 8011) — /api/finance/v1 — Operating expenses, investments, other income
 ```
+
+Money boundaries: Revenue keeps everything about selling (invoices, payments, receivables, the tax
+engine in `02_revenue/finance/`, which runs inside invoice transactions). Finance holds only money
+with no other home: operating expenses and investments with their income. Hardware purchases stay
+in inventory (Fixly), salaries in people, project costs in delivery, asset costs in assets.
 
 - `.agents/` — Core architecture, Python, and REST guidelines
 - `ref/fbos-api-reference (1).html` — source-of-truth API spec; service/module boundaries, base

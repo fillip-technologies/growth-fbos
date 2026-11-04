@@ -4,6 +4,7 @@ from typing import Optional
 from models.client import Client
 
 EXPIRING_SOON_DAYS = 30
+USABLE_STATES = ("active", "expiring", "unlimited")
 
 
 def today_utc() -> date:
@@ -18,6 +19,9 @@ def add_one_year(d: date) -> date:
 
 
 def subscription_state(client: Client, today: Optional[date] = None) -> str:
+    # No end date: the client has no service window at all (the operator company running FBOS).
+    if client.subscription_end is None:
+        return "unlimited"
     today = today or today_utc()
     if today < client.subscription_start:
         return "upcoming"
@@ -29,7 +33,7 @@ def subscription_state(client: Client, today: Optional[date] = None) -> str:
 
 
 def is_client_usable(client: Optional[Client]) -> bool:
-    """A client may use the platform only while active and inside its service window."""
+    """A client may use the platform only while active and inside its service window (if it has one)."""
     if client is None:
         return False
-    return client.status == "active" and subscription_state(client) in ("active", "expiring")
+    return client.status == "active" and subscription_state(client) in USABLE_STATES

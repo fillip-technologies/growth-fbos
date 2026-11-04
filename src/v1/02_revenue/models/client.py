@@ -18,6 +18,10 @@ class Client(Base):
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     legal_name: Mapped[Optional[str]] = mapped_column(String(512), nullable=True)
     client_type: Mapped[str] = mapped_column(String(50), nullable=False)
+    # Copies of the billing address's country (ISO-2) and GST state code, kept in step on every
+    # save, so dashboards can group customers without parsing the address.
+    country: Mapped[str] = mapped_column(String(2), nullable=False, default="IN", server_default="IN")
+    state_code: Mapped[Optional[str]] = mapped_column(String(2), nullable=True, index=True)
     pan: Mapped[Optional[str]] = mapped_column(String(20), nullable=True, index=True)
     gstin: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)
     status: Mapped[str] = mapped_column(String(50), nullable=False, default="active")

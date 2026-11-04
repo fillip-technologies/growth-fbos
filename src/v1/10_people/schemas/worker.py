@@ -1,10 +1,13 @@
 import uuid
 from datetime import date, datetime
-from typing import Any, List, Optional
+from typing import Any, List, Literal, Optional
 
 from pydantic import BaseModel, ConfigDict, EmailStr, Field
 
 from schemas.common import PageMeta
+
+# freelancer: paid per piece of work, outside payroll (the CEO Command Center's freelancer network).
+EmploymentType = Literal["full_time", "part_time", "contractor", "intern", "freelancer"]
 
 
 class WorkerBase(BaseModel):
@@ -28,7 +31,7 @@ class WorkerBase(BaseModel):
     designation: str = Field(..., min_length=1, max_length=255)
     job_title: Optional[str] = None
     manager_id: Optional[uuid.UUID] = None
-    employment_type: str = "full_time"  # full_time, part_time, contractor, intern
+    employment_type: EmploymentType = "full_time"
     status: str = "active"  # active, probation, on_leave, noticed, exited
 
     # Milestone Dates (Allows full past/historical backdating for existing employees)
@@ -65,7 +68,7 @@ class WorkerUpdate(BaseModel):
     designation: Optional[str] = None
     job_title: Optional[str] = None
     manager_id: Optional[uuid.UUID] = None
-    employment_type: Optional[str] = None
+    employment_type: Optional[EmploymentType] = None
     status: Optional[str] = None
 
     date_of_joining: Optional[date] = None

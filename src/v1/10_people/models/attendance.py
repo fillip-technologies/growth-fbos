@@ -59,6 +59,8 @@ class DailyAttendance(Base):
     is_late = Column(Boolean, nullable=False, default=False)
     late_minutes = Column(Integer, nullable=False, default=0)
     status = Column(String(32), nullable=False, default="present", index=True)  # present, half_day, absent, holiday, on_leave, regularized
+    # Where the day was worked: office, field (at a customer's site) or remote. Empty when not said.
+    work_location = Column(String(20), nullable=True)
     notes = Column(Text, nullable=True)
 
     created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
