@@ -107,6 +107,7 @@ SOME_ID = uuid.uuid4()
         ("post", "/resource-requirements", permissions.REQUIREMENT_MANAGE),
         ("get", "/resource-requirements", permissions.ALLOCATION_READ),
         ("get", "/allocations", permissions.ALLOCATION_READ),
+        ("get", "/summaries/health?from=2030-01-01&to=2030-01-31", permissions.SUMMARY_READ),
         ("post", "/allocations", permissions.ALLOCATION_MANAGE),
     ],
 )

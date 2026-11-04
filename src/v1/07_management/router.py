@@ -7,6 +7,7 @@ from routes.kpis import router as kpis_router
 from routes.planning import router as planning_router
 from routes.resources import router as resources_router
 from routes.scenarios import router as scenarios_router
+from routes.summaries import router as summaries_router
 
 core_router = APIRouter()
 for module_router in (
@@ -16,6 +17,7 @@ for module_router in (
     scenarios_router,
     resources_router,
     allocations_router,
+    summaries_router,
     internal_router,
 ):
     core_router.include_router(module_router)

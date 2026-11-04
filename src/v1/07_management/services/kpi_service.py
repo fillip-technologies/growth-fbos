@@ -985,19 +985,24 @@ def _goal_score(items: list[_Weighted]) -> Optional[float]:
     return round(sum(item.weight * item.achievement_pct for item in items) / total_weight, 2)
 
 
-async def scorecard(session: AsyncSession, actor: Actor, period_id: uuid.UUID, directory: Directory) -> ScorecardResponse:
-    """Each active goal the period falls in: its KPIs' results for the goal's scope, its weighted score, and the owner's latest check-in."""
-    period = await period_reference(session, actor.organization_id, period_id)
+def active_goals_in(org_id: uuid.UUID, period: PlanningPeriod):
+    """Active goals the period falls in: without a period of their own, or with one covering it."""
     period_of_goal = select(PlanningPeriod.id).where(
-        PlanningPeriod.organization_id == actor.organization_id,
+        PlanningPeriod.organization_id == org_id,
         PlanningPeriod.start_date <= period.start_date,
         PlanningPeriod.end_date >= period.end_date,
     )
-    query = select(StrategicGoal).where(
-        StrategicGoal.organization_id == actor.organization_id,
+    return select(StrategicGoal).where(
+        StrategicGoal.organization_id == org_id,
         StrategicGoal.status == "active",
         or_(StrategicGoal.period_id.is_(None), StrategicGoal.period_id.in_(period_of_goal)),
     )
+
+
+async def scorecard(session: AsyncSession, actor: Actor, period_id: uuid.UUID, directory: Directory) -> ScorecardResponse:
+    """Each active goal the period falls in: its KPIs' results for the goal's scope, its weighted score, and the owner's latest check-in."""
+    period = await period_reference(session, actor.organization_id, period_id)
+    query = active_goals_in(actor.organization_id, period)
     if actor.only_own(permissions.RESULT_READ):
         query = query.where(StrategicGoal.owner_user_id == actor.user_id)
     goals = (await session.execute(query.order_by(StrategicGoal.code))).scalars().all()

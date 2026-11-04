@@ -24,6 +24,7 @@ from schemas.analytics import (
     WidgetResponse,
 )
 from schemas.audit import JobResponse
+from services.ceo_metrics import is_ceo_metric
 
 
 # --- Dashboard ---------------------------------------------------------------
@@ -83,6 +84,9 @@ async def get_metric_series(
     dimension: Optional[str],
     unit_id: Optional[uuid.UUID],
 ) -> MetricSeriesResponse:
+    # The CEO snapshots are read only through /metric-snapshots, with the Command Center's permissions.
+    if is_ceo_metric(metric_code):
+        raise MetricNotFoundError(metric_code)
     query = select(MetricDaily).where(
         MetricDaily.organization_id == org_id,
         MetricDaily.metric_code == metric_code,

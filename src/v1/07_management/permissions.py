@@ -63,6 +63,9 @@ ALLOCATION_OVERRIDE = "management.allocation.override"
 # Internal cost rates (effectively pay bands)
 COST_READ = "management.cost.read"
 
+# The business summary (CEO Command Center): business health from the scorecard, budget vs actual.
+SUMMARY_READ = "management.summary.read"
+
 ALL = frozenset(
     value for name, value in dict(globals()).items() if name.isupper() and isinstance(value, str)
 )

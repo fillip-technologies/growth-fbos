@@ -115,6 +115,8 @@ class WorkUnitCreate(BaseModel):
     vertical_id: Optional[uuid.UUID] = None
     client_id: Optional[uuid.UUID] = Field(None, description="Required when the work unit type requires a client.")
     contract_id: Optional[uuid.UUID] = None
+    # An associate company of the client doing the work (another organization, never this one).
+    partner_organization_id: Optional[uuid.UUID] = None
     manager_user_id: uuid.UUID
     planned_start: date
     planned_end: date
@@ -139,6 +141,8 @@ class WorkUnitUpdate(BaseModel):
     planned_end: Optional[date] = None
     priority: Optional[WorkUnitPriority] = None
     attributes: Optional[dict] = None
+    # An explicit null removes the associate.
+    partner_organization_id: Optional[uuid.UUID] = None
 
 
 class WorkUnitStatusChange(BaseModel):
@@ -168,6 +172,7 @@ class WorkUnitResponse(BaseModel):
     vertical: Optional[VerticalRef] = None
     client: Optional[ClientRef] = None
     contract: Optional[dict] = None
+    partner_organization_id: Optional[uuid.UUID] = None
     manager: UserRef
     planned_start: date
     planned_end: date

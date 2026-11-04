@@ -20,7 +20,9 @@ The platform consists of **10 specialized microservices** plus a shared MySQL da
 | **8007** | **07_management** | `src/v1/07_management` | Strategic planning, KPI targets, Resources & Capacity |
 | **8008** | **08_insight** | `src/v1/08_insight` | Audit logs, Compliance, Analytics dashboards |
 | **8009** | **09_assets** | `src/v1/09_assets` | Asset tracking, Vendor accounts, Credential vault |
-| **3307** | **db (MySQL 8.0)** | `docker/init.sql` | 9 isolated databases (`fbos_identity`, `fbos_revenue`, etc.) |
+| **8010** | **10_people** | `src/v1/10_people` | Workers, Attendance, Leave, Payroll, Recruitment |
+| **8011** | **11_finance** | `src/v1/11_finance` | Operating expenses (rent, travel, marketing...), Investments, Other income |
+| **3307** | **db (MySQL 8.0)** | `docker/init.sql` | 11 isolated databases (`fbos_identity`, `fbos_revenue`, etc.) |
 
 > 📖 **Frontend Developers**: the API conventions (gateway routing, headers, pagination, error shape, auth and token refresh) and the project's build phases and decisions are in [docs/PROJECT_BUILD_PHASES.md](docs/PROJECT_BUILD_PHASES.md). Each service serves Swagger UI at its own `/docs`.
 

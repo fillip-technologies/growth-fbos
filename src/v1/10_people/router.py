@@ -11,6 +11,7 @@ from routes.progression import router as progression_router
 from routes.recruitment import router as recruitment_router
 from routes.role_changes import router as role_changes_router
 from routes.separation import router as separation_router
+from routes.summaries import router as summaries_router
 from routes.worker_documents import router as worker_documents_router
 from routes.workers import router as workers_router
 
@@ -28,6 +29,7 @@ core_router.include_router(leaves_router)
 core_router.include_router(payroll_router)
 core_router.include_router(progression_router)
 core_router.include_router(separation_router)
+core_router.include_router(summaries_router)
 
 
 

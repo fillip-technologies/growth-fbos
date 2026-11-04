@@ -27,7 +27,9 @@ from services.auth_cache import auth_cache
 from services.rbac_service import rbac_service
 from services.unit_members import active_people, unit_heads, units_at_or_below, units_belonged_to
 from services.work_calendars import work_calendars
+from services.active_organizations import active_organizations
 from schemas.calendar import WorkCalendarsResponse
+from schemas.organization import ActiveOrganizationsResponse
 
 # The most people one /internal/people answer carries.
 PEOPLE_LIMIT = 1000
@@ -366,6 +368,21 @@ async def list_work_calendars(
     """Other services (delivery) count working time with these: time limits in working hours."""
     verify_internal_caller(x_fbos_internal_token)
     return await work_calendars(db, organization_id)
+
+
+@internal_router.get(
+    "/organizations",
+    response_model=ActiveOrganizationsResponse,
+    status_code=status.HTTP_200_OK,
+    summary="Every active organization of every active client (internal)",
+)
+async def list_active_organizations(
+    x_fbos_internal_token: Optional[str] = Header(None, alias="X-FBOS-Internal-Token"),
+    db: AsyncSession = Depends(get_db_session),
+) -> ActiveOrganizationsResponse:
+    """For jobs that run per company with no one signed in (the gateway's nightly snapshots)."""
+    verify_internal_caller(x_fbos_internal_token)
+    return ActiveOrganizationsResponse(data=await active_organizations(db))
 
 
 async def _permission_catalog(db: AsyncSession) -> list[str]:

@@ -1,3 +1,4 @@
+from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -24,11 +25,36 @@ class Settings(BaseSettings):
     insight_service_url: str = "http://insight:8000"
     assets_service_url: str = "http://assets:8000"
     people_service_url: str = "http://people:8000"
+    finance_service_url: str = "http://finance:8000"
     # Inventory is the Fixly backend (Node), deployed on its own; it serves /api/inventory/v1.
     inventory_service_url: str = "http://localhost:3000"
 
     # Per-dependency timeout budget for aggregated screens (seconds).
     aggregation_timeout_seconds: float = 0.8
+
+    # Who is calling: Identity's internal /authz/actor. The token must match Identity's
+    # INTERNAL_SERVICE_TOKEN (Identity skips the check in development when it is unset).
+    internal_service_token: str = ""
+    identity_timeout_seconds: float = 5.0
+
+    # The CEO Command Center reads one summary per service and company; each call gets this long.
+    ceo_timeout_seconds: float = 5.0
+    # Most summary calls in flight at once, across every company.
+    ceo_max_parallel_calls: int = 20
+    # The organization the inventory service (Fixly) serves (its FBOS_ORGANIZATION_ID). Empty: the
+    # caller's own organization is asked, and any other answers ORGANIZATION_NOT_SERVED.
+    inventory_organization_id: str = ""
+
+    # Nightly snapshots of the Command Center's totals into Insight (CEO plan B4), which the
+    # screen's trend and comparisons read. Turn on in one gateway only.
+    ceo_snapshot_enabled: bool = False
+    # Server-local hour of the nightly run; it snapshots the day before.
+    ceo_snapshot_hour: int = Field(1, ge=0, le=23)
+    # Money that happened (revenue, costs) is read again this many days back, so entries
+    # recorded late still land on their own day. Positions (receivables, headcount) can't be.
+    ceo_snapshot_refresh_days: int = Field(7, ge=1, le=62)
+    # When identity can't list the companies, the night's run is tried again this much later.
+    ceo_snapshot_retry_seconds: int = Field(900, ge=60)
 
 
 settings = Settings()
