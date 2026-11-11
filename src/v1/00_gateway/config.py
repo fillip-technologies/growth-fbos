@@ -10,6 +10,12 @@ class Settings(BaseSettings):
     port: int = 8000
     debug: bool = False
 
+    # CORS, for browsers calling the gateway from another origin. Off: no CORS headers, so
+    # only same-origin pages (the site behind the same domain, the Vite proxy) can call it.
+    cors_enabled: bool = False
+    # Comma-separated origins, or * for any. Credentials (cookies) are never allowed cross-origin.
+    cors_origins: str = "*"
+
     jwt_secret: str = ""
     jwt_algorithm: str = "HS256"
 
