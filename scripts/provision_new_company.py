@@ -7,13 +7,16 @@ Creates:
 3. Working Calendar (US Eastern Business Week)
 4. Verticals (Enterprise Cloud Services, Digital Engineering & AI)
 5. Org Units (Engineering, Commercial, Operations)
-6. Test Users with Password@123 and complete UserPermissions:
-   - admin@acmecloud.example.com (client_admin, full permissions)
+6. Test Users (password from FBOS_DEMO_PASSWORD, default Password@123) and their access:
+   - admin@acmecloud.example.com (client_admin, the org's `admin` preset)
    - sales@acmecloud.example.com (employee, Commercial)
    - pm@acmecloud.example.com (employee, Project Manager)
    - dev@acmecloud.example.com (employee, Senior Developer)
 7. Downstream Revenue Data (Offerings, Clients, Contacts, Leads, Deals)
 8. Downstream Delivery Data (Project, Tasks, Checklists, Assignments)
+
+Local / demo data only: it refuses to run unless 01_identity's APP_ENV is "development".
+The client is unlimited (no quotas, no end date), like the company that runs FBOS.
 """
 
 import asyncio
@@ -60,6 +63,8 @@ REV_CLIENT_WAYNE_ID     = uuid.UUID("0191f400-0051-7051-8051-000000000051")
 # Delivery project
 WORK_UNIT_PRJ_ID = uuid.UUID("0191f400-0070-7070-8070-000000000070")
 
+DEMO_PASSWORD = os.environ.get("FBOS_DEMO_PASSWORD", "Password@123")
+
 
 def reset_service_modules(target_dir: str):
     os.chdir(target_dir)
@@ -77,6 +82,12 @@ async def provision_identity():
     
     reset_service_modules(IDENTITY_DIR)
         
+    from config import settings
+    if settings.app_env != "development":
+        raise SystemExit(
+            f"Refusing to provision demo data: 01_identity APP_ENV is {settings.app_env!r}, not 'development'."
+        )
+
     from database.session import async_session_factory, dispose_engine
     from models.client import Client
     from models.organization import Organization
@@ -86,9 +97,10 @@ async def provision_identity():
     from models.user import User
     from models.membership import UnitMembership
     from models.auth import UserCredential
-    from models.rbac import Permission
+    from models.rbac import Permission, Role, RoleAssignment, RolePermission
     from models.user_permission import UserPermission
-    from services.permission_catalog import ensure_permission_catalog
+    from services.organization_service import OrganizationService
+    from services.permission_catalog import MEMBER_ROLE_CODE, ensure_permission_catalog
     from utils.security import hash_password
     from sqlalchemy import select
 
@@ -109,10 +121,11 @@ async def provision_identity():
                 code="ACME",
                 contact_email="contact@acmeglobal.example.com",
                 status="active",
-                max_organizations=5,
-                max_users_per_org=100,
+                # NULL quotas and end date mean unlimited (see client_service / subscription.py).
+                max_organizations=None,
+                max_users_per_org=None,
                 subscription_start=date.today(),
-                subscription_end=date.today() + timedelta(days=365),
+                subscription_end=None,
             )
             session.add(client)
             await session.flush()
@@ -123,7 +136,8 @@ async def provision_identity():
         # 3. Organization (initially without calendar_id to satisfy FK)
         print(f"-> Provisioning Organization: Acme Cloud Solutions (Code: ACS)...")
         existing_org = (await session.execute(select(Organization).where(Organization.id == ORGANIZATION_ID))).scalar_one_or_none()
-        if not existing_org:
+        org_created = existing_org is None
+        if org_created:
             org = Organization(
                 id=ORGANIZATION_ID,
                 client_id=COMPANY_CLIENT_ID,
@@ -244,7 +258,7 @@ async def provision_identity():
             ),
         ]
 
-        shared_password_hash = hash_password("Password@123")
+        shared_password_hash = hash_password(DEMO_PASSWORD)
         now = datetime.now(timezone.utc)
 
         for u_id, u_name, u_email, u_type, u_home, u_desc in users_data:
@@ -277,50 +291,77 @@ async def provision_identity():
                         member_role="home_unit",
                     ))
                 await session.flush()
-                print(f"   [OK] Created User: {u_name} <{u_email}> [{u_type}] (Password: Password@123)")
+                print(f"   [OK] Created User: {u_name} <{u_email}> [{u_type}]")
             else:
                 print(f"   [OK] User already exists: {u_email}")
 
         await session.flush()
 
-        # 8. Assign Permissions
-        print("-> Granting RBAC Permissions...")
-        existing_all_perms = (await session.execute(
-            select(UserPermission.user_id, UserPermission.permission_code).where(UserPermission.organization_id == ORGANIZATION_ID)
-        )).all()
-        existing_perm_set = {(p[0], p[1]) for p in existing_all_perms}
+        # 8. Access, the way the API grants it: the org gets its `admin` and `member` presets
+        # (OrganizationService.bootstrap_org, which also gives the first admin the full catalog),
+        # everyone else gets the `member` preset, and work-specific extras are time-limited
+        # ("extra access needs an end date", user_permission_service).
+        print("-> Granting access...")
+        if org_created:
+            await OrganizationService().bootstrap_org(session, ORGANIZATION_ID, admin_user_id=USER_ADMIN_ID)
+            print("   [OK] Created admin/member presets; admin preset applied to Marcus Vance")
 
-        def grant_perm(user_id, code):
-            if (user_id, code) not in existing_perm_set:
-                session.add(UserPermission(
+        member_role = (await session.execute(
+            select(Role).where(Role.organization_id == ORGANIZATION_ID, Role.code == MEMBER_ROLE_CODE)
+        )).scalar_one()
+        member_codes = (await session.execute(
+            select(RolePermission.permission_code).where(RolePermission.role_id == member_role.id)
+        )).scalars().all()
+
+        existing_perm_set = {
+            (row.user_id, row.permission_code)
+            for row in (await session.execute(
+                select(UserPermission.user_id, UserPermission.permission_code)
+                .where(UserPermission.organization_id == ORGANIZATION_ID)
+            )).all()
+        }
+        assigned = set((await session.execute(
+            select(RoleAssignment.user_id).where(RoleAssignment.role_id == member_role.id)
+        )).scalars().all())
+        extra_until = now + timedelta(days=settings.extra_access_max_days)
+
+        def grant(user_id, code, source_role_id=None, valid_to=None) -> bool:
+            if (user_id, code) in existing_perm_set:
+                return False
+            session.add(UserPermission(
+                organization_id=ORGANIZATION_ID,
+                user_id=user_id,
+                permission_code=code,
+                source_role_id=source_role_id,
+                self_only=False,
+                valid_to=valid_to,
+                granted_by_id=USER_ADMIN_ID,
+                granted_at=now,
+            ))
+            existing_perm_set.add((user_id, code))
+            return True
+
+        extras = {
+            USER_SALES_ID: ("Sarah Jenkins", [c for c in catalog_codes if c.startswith("revenue.")]),
+            USER_PM_ID: ("David Kim", [c for c in catalog_codes if c.startswith(("delivery.", "documents."))]),
+            USER_DEV_ID: ("Elena Rostova", [
+                c for c in catalog_codes
+                if c.startswith(("delivery.task.", "delivery.time_entry."))
+            ]),
+        }
+        for user_id, (name, extra_codes) in extras.items():
+            if user_id not in assigned:
+                session.add(RoleAssignment(
+                    id=uuid.uuid4(),
                     organization_id=ORGANIZATION_ID,
                     user_id=user_id,
-                    permission_code=code,
-                    self_only=False,
-                    granted_at=now,
+                    role_id=member_role.id,
+                    granted_by_id=USER_ADMIN_ID,
+                    reason="Demo provisioning",
                 ))
-                existing_perm_set.add((user_id, code))
-                return True
-            return False
-
-        # Marcus Vance (Admin) gets the entire catalog
-        admin_added = sum(1 for code in catalog_codes if grant_perm(USER_ADMIN_ID, code))
-        print(f"   [OK] Granted {admin_added} permissions to Admin (Marcus Vance)")
-
-        # Sarah Jenkins (Sales): revenue, clients, offerings, deals
-        sales_codes = [c for c in catalog_codes if c.startswith("revenue.") or "client.read" in c or "offering.read" in c or c.endswith(".read")]
-        sales_added = sum(1 for code in sales_codes if grant_perm(USER_SALES_ID, code))
-        print(f"   [OK] Granted {sales_added} permissions to Sales Lead (Sarah Jenkins)")
-
-        # David Kim (PM): delivery, tasks, workflows, documents
-        pm_codes = [c for c in catalog_codes if c.startswith("delivery.") or c.startswith("documents.") or c.endswith(".read")]
-        pm_added = sum(1 for code in pm_codes if grant_perm(USER_PM_ID, code))
-        print(f"   [OK] Granted {pm_added} permissions to Project Manager (David Kim)")
-
-        # Elena Rostova (Dev): delivery tasks read/write, time entries
-        dev_codes = [c for c in catalog_codes if "task.read" in c or "task.write" in c or "time_entry" in c or "work_unit.read" in c or "document.read" in c]
-        dev_added = sum(1 for code in dev_codes if grant_perm(USER_DEV_ID, code))
-        print(f"   [OK] Granted {dev_added} permissions to Senior Developer (Elena Rostova)")
+            member_added = sum(grant(user_id, code, source_role_id=member_role.id) for code in member_codes)
+            extra_added = sum(grant(user_id, code, valid_to=extra_until) for code in extra_codes)
+            print(f"   [OK] {name}: member preset (+{member_added}), {extra_added} extra until {extra_until:%Y-%m-%d}")
 
         await session.commit()
     await dispose_engine()
@@ -521,6 +562,8 @@ async def provision_delivery():
         project_type = (await session.execute(
             select(WorkUnitType).where(WorkUnitType.code == "project")
         )).scalars().first()
+        if project_type is None:
+            raise SystemExit("03_delivery has no 'project' work unit type; run its seed first.")
 
         task_types = {t.code: t for t in (await session.execute(select(TaskType))).scalars().all()}
         now = datetime.now(timezone.utc)
@@ -535,7 +578,7 @@ async def provision_delivery():
                 code="PRJ-ACS-001",
                 name="Cyberdyne Multi-Cloud Migration",
                 objective="Migrate on-premise high-performance compute clusters to multi-region AWS and setup Zero Trust architecture.",
-                work_unit_type_id=project_type.id if project_type else uuid.uuid4(),
+                work_unit_type_id=project_type.id,
                 vertical_id=VERT_CLOUD_ID,
                 owning_unit_id=UNIT_ENG_ID,
                 client_id=REV_CLIENT_CYBERDYNE_ID,
@@ -629,7 +672,9 @@ async def provision_delivery():
 
             if not existing_task:
                 task_id = uuid.uuid4()
-                t_type = task_types.get(t_code, task_types.get("task"))
+                t_type = task_types.get(t_code) or task_types.get("task")
+                if t_type is None:
+                    raise SystemExit("03_delivery has no task types; run its seed first.")
                 task = Task(
                     id=task_id,
                     organization_id=ORGANIZATION_ID,
