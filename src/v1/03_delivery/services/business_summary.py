@@ -107,7 +107,11 @@ async def _running_by_client(session: AsyncSession, org_id: uuid.UUID) -> list[C
     rows = (
         await session.execute(
             select(WorkUnit.client_id, func.count())
-            .where(WorkUnit.organization_id == org_id, WorkUnit.status.in_(RUNNING_PROJECT_STATUSES))
+            .where(
+                WorkUnit.organization_id == org_id,
+                WorkUnit.status.in_(RUNNING_PROJECT_STATUSES),
+                WorkUnit.parent_work_unit_id.is_(None),
+            )
             .group_by(WorkUnit.client_id)
         )
     ).all()
@@ -126,7 +130,12 @@ async def _project_counts(session: AsyncSession, org_id: uuid.UUID, today: date)
                 func.count(),
                 func.coalesce(func.sum(case((or_(WorkUnit.health.in_(AT_RISK_HEALTH), late), 1), else_=0)), 0),
                 func.coalesce(func.sum(case((late, 1), else_=0)), 0),
-            ).where(WorkUnit.organization_id == org_id, WorkUnit.status.in_(RUNNING_PROJECT_STATUSES))
+            ).where(
+                WorkUnit.organization_id == org_id,
+                WorkUnit.status.in_(RUNNING_PROJECT_STATUSES),
+                # A project with workstreams is one project.
+                WorkUnit.parent_work_unit_id.is_(None),
+            )
         )
     ).one()
     return ProjectCounts(running=int(running), at_risk=int(at_risk), late=int(late_count))

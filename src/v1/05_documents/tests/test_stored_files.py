@@ -71,3 +71,31 @@ async def test_bad_content_and_unknown_category_are_refused(async_client):
 
     assert (await async_client.post(STORE, json=_body(proposal_id, content_base64="not base64!"))).status_code == 422
     assert (await async_client.post(STORE, json=_body(proposal_id, category_code="nope"))).status_code == 422
+
+
+async def test_a_sales_documents_carry_over_to_its_project(async_client, caller_control):
+    quotation_id, project_id = uuid.uuid4(), uuid.uuid4()
+    stored = (await async_client.post(STORE, json=_body(quotation_id, subject={"type": "revenue.quotation", "id": str(quotation_id)}))).json()
+    body = {
+        "source": {"type": "revenue.quotation", "id": str(quotation_id)},
+        "target": {"type": "delivery.project", "id": str(project_id)},
+    }
+
+    res = await async_client.post("/api/documents/v1/document-link-copies", json=body)
+
+    assert res.status_code == 201, res.json()
+    assert res.json() == {"copied": 1}
+    assert ("revenue.quotation", quotation_id, "read") in caller_control.subjects.calls
+    assert ("delivery.project", project_id, "attach") in caller_control.subjects.calls
+    listed = await async_client.get("/api/documents/v1/documents", params={"subject_type": "delivery.project", "subject_id": str(project_id)})
+    assert [d["id"] for d in listed.json()["data"]] == [stored["id"]]
+
+
+async def test_carrying_documents_needs_attach_rights_on_the_target(async_client, caller_control):
+    source, target = uuid.uuid4(), uuid.uuid4()
+    caller_control.subjects.deny("delivery.project", target, "attach")
+    body = {"source": {"type": "revenue.quotation", "id": str(source)}, "target": {"type": "delivery.project", "id": str(target)}}
+
+    res = await async_client.post("/api/documents/v1/document-link-copies", json=body)
+
+    assert res.status_code == 422

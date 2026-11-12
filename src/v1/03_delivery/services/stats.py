@@ -24,7 +24,7 @@ from schemas.stats import (
     WhoseTime,
 )
 from services.tasks import _OPEN_TASK_STATUSES, _STATUS_COLUMNS, TaskFilters, _filtered_tasks
-from services.work_units import ProjectView, visible_work_units
+from services.work_units import ProjectView, progress_pct, visible_work_units
 
 # Board column of each open status ("done" is counted separately, over a recent window).
 COLUMN_OF = {status: key for key, _, statuses in _STATUS_COLUMNS if key != "done" for status in statuses}
@@ -155,11 +155,18 @@ async def project_stats(
     session: AsyncSession, org_id: uuid.UUID, view: Optional[ProjectView], today: Optional[date] = None
 ) -> ProjectStats:
     today = today or date.today()
-    query = select(WorkUnit).where(WorkUnit.organization_id == org_id)
+    # Progress as the project lists show it: from tasks, workstreams included.
+    columns = [c for c in WorkUnit.__table__.c if c.name != "progress_pct"] + [progress_pct().label("progress_pct")]
+    query = select(*columns).where(WorkUnit.organization_id == org_id)
     if view is not None:
         query = query.where(visible_work_units(org_id, view))
-    projects = query.subquery()
+    # A project with workstreams counts once, as itself; a team's figures are its own work:
+    # its workstreams, and its projects that have none.
+    projects = query.where(WorkUnit.parent_work_unit_id.is_(None)).subquery()
+    has_workstreams = select(WorkUnit.parent_work_unit_id).where(WorkUnit.parent_work_unit_id.is_not(None))
+    team_work = query.where(WorkUnit.id.not_in(has_workstreams)).subquery()
     running = projects.c.status.in_(RUNNING_PROJECT_STATUSES)
+    team_running = team_work.c.status.in_(RUNNING_PROJECT_STATUSES)
 
     status_rows = (await session.execute(select(projects.c.status, func.count()).group_by(projects.c.status))).all()
     health_rows = (
@@ -189,16 +196,16 @@ async def project_stats(
     unit_rows = (
         await session.execute(
             select(
-                projects.c.owning_unit_id,
+                team_work.c.owning_unit_id,
                 func.count(),
-                func.sum(case((running, 1), else_=0)),
-                func.sum(case((projects.c.status.in_(("completed", "closed")), 1), else_=0)),
-                func.avg(case((running, projects.c.progress_pct), else_=None)),
-                func.sum(case((and_(running, projects.c.health == "green"), 1), else_=0)),
-                func.sum(case((and_(running, projects.c.health == "amber"), 1), else_=0)),
-                func.sum(case((and_(running, projects.c.health == "red"), 1), else_=0)),
-                func.sum(case((and_(running, projects.c.planned_end.is_not(None), projects.c.planned_end < today), 1), else_=0)),
-            ).group_by(projects.c.owning_unit_id)
+                func.sum(case((team_running, 1), else_=0)),
+                func.sum(case((team_work.c.status.in_(("completed", "closed")), 1), else_=0)),
+                func.avg(case((team_running, team_work.c.progress_pct), else_=None)),
+                func.sum(case((and_(team_running, team_work.c.health == "green"), 1), else_=0)),
+                func.sum(case((and_(team_running, team_work.c.health == "amber"), 1), else_=0)),
+                func.sum(case((and_(team_running, team_work.c.health == "red"), 1), else_=0)),
+                func.sum(case((and_(team_running, team_work.c.planned_end.is_not(None), team_work.c.planned_end < today), 1), else_=0)),
+            ).group_by(team_work.c.owning_unit_id)
         )
     ).all()
     running_rows = (

@@ -103,6 +103,24 @@ class WorkTemplateVersionResponse(BaseModel):
 # --- Work units --------------------------------------------------------
 
 
+class WorkstreamCreate(BaseModel):
+    """
+    One department's or team's part of a project: a sub-project run by its own team and manager.
+    It shares the project's customer, contract and dates; without a template or type, it is of
+    the project's type.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    name: str = Field(..., min_length=1, max_length=255)
+    owning_unit_id: uuid.UUID
+    manager_user_id: uuid.UUID
+    vertical_id: Optional[uuid.UUID] = None
+    template_code: Optional[str] = None
+    work_unit_type_code: Optional[str] = None
+    objective: Optional[str] = None
+
+
 class WorkUnitCreate(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -124,6 +142,11 @@ class WorkUnitCreate(BaseModel):
     billable: Optional[bool] = True
     attributes: Optional[dict] = None
     start_workflow: Optional[bool] = Field(False, description="Start the template's workflow immediately.")
+    # The project this is a workstream of (one level only), or the workstreams to create with it.
+    parent_work_unit_id: Optional[uuid.UUID] = None
+    workstreams: list[WorkstreamCreate] = Field(default_factory=list, max_length=20)
+    # The sale it delivers (revenue's deal), carried to its workstreams.
+    deal_id: Optional[uuid.UUID] = None
 
     @model_validator(mode="after")
     def _template_or_type(self) -> "WorkUnitCreate":
@@ -182,9 +205,18 @@ class WorkUnitResponse(BaseModel):
     budget: dict = Field(default_factory=dict)
     workflow_instance_id: Optional[uuid.UUID] = None
     attributes: dict = Field(default_factory=dict)
+    # The project this is a workstream of, and how many workstreams this one has.
+    parent: Optional["WorkUnitRef"] = None
+    workstream_count: int = 0
     version: int
     created_at: datetime
     updated_at: datetime
+
+
+class WorkUnitRef(BaseModel):
+    id: uuid.UUID
+    code: str
+    name: str
 
 
 class WorkUnitSummaryResponse(BaseModel):
@@ -408,4 +440,5 @@ class MemberResponse(BaseModel):
     valid_to: Optional[date] = None
 
 
+WorkUnitResponse.model_rebuild()
 WorkUnitSummaryResponse.model_rebuild()
