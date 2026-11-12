@@ -4,6 +4,7 @@ forwarded, so documents applies its own access rules) plus the internal token fo
 /internal/* endpoints.
 """
 
+import base64
 from dataclasses import dataclass
 from typing import Any, Optional
 import uuid
@@ -44,6 +45,36 @@ class DocumentsClient:
             "POST", f"{DOCUMENTS_API}/internal/link-copies", authorization, organization_id, json=body
         )
         return response.json()["copied"]
+
+    async def store_file(
+        self,
+        authorization: str,
+        organization_id: uuid.UUID,
+        subject: SubjectRef,
+        file_name: str,
+        content: bytes,
+        title: str,
+        mime_type: str = "application/pdf",
+        category_code: str = "quotation",
+        document_id: Optional[uuid.UUID] = None,
+        change_note: Optional[str] = None,
+    ) -> dict[str, Any]:
+        """
+        Store a file revenue generated (a proposal or quotation PDF) on `subject`, as the
+        signed-in user; with `document_id`, as that document's next version. Returns the document.
+        """
+        body = {
+            "file_name": file_name,
+            "mime_type": mime_type,
+            "content_base64": base64.b64encode(content).decode("ascii"),
+            "category_code": category_code,
+            "title": title,
+            "subject": subject.as_json(),
+            "document_id": str(document_id) if document_id else None,
+            "change_note": change_note,
+        }
+        response = await self._send("POST", f"{DOCUMENTS_API}/internal/documents", authorization, organization_id, json=body)
+        return response.json()
 
     async def find_document(
         self, authorization: str, organization_id: uuid.UUID, document_id: uuid.UUID

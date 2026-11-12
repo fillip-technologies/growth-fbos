@@ -1,5 +1,7 @@
 import uuid
 import pytest
+
+from tests.test_sales_flow import _accepted_proposal
 import httpx
 
 from tests.conftest import TEST_USER_ID
@@ -186,6 +188,7 @@ async def test_quotation_and_contract_workflow(async_client: httpx.AsyncClient, 
         ],
         "terms": "50% advance, 50% on completion",
     }
+    await _accepted_proposal(async_client, opp_id)
     q_res = await async_client.post(f"/api/revenue/v1/opportunities/{opp_id}/quotations", json=quote_payload)
     assert q_res.status_code == 201
     quote_data = q_res.json()

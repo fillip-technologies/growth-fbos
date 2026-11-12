@@ -228,7 +228,7 @@ async def test_every_step_is_in_the_history(async_client, db_session):
         quote = res.json()
 
     assert await _events(async_client, quote) == ["created", "submitted", "approved", "sent", "accepted"]
-    timeline = [a.outcome for a in await _timeline(db_session, converted["opportunity"]["id"])]
+    timeline = [a.outcome for a in await _timeline(db_session, converted["opportunity"]["id"]) if "quotation" in a.summary]
     assert timeline == ["sent", "accepted"]
 
 

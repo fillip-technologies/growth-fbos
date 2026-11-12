@@ -84,7 +84,27 @@ async def _offering(client: httpx.AsyncClient) -> str:
     return res.json()["id"]
 
 
+async def _accepted_proposal(client: httpx.AsyncClient, opportunity_id: str) -> None:
+    """
+    A sale from a lead is quoted once the customer accepts a proposal: one is made, marked
+    sent and accepted, unless the opportunity already has one.
+    """
+    listed = (await client.get(f"{BASE}/opportunities/{opportunity_id}/proposals")).json()["data"]
+    if any(p["status"] == "accepted" for p in listed):
+        return
+    res = await client.post(f"{BASE}/opportunities/{opportunity_id}/proposals", json={"scope": "As discussed on the call."})
+    assert res.status_code == 201, res.json()
+    proposal = res.json()
+    for action, body in (("send", None), ("accept", {})):
+        res = await client.post(
+            f"{BASE}/proposals/{proposal['id']}/{action}", json=body, headers={"If-Match": f'"{proposal["version"]}"'}
+        )
+        assert res.status_code == 200, res.json()
+        proposal = res.json()
+
+
 async def _quotation(client: httpx.AsyncClient, opportunity_id: str, discount_pct: float = 0) -> dict:
+    await _accepted_proposal(client, opportunity_id)
     res = await client.post(
         f"{BASE}/opportunities/{opportunity_id}/quotations",
         json={

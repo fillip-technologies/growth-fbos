@@ -57,6 +57,31 @@ class FakeDocuments:
     async def find_document(self, authorization, organization_id, document_id):
         return self.documents.get(str(document_id))
 
+    # Files revenue generates (proposal and quotation PDFs): kept with their bytes per version.
+    async def store_file(
+        self, authorization, organization_id, subject, file_name, content, title,
+        mime_type="application/pdf", category_code="quotation", document_id=None, change_note=None,
+    ) -> dict:
+        doc = self.documents.get(str(document_id)) if document_id else None
+        if doc is None:
+            doc = {"id": str(uuid.uuid4()), "title": title, "links": [{"subject": subject.as_json()}], "versions": {}}
+            self.documents[doc["id"]] = doc
+        version_no = len(doc["versions"]) + 1
+        doc["versions"][version_no] = content
+        doc["current_version"] = {
+            "version_no": version_no, "file_name": file_name, "mime_type": mime_type, "size_bytes": len(content),
+        }
+        return doc
+
+    async def list_for_subject(self, authorization, organization_id, subject) -> list[dict]:
+        return [
+            doc for doc in self.documents.values()
+            if doc.get("current_version") and any(link["subject"] == subject.as_json() for link in doc["links"])
+        ]
+
+    async def download(self, authorization, organization_id, document_id, version_no, timeout) -> bytes:
+        return self.documents[str(document_id)]["versions"][version_no]
+
 
 @pytest.fixture
 def fake_documents() -> FakeDocuments:

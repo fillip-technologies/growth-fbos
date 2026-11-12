@@ -3,9 +3,11 @@ Emailing a quotation, with the files chosen from it, to the customer.
 
 What any customer email shares is in `customer_email`; this keeps the quotation's subject,
 message and status rules. A draft or approved quotation is marked sent in the same step,
-and only committed once the mail server has accepted the email.
+and only committed once the mail server has accepted the email. The quotation's PDF always
+goes first: drawn and stored on the quotation when it is first sent, the stored copy after.
 """
 
+import base64
 import uuid
 
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -13,8 +15,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from exceptions import QuotationNotEmailableError
 from models.client import Client
 from models.opportunity import Opportunity
+from schemas.customer_email import EmailedFile
 from schemas.quotation import QuotationEmailCreate, QuotationEmailDraft, QuotationEmailSent, QuotationResponse
-from services import customer_email, quotation_events
+from services import customer_email, quotation_documents, quotation_events
 from services.documents_client import DocumentsClient, SubjectRef
 from services.identity_client import Actor
 from services.quotation_service import QuotationService, get_quote_in_org
@@ -71,21 +74,32 @@ async def send(
     )
 
     if quote.status in MARKED_SENT_BY_EMAIL:
+        # Sent now: taxed as of today, then its PDF drawn and stored as the customer's copy.
         quotation: QuotationResponse = await QuotationService.send_quotation(
             session, quotation_id, org_id, if_match, actor_user_id=actor.user_id, via_email=True
         )
+        pdf = await quotation_documents.store_final_pdf(session, org_id, quote, documents, authorization)
     else:
         quotation = await QuotationService.get_quotation(session, quotation_id, org_id)
+        pdf = await quotation_documents.customer_copy(session, org_id, quote, documents, authorization)
+
+    name = quotation_documents.file_name(quote)
+    attached = [{"file_name": name, "mime_type": "application/pdf", "content_base64": base64.b64encode(pdf.content).decode("ascii")}] + attached
+    files = [EmailedFile(document_id=pdf.document_id, file_name=name, size_bytes=len(pdf.content))] + files
 
     sent = await customer_email.deliver(data, attached)
 
     await quotation_events.record(
         session, org_id, quote, "emailed", actor.user_id,
-        data=customer_email.event_data(data, files),
+        data=customer_email.event_data(data, files, sent=sent, sent_by=actor.name, pdf=pdf.as_record(name)),
         timeline=customer_email.summary(f"quotation {quote.quote_no} rev {quote.revision_no}", data, files),
         timeline_type="email",
     )
-    quotation = quotation.model_copy(update={"last_sent_at": await quotation_events.last_sent_at(session, quote.id)})
+    quotation = quotation.model_copy(update={
+        "last_sent_at": await quotation_events.last_sent_at(session, quote.id),
+        "pdf_document_id": quote.pdf_document_id,
+        "pdf_version_no": quote.pdf_version_no,
+    })
 
     return QuotationEmailSent(
         from_address=sent["from_address"],
@@ -95,5 +109,6 @@ async def send(
         bcc=data.bcc,
         subject=data.subject,
         attachments=files,
+        message_id=sent.get("message_id"),
         quotation=quotation,
     )

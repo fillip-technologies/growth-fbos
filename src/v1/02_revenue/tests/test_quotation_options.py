@@ -6,12 +6,13 @@ import pytest
 from exceptions import DocumentsServiceUnavailableError
 from dependencies import get_documents_client
 from main import app
-from tests.test_sales_flow import BASE, _act, _qualified_lead, _offering, _quotation, _sent_quotation
+from tests.test_sales_flow import _accepted_proposal, BASE, _act, _qualified_lead, _offering, _quotation, _sent_quotation
 
 pytestmark = pytest.mark.asyncio
 
 
 async def _option(client: httpx.AsyncClient, opportunity_id: str, name: str, price: float = 100000.0) -> dict:
+    await _accepted_proposal(client, opportunity_id)
     res = await client.post(
         f"{BASE}/opportunities/{opportunity_id}/quotations",
         json={

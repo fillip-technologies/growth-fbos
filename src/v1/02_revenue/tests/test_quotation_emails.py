@@ -39,11 +39,15 @@ def quotation_files(fake_documents, monkeypatch: pytest.MonkeyPatch) -> dict[str
     """Files attached to quotations, by quotation id; their content is their name."""
     files: dict[str, list[dict]] = {}
 
+    stored_files, stored_download = fake_documents.list_for_subject, fake_documents.download
+
     async def list_for_subject(authorization, organization_id, subject):
-        return files.get(str(subject.id), [])
+        return files.get(str(subject.id), []) + await stored_files(authorization, organization_id, subject)
 
     async def download(authorization, organization_id, document_id, version_no, timeout):
-        doc = next(d for docs in files.values() for d in docs if d["id"] == str(document_id))
+        doc = next((d for docs in files.values() for d in docs if d["id"] == str(document_id)), None)
+        if doc is None:  # the quotation's own PDF, stored when it was sent
+            return await stored_download(authorization, organization_id, document_id, version_no, timeout)
         return doc["current_version"]["file_name"].encode()
 
     monkeypatch.setattr(fake_documents, "list_for_subject", list_for_subject, raising=False)
@@ -99,13 +103,18 @@ async def test_emails_chosen_files_marks_sent_and_logs_activity(async_client, db
     body = res.json()
     assert body["from_address"] == "sales@acme.test"
     assert body["cc"] == ["boss@client.test"]
-    assert [f["file_name"] for f in body["attachments"]] == ["quote.pdf"]
+    # The quotation's own PDF goes first, then the files chosen.
+    pdf_name = f"{quote['quote_no']} rev 1.pdf"
+    assert [f["file_name"] for f in body["attachments"]] == [pdf_name, "quote.pdf"]
     assert body["quotation"]["status"] == "sent"
 
     email = outbox[0]
     assert email["to"] == ["asha@client.test"] and email["bcc"] == ["me@acme.test"]
-    assert [a["file_name"] for a in email["attachments"]] == ["quote.pdf"]
-    assert base64.b64decode(email["attachments"][0]["content_base64"]) == b"quote.pdf"
+    assert [a["file_name"] for a in email["attachments"]] == [pdf_name, "quote.pdf"]
+    assert base64.b64decode(email["attachments"][0]["content_base64"]).startswith(b"%PDF")
+    assert base64.b64decode(email["attachments"][1]["content_base64"]) == b"quote.pdf"
+    assert body["quotation"]["pdf_document_id"] and body["quotation"]["pdf_version_no"] == 1
+    assert body["message_id"] == "<1@acme.test>"
 
     activities = (await db_session.execute(select(Activity).where(Activity.activity_type == "email"))).scalars().all()
     assert len(activities) == 1

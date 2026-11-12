@@ -32,3 +32,7 @@ SUMMARY_READ = "revenue.summary.read"
 LEAD_READ = "revenue.lead.read"
 LEAD_WRITE = "revenue.lead.write"
 LEAD_ASSIGN = "revenue.lead.assign"
+
+# Opportunities, and the proposals and quotations on them.
+OPPORTUNITY_READ = "revenue.opportunity.read"
+OPPORTUNITY_WRITE = "revenue.opportunity.write"

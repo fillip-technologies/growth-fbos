@@ -16,6 +16,7 @@ from models.lead import Lead, LeadEvent
 from models.offering import Offering
 from models.opportunity import Opportunity
 from models.payment import Payment, PaymentAllocation, Refund
+from models.proposal import Proposal, ProposalEvent, ProposalItem
 from models.quotation import NegotiationNote, Quotation, QuotationEvent, QuotationItem
 from models.receivables import InvoiceWriteOff, TdsReceivable
 from models.renewal import Renewal
@@ -36,6 +37,9 @@ __all__ = [
     "Deal",
     "Opportunity",
     "Offering",
+    "Proposal",
+    "ProposalItem",
+    "ProposalEvent",
     "Quotation",
     "QuotationItem",
     "QuotationEvent",
