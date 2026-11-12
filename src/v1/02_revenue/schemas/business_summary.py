@@ -5,9 +5,10 @@ are plain sums in `currency`, the currency most invoices use; `mixed_currencies`
 another one. Revenue is net of tax (services/revenue_rules.py).
 """
 from datetime import date
-from typing import List
+from typing import Dict, List, Optional
+import uuid
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from schemas.common import Money
 from schemas.summary import MonthAmount
@@ -21,6 +22,7 @@ class Period(BaseModel):
 class AmountBucket(BaseModel):
     key: str  # "none" when the records name nothing
     amount: Money
+    previous: Optional[Money] = None  # the same key in the previous period, where the summary gives one
 
 
 class ClientCounts(BaseModel):
@@ -51,6 +53,25 @@ class AmcSummary(BaseModel):
     clients: int  # customers with an active AMC contract
     renewals_due: int  # pending renewals dated within RENEWAL_WINDOW_DAYS from today
     revenue: Money  # in the period, from invoices billed against AMC contracts
+    revenue_previous: Optional[Money] = None
+
+
+class UnitCount(BaseModel):
+    amount: float
+    previous: float
+
+
+class TopProduct(BaseModel):
+    offering_id: uuid.UUID
+    name: str
+    units: float  # net of credit notes
+    revenue: Money
+
+
+class WorkUnitSegment(BaseModel):
+    work_unit_id: uuid.UUID
+    key: str  # a business segment (BUSINESS_SEGMENTS in services/business_summary.py)
+    amount: Money
 
 
 class RevenueBusinessSummary(BaseModel):
@@ -79,3 +100,24 @@ class RevenueBusinessSummary(BaseModel):
     # against the subcontract costs of projects given to associates.
     revenue_by_work_unit: List[AmountBucket]
     amc: AmcSummary
+    # Units of offerings whose product line is hardware, on issued invoices, net of credit notes.
+    hardware_units: Optional[UnitCount] = None
+    top_products: List[TopProduct] = []  # by revenue in the period, largest first
+    # Every invoice line in one business segment, the first that matches (services/business_summary.py);
+    # the gateway moves projects given to associates into "associate" with the next list.
+    revenue_by_business_segment: List[AmountBucket] = []
+    business_segments_by_work_unit: List[WorkUnitSegment] = []
+
+
+MAX_CLIENT_STATES = 2000
+
+
+class ClientStatesQuery(BaseModel):
+    organization_id: uuid.UUID
+    client_ids: List[uuid.UUID] = Field(..., max_length=MAX_CLIENT_STATES)
+
+
+class ClientStates(BaseModel):
+    # Customer id -> GST state code (None when the customer has none). Ids that are not the
+    # organization's customers are left out.
+    states: Dict[str, Optional[str]]

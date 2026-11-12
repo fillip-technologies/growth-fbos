@@ -20,7 +20,7 @@ from tests.conftest import TEST_ORG_ID, TEST_USER_ID, FakeIdentity
 
 WRITE_METHODS = {"POST", "PUT", "PATCH", "DELETE"}
 # POST because they carry a body, but they only check and answer: nothing to commit.
-READ_ONLY_POSTS = {"/workers/{worker_id}/role-change-previews"}
+READ_ONLY_POSTS = {"/workers/{worker_id}/role-change-previews", "/internal/workers/presence"}
 
 
 def _all_routes(routes):

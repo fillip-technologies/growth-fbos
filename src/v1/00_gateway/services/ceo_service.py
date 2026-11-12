@@ -14,8 +14,9 @@ from config import settings
 from exceptions import InvalidPeriodError
 import permissions
 from schemas.ceo import CeoScreen, Period
+from services.ceo_follow_ups import read_follow_ups
 from services.ceo_screen import build_screen
-from services.ceo_sources import SourceResult, SummaryReader
+from services.ceo_sources import CompanySources, SourceResult, SummaryReader
 from services.ceo_trend import CompanySnapshots, apply_snapshots, previous_query, trend_query
 from services.identity_client import Actor, IdentityClient, Organization
 
@@ -70,17 +71,11 @@ async def load_ceo_screen(
     reader = SummaryReader(http, authorization)
     served = inventory_company(actor, organizations)
 
-    inventory_read = (
-        reader.inventory(served, period.from_date, period.to_date) if served else _not_set_up()
-    )
-    # The snapshots are read beside the live summaries, so they add no wait of their own.
-    live_reads = asyncio.gather(
-        *(reader.company(org.id, period.from_date, period.to_date, financials) for org in organizations),
-        inventory_read,
-    )
+    # The snapshots are read beside the live summaries and their follow-ups, so they add no wait of their own.
     snapshot_reads = asyncio.gather(*(_snapshots(reader, org.id, period, previous, financials) for org in organizations))
-    (*company_results, inventory), snapshot_results = await asyncio.gather(live_reads, snapshot_reads)
-    companies = {org.id: result for org, result in zip(organizations, company_results)}
+    (companies, inventory, technicians_today), snapshot_results = await asyncio.gather(
+        _live_reads(reader, organizations, period, financials, served), snapshot_reads
+    )
     screen = build_screen(
         period=period,
         previous_period=previous,
@@ -88,6 +83,8 @@ async def load_ceo_screen(
         companies=companies,
         inventory=inventory,
         can_see_financials=financials,
+        inventory_company=served,
+        technicians_today=technicians_today,
     )
     return apply_snapshots(
         screen,
@@ -98,6 +95,20 @@ async def load_ceo_screen(
         can_see_financials=financials,
         today=date.today(),
     )
+
+
+async def _live_reads(
+    reader: SummaryReader, organizations: list[Organization], period: Period, financials: bool, served: uuid.UUID | None
+) -> tuple[dict[uuid.UUID, CompanySources], SourceResult, SourceResult]:
+    """Every company's summaries and the inventory's, then the lookups that join two of them."""
+    inventory_read = reader.inventory(served, period.from_date, period.to_date) if served else _not_set_up()
+    *company_results, inventory = await asyncio.gather(
+        *(reader.company(org.id, period.from_date, period.to_date, financials) for org in organizations),
+        inventory_read,
+    )
+    companies = {org.id: result for org, result in zip(organizations, company_results)}
+    technicians_today = await read_follow_ups(reader, companies, inventory, served)
+    return companies, inventory, technicians_today
 
 
 async def _snapshots(

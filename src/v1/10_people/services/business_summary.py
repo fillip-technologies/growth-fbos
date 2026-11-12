@@ -13,8 +13,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from models.absence import LeaveRequest
 from models.attendance import DailyAttendance
 from models.payroll import PayrollRun, Payslip
-from models.worker import Worker
-from schemas.business_summary import PeopleBusinessSummary, Period, WorkingToday
+from models.job_architecture import JobProfile, Position
+from models.worker import PositionAssignment, Worker
+from schemas.business_summary import FreelancerRow, PeopleBusinessSummary, Period, Presence, WorkingToday
 from schemas.summary import CountBucket
 
 # A run counts once someone approved it; draft and calculated runs can still change.
@@ -22,6 +23,8 @@ FINAL_PAYROLL_STATUSES = ("approved", "disbursed")
 DEFAULT_CURRENCY = "INR"
 AT_WORK_STATUSES = ("present", "half_day", "regularized")
 WORK_LOCATIONS = ("office", "field", "remote")
+FREELANCER = "freelancer"
+NO_CATEGORY = "none"
 
 
 def previous_period(from_date: date, to_date: date) -> tuple[date, date]:
@@ -67,7 +70,56 @@ async def people_summary(
         payroll=round(float(payroll), 2),
         payroll_previous=round(float(payroll_previous), 2),
         payroll_months=months,
+        freelancer_details=await _freelancers(session, org_id),
     )
+
+
+async def presence(session: AsyncSession, org_id: uuid.UUID, user_ids: list[uuid.UUID], today: Optional[date] = None) -> Presence:
+    """How many of these users are on leave today and where the others marked themselves at work."""
+    today = today or date.today()
+    worker_ids = (
+        await session.execute(
+            select(Worker.id).where(Worker.organization_id == org_id, Worker.user_id.in_(user_ids))
+        )
+    ).scalars().all() if user_ids else []
+    return Presence(
+        as_of=today,
+        workers=len(worker_ids),
+        unknown=len(set(user_ids)) - len(worker_ids),
+        on_leave=await _on_leave(session, org_id, today, worker_ids),
+        working=await _working_today(session, org_id, today, worker_ids),
+    )
+
+
+async def _freelancers(session: AsyncSession, org_id: uuid.UUID) -> list[FreelancerRow]:
+    workers = (
+        await session.execute(
+            select(Worker.id, Worker.user_id, Worker.designation).where(
+                Worker.organization_id == org_id, Worker.employment_type == FREELANCER, Worker.status != "exited"
+            )
+        )
+    ).all()
+    if not workers:
+        return []
+    families = dict(
+        (
+            await session.execute(
+                select(PositionAssignment.worker_id, JobProfile.job_family)
+                .join(Position, Position.id == PositionAssignment.position_id)
+                .join(JobProfile, JobProfile.id == Position.job_profile_id)
+                .where(
+                    PositionAssignment.organization_id == org_id,
+                    PositionAssignment.worker_id.in_([worker.id for worker in workers]),
+                    PositionAssignment.is_primary.is_(True),
+                    PositionAssignment.status == "active",
+                )
+            )
+        ).all()
+    )
+    return [
+        FreelancerRow(user_id=user_id, category=families.get(worker_id) or designation or NO_CATEGORY)
+        for worker_id, user_id, designation in workers
+    ]
 
 
 async def _payroll(session: AsyncSession, org_id: uuid.UUID, from_date: date, to_date: date) -> tuple[Decimal, int]:
@@ -83,19 +135,19 @@ async def _payroll(session: AsyncSession, org_id: uuid.UUID, from_date: date, to
     return Decimal(str(total)), int(runs)
 
 
-async def _on_leave(session: AsyncSession, org_id: uuid.UUID, today: date) -> int:
-    return int(
-        (
-            await session.execute(
-                select(func.count(func.distinct(LeaveRequest.worker_id))).where(
-                    LeaveRequest.organization_id == org_id,
-                    LeaveRequest.status == "approved",
-                    LeaveRequest.start_date <= today,
-                    LeaveRequest.end_date >= today,
-                )
-            )
-        ).scalar_one()
+async def _on_leave(
+    session: AsyncSession, org_id: uuid.UUID, today: date, worker_ids: Optional[list[uuid.UUID]] = None
+) -> int:
+    """Everyone on approved leave today, or only these workers."""
+    query = select(func.count(func.distinct(LeaveRequest.worker_id))).where(
+        LeaveRequest.organization_id == org_id,
+        LeaveRequest.status == "approved",
+        LeaveRequest.start_date <= today,
+        LeaveRequest.end_date >= today,
     )
+    if worker_ids is not None:
+        query = query.where(LeaveRequest.worker_id.in_(worker_ids))
+    return int((await session.execute(query)).scalar_one())
 
 
 async def _payroll_currency(session: AsyncSession, org_id: uuid.UUID) -> str:
@@ -110,16 +162,18 @@ async def _payroll_currency(session: AsyncSession, org_id: uuid.UUID) -> str:
     return max(rows, key=lambda row: row[1])[0] or DEFAULT_CURRENCY
 
 
-async def _working_today(session: AsyncSession, org_id: uuid.UUID, today: date) -> WorkingToday:
-    rows = (
-        await session.execute(
-            select(DailyAttendance.work_location, func.count()).where(
-                DailyAttendance.organization_id == org_id,
-                DailyAttendance.work_date == today,
-                DailyAttendance.status.in_(AT_WORK_STATUSES),
-            ).group_by(DailyAttendance.work_location)
-        )
-    ).all()
+async def _working_today(
+    session: AsyncSession, org_id: uuid.UUID, today: date, worker_ids: Optional[list[uuid.UUID]] = None
+) -> WorkingToday:
+    """Everyone marked at work today by where they work, or only these workers."""
+    query = select(DailyAttendance.work_location, func.count()).where(
+        DailyAttendance.organization_id == org_id,
+        DailyAttendance.work_date == today,
+        DailyAttendance.status.in_(AT_WORK_STATUSES),
+    )
+    if worker_ids is not None:
+        query = query.where(DailyAttendance.worker_id.in_(worker_ids))
+    rows = (await session.execute(query.group_by(DailyAttendance.work_location))).all()
     counts = {location: int(count) for location, count in rows}
     return WorkingToday(
         office=counts.get("office", 0),

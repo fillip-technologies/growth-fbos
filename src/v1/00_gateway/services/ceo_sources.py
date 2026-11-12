@@ -58,6 +58,10 @@ class CompanySources:
     approvals: list[SourceResult] = field(default_factory=list)
     # Operating expenses, other income and investments: all financial, read only with that permission.
     finance: SourceResult = NOT_ASKED
+    # The second round (services/ceo_follow_ups.py): Revenue's state of the customers of running
+    # projects, and Delivery's work of the company's freelancers.
+    client_states: SourceResult = NOT_ASKED
+    freelancer_work: SourceResult = NOT_ASKED
 
 
 class SummaryReader:
@@ -98,6 +102,22 @@ class SummaryReader:
     async def snapshots(self, organization_id: uuid.UUID, params: dict[str, Any]) -> SourceResult:
         """Insight's nightly snapshots of one company (`metric_code` may repeat)."""
         return await self._get(settings.insight_service_url, SNAPSHOTS_PATH, params, organization_id)
+
+    async def post_internal(self, base_url: str, path: str, body: dict[str, Any]) -> SourceResult:
+        """A service's `/internal` lookup, behind the internal service token. Asked only for a
+        company whose summary the caller could read from the same service (or, for People, the
+        one that holds the data), so it shows nothing the caller's own permissions would not."""
+        headers = {"X-FBOS-Internal-Token": settings.internal_service_token} if settings.internal_service_token else {}
+        async with self._slots:
+            try:
+                response = await self._http.post(
+                    f"{base_url.rstrip('/')}{path}", json=body, headers=headers, timeout=settings.ceo_timeout_seconds
+                )
+            except httpx.HTTPError:
+                return SourceResult("unavailable")
+        result = _classify(response)
+        # A refused internal call is the gateway's token, not the caller's access.
+        return SourceResult("unavailable") if result.status == "no_access" else result
 
     async def _get(
         self, base_url: str, path: str, params: dict[str, Any], organization_id: uuid.UUID

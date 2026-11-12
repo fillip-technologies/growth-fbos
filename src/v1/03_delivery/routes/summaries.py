@@ -7,8 +7,8 @@ from fastapi import APIRouter, Depends, Query
 from dependencies import DatabaseSession, OrgId, require_permission, verify_internal_caller
 from exceptions import ValidationFailedError
 import permissions
-from schemas.business_summary import DeliveryBusinessSummary
-from services.business_summary import delivery_summary
+from schemas.business_summary import DeliveryBusinessSummary, Workload, WorkloadQuery
+from services.business_summary import delivery_summary, workload
 
 router = APIRouter(tags=["summaries"])
 
@@ -55,3 +55,15 @@ async def get_delivery_summary_internal(
     CEO Command Center snapshots)."""
     check_period(from_date, to_date)
     return await delivery_summary(session, organization_id, from_date, to_date)
+
+
+@router.post(
+    "/internal/users/workload",
+    response_model=Workload,
+    tags=["internal"],
+    dependencies=[Depends(verify_internal_caller)],
+)
+async def get_workload_internal(payload: WorkloadQuery, session: DatabaseSession) -> Workload:
+    """Which of a group of users have work (an open task or a running project), for the gateway's
+    freelancer card. A POST because the list of ids can be too long for a URL; it changes nothing."""
+    return await workload(session, payload.organization_id, payload.user_ids)

@@ -113,3 +113,69 @@ async def test_clock_in_records_where_the_day_is_worked_and_freelancer_is_a_type
     assert changed.status_code == 200, changed.text
     assert changed.json()["employment_type"] == "freelancer"
     assert (await async_client.patch(f"/v1/workers/{worker['id']}", json={"employment_type": "gig"})).status_code == 422
+
+
+async def test_freelancers_carry_their_login_and_category(async_client, db_session: AsyncSession):
+    """The category is the job family of their primary position, else their designation."""
+    from models.job_architecture import JobProfile, Position
+    from models.worker import PositionAssignment
+
+    designer_user = uuid.uuid4()
+    designer = await make_worker(async_client, "designer@x.com", user_id=designer_user)
+    no_login = await make_worker(async_client, "nologin@x.com")
+    staff = await make_worker(async_client, "staff@x.com")
+    for worker in (designer, no_login):
+        await db_session.execute(update(Worker).where(Worker.id == uuid.UUID(worker["id"])).values(employment_type="freelancer"))
+    profile = JobProfile(organization_id=TEST_ORG_ID, job_code="DES-1", title="Designer", job_family="Design", job_level="L1")
+    db_session.add(profile)
+    await db_session.flush()
+    seat = Position(organization_id=TEST_ORG_ID, position_code="POS-1", title="Designer", job_profile_id=profile.id,
+                    effective_from=date(2024, 1, 1))
+    db_session.add(seat)
+    await db_session.flush()
+    db_session.add(PositionAssignment(organization_id=TEST_ORG_ID, worker_id=uuid.UUID(designer["id"]), position_id=seat.id,
+                                      effective_start_date=date(2024, 1, 1)))
+    await db_session.commit()
+
+    summary = await people_summary(db_session, TEST_ORG_ID, date(2026, 11, 1), date(2026, 11, 30), today=TODAY)
+
+    assert staff["id"] not in {str(row.user_id) for row in summary.freelancer_details}
+    assert sorted((str(row.user_id), row.category) for row in summary.freelancer_details) == sorted(
+        [(str(designer_user), "Design"), ("None", "Engineer")]
+    )
+
+
+async def test_presence_counts_a_group_on_leave_and_at_work(async_client, db_session: AsyncSession):
+    from models.attendance import DailyAttendance
+    from services.business_summary import presence
+
+    users = [uuid.uuid4() for _ in range(4)]
+    workers = [uuid.UUID((await make_worker(async_client, f"t{i}@x.com", user_id=user))["id"]) for i, user in enumerate(users)]
+    outsider = uuid.UUID((await make_worker(async_client, "other@x.com", user_id=uuid.uuid4()))["id"])
+    plan = LeavePlan(organization_id=TEST_ORG_ID, code="ANNUAL", name="Annual")
+    db_session.add(plan)
+    await db_session.flush()
+    db_session.add(LeaveRequest(organization_id=TEST_ORG_ID, worker_id=workers[0], leave_plan_id=plan.id,
+                                start_date=TODAY, end_date=TODAY, days_count=1, reason="Rest", status="approved"))
+    for worker_id, location in [(workers[1], "office"), (workers[2], "field"), (outsider, "office")]:
+        db_session.add(DailyAttendance(organization_id=TEST_ORG_ID, worker_id=worker_id, work_date=TODAY,
+                                       status="present", work_location=location))
+    await db_session.commit()
+
+    unknown_user = uuid.uuid4()
+    result = await presence(db_session, TEST_ORG_ID, [*users, unknown_user], today=TODAY)
+
+    assert (result.workers, result.unknown, result.on_leave) == (4, 1, 1)
+    assert (result.working.office, result.working.field, result.working.remote) == (1, 1, 0)
+
+
+async def test_presence_route_needs_the_internal_token(async_client, monkeypatch):
+    from config import settings
+
+    monkeypatch.setattr(settings, "internal_service_token", "s3cret")
+    body = {"organization_id": str(TEST_ORG_ID), "user_ids": [str(uuid.uuid4())]}
+    path = "/api/people/v1/internal/workers/presence"
+    assert (await async_client.post(path, json=body)).status_code == 403
+    res = await async_client.post(path, json=body, headers={"X-FBOS-Internal-Token": "s3cret"})
+    assert res.status_code == 200, res.text
+    assert (res.json()["workers"], res.json()["unknown"]) == (0, 1)

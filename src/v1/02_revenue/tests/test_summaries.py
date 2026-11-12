@@ -366,3 +366,81 @@ async def test_offering_product_line_is_set_changed_and_cleared(async_client):
     assert untouched.json()["product_line"] == "amc"
     cleared = await async_client.patch(f"{BASE}/offerings/{offering_id}", json={"product_line": None})
     assert cleared.json()["product_line"] is None
+
+
+@pytest.mark.asyncio
+async def test_business_summary_previous_period_units_top_products_and_business_segments(db_session: AsyncSession):
+    from models.client_tax_profile import ClientTaxProfile
+    from models.invoice import InvoiceLine
+    from models.offering import Offering
+    from services.business_summary import BusinessSummaryService
+
+    private_in = Client(organization_id=TEST_ORG_ID, code="P-1", name="Acme", client_type="company",
+                        owner_user_id=TEST_USER_ID, country="IN", state_code="29")
+    govt_abroad = Client(organization_id=TEST_ORG_ID, code="G-1", name="Embassy", client_type="government",
+                         owner_user_id=TEST_USER_ID, country="IN", state_code="07")
+    db_session.add_all([private_in, govt_abroad])
+    await db_session.flush()
+    db_session.add(ClientTaxProfile(client_id=govt_abroad.id, organization_id=TEST_ORG_ID, country="AE"))
+    camera = Offering(organization_id=TEST_ORG_ID, code="CAM", name="Camera", billing_model="one_time", product_line="hardware")
+    support = Offering(organization_id=TEST_ORG_ID, code="SUP", name="Support", billing_model="recurring", product_line="services")
+    amc = Contract(organization_id=TEST_ORG_ID, client_id=private_in.id, contract_no="K-1", contract_type="amc",
+                   status="active", start_date=date(2026, 1, 1), total_value=10_000)
+    db_session.add_all([camera, support, amc])
+    await db_session.flush()
+
+    project = uuid.uuid4()
+    november, september = date(2026, 11, 2), date(2026, 9, 5)
+    # This period: 3 cameras sold (1500) on a project, 1 returned (-500); an AMC invoice with a camera
+    # (400) and support (600); support to a government customer abroad (200).
+    sale = _invoice(private_in, "issued", 0, 0, None, november, taxable_total=1500, work_unit_id=project, place_of_supply="29")
+    returned = _invoice(private_in, "issued", 0, 0, None, november, taxable_total=500, doc_type="credit_note", place_of_supply="29")
+    amc_bill = _invoice(private_in, "issued", 0, 0, None, november, taxable_total=1000, contract_id=amc.id, place_of_supply="29")
+    abroad = _invoice(govt_abroad, "issued", 0, 0, None, november, taxable_total=200, place_of_supply="96")
+    # Previous period: 2 cameras (800) to state 27, and AMC support (300).
+    earlier = _invoice(private_in, "issued", 0, 0, None, september, taxable_total=800, place_of_supply="27")
+    earlier_amc = _invoice(private_in, "issued", 0, 0, None, september, taxable_total=300, contract_id=amc.id, place_of_supply="29")
+    db_session.add_all([sale, returned, amc_bill, abroad, earlier, earlier_amc])
+    await db_session.flush()
+
+    def line(invoice, offering, quantity, value):
+        return InvoiceLine(invoice_id=invoice.id, offering_id=offering.id, line_no=1, description=offering.name,
+                           quantity=quantity, unit_price=value, taxable_value=value, line_total=value)
+
+    db_session.add_all([
+        line(sale, camera, 3, 1500), line(returned, camera, 1, 500),
+        line(amc_bill, camera, 1, 400), InvoiceLine(invoice_id=amc_bill.id, offering_id=support.id, line_no=2,
+                                                    description="Support", unit_price=600, taxable_value=600, line_total=600),
+        line(abroad, support, 1, 200),
+        line(earlier, camera, 2, 800), line(earlier_amc, support, 1, 300),
+    ])
+    await db_session.commit()
+
+    summary = await BusinessSummaryService.revenue(db_session, TEST_ORG_ID, date(2026, 10, 1), date(2026, 11, 30), today=TODAY)
+
+    def with_previous(buckets):
+        return {b.key: (b.amount.amount, b.previous.amount) for b in buckets}
+
+    # A state only the previous period had still shows, at 0 now.
+    assert with_previous(summary.revenue_by_state) == {"29": (2000, 300), "96": (200, 0), "27": (0, 800)}
+    assert with_previous(summary.revenue_by_product_line) == {"hardware": (1400, 800), "services": (800, 300)}
+    assert (summary.amc.revenue.amount, summary.amc.revenue_previous.amount) == (1000, 300)
+    assert (summary.hardware_units.amount, summary.hardware_units.previous) == (3, 2)
+    assert [(p.name, p.units, p.revenue.amount) for p in summary.top_products] == [("Camera", 3, 1400), ("Support", 2, 800)]
+    assert {b.key: b.amount.amount for b in summary.revenue_by_business_segment} == {
+        "hardware_sales": 1000, "amc_services": 600, "amc_hardware": 400, "government_international": 200,
+    }
+    assert [(s.work_unit_id, s.key, s.amount.amount) for s in summary.business_segments_by_work_unit] == [
+        (project, "hardware_sales", 1500),
+    ]
+
+
+def test_each_invoice_line_lands_in_the_first_business_segment_it_matches():
+    from services.business_summary import business_segment
+
+    assert business_segment("amc", "hardware", "government", "india") == "amc_hardware"
+    assert business_segment("amc", None, "private", "india") == "amc_services"
+    assert business_segment("fixed", "hardware", "government", "india") == "hardware_sales"
+    assert business_segment(None, "software", "government", "international") == "government_international"
+    assert business_segment(None, None, "private", "india") == "private_india"
+    assert business_segment(None, "services", None, "india") == "other"

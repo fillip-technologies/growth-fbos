@@ -12,7 +12,7 @@ from fastapi import APIRouter, Depends, Query
 from dependencies import DatabaseSession, OrgId, require_permission, verify_internal_caller
 from exceptions import InvalidDateRangeError
 import permissions
-from schemas.business_summary import RevenueBusinessSummary
+from schemas.business_summary import ClientStates, ClientStatesQuery, RevenueBusinessSummary
 from schemas.summary import ContractSummary, InvoiceSummary, LeadSummary, OpportunitySummary, PaymentSummary
 from services.business_summary import BusinessSummaryService
 from services.summary_service import SummaryService
@@ -104,3 +104,16 @@ async def revenue_business_summary_internal(
     CEO Command Center snapshots)."""
     check_period(from_date, to_date)
     return await BusinessSummaryService.revenue(session, organization_id, from_date, to_date)
+
+
+@router.post(
+    "/internal/clients/states",
+    response_model=ClientStates,
+    tags=["internal"],
+    dependencies=[Depends(verify_internal_caller)],
+)
+async def client_states_internal(payload: ClientStatesQuery, session: DatabaseSession) -> ClientStates:
+    """The GST state of the named customers of one organization, for the gateway's "projects by
+    state" (Delivery knows each project's customer, Revenue the customer's state). A POST because
+    the list of ids can be too long for a URL; it changes nothing."""
+    return ClientStates(states=await BusinessSummaryService.client_states(session, payload.organization_id, payload.client_ids))

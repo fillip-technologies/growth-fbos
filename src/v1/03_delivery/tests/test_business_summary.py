@@ -104,3 +104,61 @@ async def test_a_project_can_name_an_associate_but_not_its_own_company(act_as):
     cleared = await admin.patch(f"{BASE}/work-units/{project['id']}", json={"partner_organization_id": None},
                                 headers={"If-Match": f'"{res.json()["version"]}"'})
     assert cleared.status_code == 200 and cleared.json()["partner_organization_id"] is None
+
+
+async def test_running_projects_are_counted_per_customer(act_as, db_session: AsyncSession):
+    admin = act_as(ADMIN)
+    acme, globex = uuid.uuid4(), uuid.uuid4()
+    await _project(admin, db_session, status="active", client_id=acme)
+    await _project(admin, db_session, status="on_hold", client_id=acme)
+    await _project(admin, db_session, status="active", client_id=globex)
+    await _project(admin, db_session, status="active", client_id=None)
+    await _project(admin, db_session, status="completed", client_id=globex)  # not running
+
+    summary = await delivery_summary(db_session, TEST_ORG_ID, date(2026, 11, 1), date(2026, 11, 30), today=TODAY)
+
+    assert {row.client_id: row.count for row in summary.running_by_client} == {acme: 2, globex: 1, None: 1}
+
+
+async def test_workload_names_users_with_open_tasks_or_running_projects(act_as, db_session: AsyncSession):
+    from models.task import Task
+    from models.task_template import TaskType
+    from models.work_unit import WorkUnitMember
+    from services.business_summary import workload
+
+    admin = act_as(ADMIN)
+    running = await _project(admin, db_session, status="active")
+    finished = await _project(admin, db_session, status="completed")
+    member, manager, tasked, idle, past_member, finished_member = (uuid.uuid4() for _ in range(6))
+    await db_session.execute(update(WorkUnit).where(WorkUnit.id == running).values(manager_user_id=manager))
+    db_session.add_all([
+        WorkUnitMember(work_unit_id=running, user_id=member, member_role="dev", valid_from=date(2026, 1, 1)),
+        WorkUnitMember(work_unit_id=running, user_id=past_member, member_role="dev", valid_from=date(2026, 1, 1), valid_to=date(2026, 6, 30)),
+        WorkUnitMember(work_unit_id=finished, user_id=finished_member, member_role="dev", valid_from=date(2026, 1, 1)),
+    ])
+    task_type = TaskType(organization_id=TEST_ORG_ID, code="type-w", name="Task", category="general")
+    db_session.add(task_type)
+    await db_session.flush()
+    for assignee, status in [(tasked, "in_progress"), (idle, "completed")]:
+        db_session.add(Task(organization_id=TEST_ORG_ID, code=f"TSK-{uuid.uuid4().hex[:8]}", title="t", task_type_id=task_type.id,
+                            status=status, priority="p3", owning_unit_id=uuid.uuid4(), created_by=uuid.uuid4(),
+                            assignee_user_id=assignee))
+    await db_session.commit()
+
+    result = await workload(db_session, TEST_ORG_ID, [member, manager, tasked, idle, past_member, finished_member], today=TODAY)
+
+    assert set(result.working_user_ids) == {member, manager, tasked}
+    assert result.running_projects == 1
+
+
+async def test_workload_route_needs_the_internal_token(act_as, monkeypatch):
+    from config import settings
+
+    client = act_as(ADMIN)
+    monkeypatch.setattr(settings, "internal_service_token", "s3cret")
+    body = {"organization_id": str(TEST_ORG_ID), "user_ids": [str(uuid.uuid4())]}
+    path = "/api/delivery/v1/internal/users/workload"
+    assert (await client.post(path, json=body)).status_code == 403
+    res = await client.post(path, json=body, headers={"X-FBOS-Internal-Token": "s3cret"})
+    assert res.status_code == 200, res.text
+    assert res.json() == {"working_user_ids": [], "running_projects": 0}

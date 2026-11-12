@@ -31,6 +31,7 @@ from schemas.ceo import (
     ExpensesSection,
     FieldSection,
     FinanceSection,
+    FreelancerCard,
     HealthSection,
     InvestmentsCard,
     Kpis,
@@ -40,12 +41,17 @@ from schemas.ceo import (
     OrganizationRef,
     PeopleSection,
     Period,
+    ProcurementBudget,
     ProcurementSection,
+    ProjectsByStateCard,
     RelationshipTotal,
     RevenueSection,
     SegmentAmount,
     SegmentCount,
     StatusAmount,
+    TechniciansToday,
+    TopProduct,
+    VisitsToday,
     WorkingToday,
 )
 from services.ceo_sources import CompanySources, SourceResult
@@ -58,6 +64,10 @@ NO_ACCESS = {"available": False, "reason": "no_access"}
 RELATIONSHIP_ORDER = ("own", "associate", "investment")
 FREELANCER = "freelancer"
 OTHER_COMPANY = "Other company"
+NONE_KEY = "none"
+ASSOCIATE_SEGMENT = "associate"
+TOP_PRODUCTS = 10
+TOP_CATEGORIES = 5
 
 
 def build_screen(
@@ -68,9 +78,11 @@ def build_screen(
     companies: dict[uuid.UUID, CompanySources],
     inventory: SourceResult,
     can_see_financials: bool,
+    inventory_company: Optional[uuid.UUID] = None,
+    technicians_today: SourceResult = SourceResult("unavailable"),
 ) -> CeoScreen:
     sources = [companies[org.id] for org in organizations]
-    revenue = _revenue_section(sources)
+    revenue = _revenue_section(sources, can_see_financials)
     delivery = _delivery_section(sources, can_see_financials)
     people = _people_section(sources, can_see_financials)
     health = _health_section(organizations, sources)
@@ -94,8 +106,10 @@ def build_screen(
         expenses=expenses,
         asset_costs=_asset_costs_section(sources) if can_see_financials else AssetCostsSection(**NO_ACCESS),
         finance=_finance_section(sources) if can_see_financials else FinanceSection(**NO_ACCESS),
-        procurement=_procurement_section(inventory, can_see_financials),
-        field=_field_section(inventory),
+        procurement=_procurement_section(
+            inventory, can_see_financials, companies[inventory_company].management if inventory_company in companies else None
+        ),
+        field=_field_section(inventory, technicians_today),
         alerts=_alerts(sources, inventory, can_see_financials),
     )
 
@@ -143,11 +157,32 @@ def _amount(rows: list[dict[str, Any]], current: tuple[str, ...], previous: tupl
 
 
 def merge_buckets(lists: Iterable[Iterable[dict[str, Any]]], key: str, amount: str) -> list[Bucket]:
+    """Adds up the same key across companies, and its `previous` where any source gives one."""
     totals: dict[str, float] = defaultdict(float)
+    previous: dict[str, float] = defaultdict(float)
+    has_previous = False
     for rows in lists:
         for row in rows or []:
             totals[str(row.get(key))] += money(row.get(amount))
-    return [Bucket(key=k, amount=round(v, 2)) for k, v in sorted(totals.items(), key=lambda item: -item[1])]
+            if row.get("previous") is not None:
+                has_previous = True
+                previous[str(row.get(key))] += money(row["previous"])
+    ordered = sorted(totals, key=lambda k: (-totals[k], -previous.get(k, 0)))
+    return [
+        Bucket(key=k, amount=round(totals[k], 2), previous=round(previous.get(k, 0), 2) if has_previous else None)
+        for k in ordered
+    ]
+
+
+def _optional_sum(rows: list[dict[str, Any]], *path: str) -> Optional[float]:
+    """The sum where any source gives the figure, else None (an older service that doesn't yet)."""
+    def has(row: dict[str, Any]) -> bool:
+        value: Any = row
+        for key in path:
+            value = (value or {}).get(key)
+        return value is not None
+
+    return _sum(rows, *path) if any(has(row) for row in rows) else None
 
 
 def health_label(score: float) -> str:
@@ -200,11 +235,12 @@ def _merge_counts(lists: Iterable[Optional[list[dict[str, Any]]]]) -> list[Count
 # --------------------------------------------------------------------------- sections
 
 
-def _revenue_section(sources: list[CompanySources]) -> RevenueSection:
+def _revenue_section(sources: list[CompanySources], financials: bool) -> RevenueSection:
     results = [s.revenue for s in sources]
     rows = _ok(results)
+    projects_by_state = _projects_by_state(sources)
     if not rows:
-        return RevenueSection(**section_state(results))
+        return RevenueSection(**section_state(results), projects_by_state=projects_by_state)
     months: dict[str, float] = defaultdict(float)
     for row in rows:
         for month in row.get("revenue_by_month", []):
@@ -227,7 +263,77 @@ def _revenue_section(sources: list[CompanySources]) -> RevenueSection:
             clients=int(_sum(amc, "clients")),
             renewals_due=int(_sum(amc, "renewals_due")),
             revenue=_sum(amc, "revenue"),
+            revenue_previous=_optional_sum(amc, "revenue_previous"),
         ),
+        hardware_units=_hardware_units(rows),
+        top_products=_top_products(rows, financials),
+        by_business_segment=_business_segments(sources),
+        projects_by_state=projects_by_state,
+    )
+
+
+def _hardware_units(rows: list[dict[str, Any]]) -> Optional[Amount]:
+    units = [row["hardware_units"] for row in rows if row.get("hardware_units")]
+    if not units:
+        return None
+    return Amount(amount=_sum(units, "amount"), previous=_sum(units, "previous"))
+
+
+def _top_products(rows: list[dict[str, Any]], financials: bool) -> list[TopProduct]:
+    """The companies' best sellers by revenue, a product name counted once across companies."""
+    totals: dict[str, list[float]] = {}
+    for row in rows:
+        for product in row.get("top_products") or []:
+            entry = totals.setdefault(product["name"], [0.0, 0.0])
+            entry[0] += float(product.get("units") or 0)
+            entry[1] += money(product.get("revenue"))
+    best = sorted(totals.items(), key=lambda item: (-item[1][1], item[0]))[:TOP_PRODUCTS]
+    return [
+        TopProduct(name=name, units=round(units, 4), revenue=round(revenue, 2) if financials else None)
+        for name, (units, revenue) in best
+    ]
+
+
+def _business_segments(sources: list[CompanySources]) -> list[Bucket]:
+    """Revenue's segments, with the invoices of projects a company gave to an associate (Delivery's
+    partners) moved into "associate", the first segment in the order."""
+    lists: list[list[dict[str, Any]]] = []
+    for s in sources:
+        if not s.revenue.ok:
+            continue
+        revenue = s.revenue.data or {}
+        associate_projects = {
+            str(work_unit) for partner in (s.delivery.data or {}).get("partners", []) for work_unit in partner["work_unit_ids"]
+        } if s.delivery.ok else set()
+        moved = [
+            row for row in revenue.get("business_segments_by_work_unit") or [] if str(row["work_unit_id"]) in associate_projects
+        ]
+        lists.append(revenue.get("revenue_by_business_segment") or [])
+        lists.append([{"key": row["key"], "amount": -money(row["amount"])} for row in moved])
+        lists.append([{"key": ASSOCIATE_SEGMENT, "amount": money(row["amount"])} for row in moved])
+    return [bucket for bucket in merge_buckets(lists, "key", "amount") if bucket.amount]
+
+
+def _projects_by_state(sources: list[CompanySources]) -> ProjectsByStateCard:
+    """Delivery's running projects per customer, put in the customer's state by Revenue."""
+    counts: dict[str, int] = defaultdict(int)
+    joined: list[SourceResult] = []
+    for s in sources:
+        rows = (s.delivery.data or {}).get("running_by_client") or []
+        needs_states = any(row.get("client_id") for row in rows)
+        if not s.delivery.ok or (needs_states and not s.client_states.ok):
+            joined.append(s.delivery if not s.delivery.ok else s.client_states)
+            continue
+        joined.append(s.delivery)
+        states = (s.client_states.data or {}).get("states") or {}
+        for row in rows:
+            state = states.get(row.get("client_id") or "") or NONE_KEY
+            counts[state] += int(row["count"])
+    state = section_state(joined)
+    if not state["available"]:
+        return ProjectsByStateCard(**state)
+    return ProjectsByStateCard(
+        **state, rows=[CountBucket(key=k, count=v) for k, v in sorted(counts.items(), key=lambda item: (-item[1], item[0]))]
     )
 
 
@@ -250,13 +356,15 @@ def _people_section(sources: list[CompanySources], financials: bool) -> PeopleSe
     results = [s.people for s in sources]
     rows = _ok(results)
     if not rows:
-        return PeopleSection(**section_state(results))
+        state = section_state(results)
+        return PeopleSection(**state, freelancer_details=FreelancerCard(**state))
     types: dict[str, int] = defaultdict(int)
     for row in rows:
         for bucket in row.get("by_employment_type", []):
             types[bucket["key"]] += int(bucket["count"])
     return PeopleSection(
         **section_state(results),
+        freelancer_details=_freelancer_card(sources),
         headcount=int(_sum(rows, "headcount")),
         by_employment_type=[CountBucket(key=k, count=v) for k, v in sorted(types.items(), key=lambda item: -item[1])],
         freelancers=types.get(FREELANCER, 0),
@@ -265,6 +373,39 @@ def _people_section(sources: list[CompanySources], financials: bool) -> PeopleSe
             **{place: int(_sum(rows, "working_today", place)) for place in ("office", "field", "remote", "not_said")}
         ),
         payroll=_amount(rows, ("payroll",), ("payroll_previous",)) if financials else None,
+    )
+
+
+def _freelancer_card(sources: list[CompanySources]) -> FreelancerCard:
+    """People's freelancers and, for those with a login, Delivery's word on who has work."""
+    joined: list[SourceResult] = []
+    total = without_login = active = projects = 0
+    categories: dict[str, int] = defaultdict(int)
+    for s in sources:
+        freelancers = (s.people.data or {}).get("freelancer_details") or []
+        with_login = [row for row in freelancers if row.get("user_id")]
+        if not s.people.ok or (with_login and not s.freelancer_work.ok):
+            joined.append(s.people if not s.people.ok else s.freelancer_work)
+            continue
+        joined.append(s.people)
+        work = s.freelancer_work.data or {}
+        total += len(freelancers)
+        without_login += len(freelancers) - len(with_login)
+        active += len(work.get("working_user_ids") or [])
+        projects += int(work.get("running_projects") or 0)
+        for row in freelancers:
+            categories[row.get("category") or NONE_KEY] += 1
+    state = section_state(joined)
+    if not state["available"]:
+        return FreelancerCard(**state)
+    top = sorted(categories.items(), key=lambda item: (-item[1], item[0]))[:TOP_CATEGORIES]
+    return FreelancerCard(
+        **state,
+        total=total,
+        active=active,
+        without_login=without_login,
+        projects=projects,
+        top_categories=[CountBucket(key=k, count=v) for k, v in top],
     )
 
 
@@ -391,12 +532,15 @@ def _finance_section(sources: list[CompanySources]) -> FinanceSection:
     )
 
 
-def _procurement_section(inventory: SourceResult, financials: bool) -> ProcurementSection:
+def _procurement_section(
+    inventory: SourceResult, financials: bool, management: Optional[SourceResult]
+) -> ProcurementSection:
     if not inventory.ok:
         return ProcurementSection(**section_state([inventory]))
     data = inventory.data or {}
     orders = data.get("purchase_orders") or {}
     return ProcurementSection(
+        budget=_procurement_budget(money(orders.get("committed")), management) if financials else None,
         available=True,
         committed=Amount(amount=money(orders.get("committed")), previous=money(orders.get("committed_previous")))
         if financials
@@ -413,16 +557,58 @@ def _procurement_section(inventory: SourceResult, financials: bool) -> Procureme
     )
 
 
-def _field_section(inventory: SourceResult) -> FieldSection:
+def _procurement_budget(committed: float, management: Optional[SourceResult]) -> ProcurementBudget:
+    """Committed purchase orders of the inventory's company against its procurement budget."""
+    if management is None:
+        return ProcurementBudget(available=False, reason="not_set_up")
+    if not management.ok:
+        return ProcurementBudget(**section_state([management]))
+    share = ((management.data or {}).get("budget") or {}).get("procurement_for_period")
+    if share is None:
+        return ProcurementBudget(available=False, reason="not_set_up")
+    budget = float(share)
+    return ProcurementBudget(
+        available=True,
+        budget=round(budget, 2),
+        committed=round(committed, 2),
+        used_pct=round(committed / budget * 100, 1) if budget else None,
+        over_budget=round(max(committed - budget, 0), 2),
+    )
+
+
+def _field_section(inventory: SourceResult, technicians_today: SourceResult) -> FieldSection:
     if not inventory.ok:
-        return FieldSection(**section_state([inventory]))
+        return FieldSection(**section_state([inventory]), technicians_today=TechniciansToday(**section_state([inventory])))
     data = inventory.data or {}
     technicians = data.get("technicians") or {}
+    visits = data.get("visits_today")
     return FieldSection(
         available=True,
         technicians=int(technicians.get("total") or 0),
         technicians_available=int(technicians.get("available") or 0),
         open_repairs=int(data.get("open_repairs") or 0),
+        visits_today=VisitsToday(**visits) if visits else None,
+        technicians_today=_technicians_today(technicians, technicians_today),
+    )
+
+
+def _technicians_today(technicians: dict[str, Any], presence: SourceResult) -> TechniciansToday:
+    if not presence.ok:
+        return TechniciansToday(**section_state([presence]))
+    day = presence.data or {}
+    working = day.get("working") or {}
+    at_office, in_field = int(working.get("office") or 0), int(working.get("field") or 0)
+    remote, not_said = int(working.get("remote") or 0), int(working.get("not_said") or 0)
+    on_leave = int(day.get("on_leave") or 0)
+    return TechniciansToday(
+        available=True,
+        at_office=at_office,
+        in_field=in_field,
+        remote=remote,
+        not_said=not_said,
+        on_leave=on_leave,
+        not_marked=max(int(day.get("workers") or 0) - at_office - in_field - remote - not_said - on_leave, 0),
+        unlinked=int(technicians.get("unlinked") or 0) + int(day.get("unknown") or 0),
     )
 
 

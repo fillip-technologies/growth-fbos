@@ -4,7 +4,7 @@ from datetime import date, timedelta
 from decimal import Decimal
 import uuid
 
-from sqlalchemy import func, select
+from sqlalchemy import case, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from models.finance import Expense, ExpenseCategory, IncomeEntry, Investment
@@ -22,6 +22,7 @@ from services.settings_service import DEFAULT_CURRENCY
 
 APPROVED, PENDING = "approved", "pending_approval"
 MATURING_WINDOW_DAYS = 30
+INVESTMENT_IN_COMPANIES = "investment_in_companies"
 ZERO = Decimal(0)
 
 
@@ -62,7 +63,10 @@ async def finance_summary(
         pending_approval=await _pending(session, org_id),
         income=_round(await _income_total(session, org_id, from_date, to_date)),
         income_previous=_round(await _income_total(session, org_id, previous_from, previous_to)),
-        income_by_type=await _income_by_type(session, org_id, from_date, to_date),
+        income_by_type=_with_previous(
+            await _income_by_type(session, org_id, from_date, to_date),
+            await _income_by_type(session, org_id, previous_from, previous_to),
+        ),
         investments=await _investments(session, org_id, to_date),
     )
 
@@ -144,20 +148,39 @@ async def _income_total(session: AsyncSession, org_id: uuid.UUID, from_date: dat
     return _dec(total)
 
 
-async def _income_by_type(session: AsyncSession, org_id: uuid.UUID, from_date: date, to_date: date) -> list[AmountBucket]:
+async def _income_by_type(
+    session: AsyncSession, org_id: uuid.UUID, from_date: date, to_date: date
+) -> dict[str, Decimal]:
+    """Income per type; what investments in companies (an investment naming its investee
+    organization) brought in is one type of its own, `investment_in_companies`, so it is not
+    counted under interest or dividend as well."""
+    in_a_company = Investment.investee_organization_id.is_not(None)
+    income_type = case((in_a_company, INVESTMENT_IN_COMPANIES), else_=IncomeEntry.income_type)
     rows = (
         await session.execute(
-            select(IncomeEntry.income_type, func.coalesce(func.sum(IncomeEntry.amount), 0))
+            select(income_type, func.coalesce(func.sum(IncomeEntry.amount), 0))
+            .outerjoin(Investment, Investment.id == IncomeEntry.investment_id)
             .where(
                 IncomeEntry.organization_id == org_id,
                 IncomeEntry.received_on >= from_date,
                 IncomeEntry.received_on <= to_date,
             )
-            .group_by(IncomeEntry.income_type)
+            .group_by(income_type)
         )
     ).all()
-    buckets = [AmountBucket(key=key, amount=_round(_dec(amount))) for key, amount in rows]
-    return sorted(buckets, key=lambda bucket: -bucket.amount)
+    totals: dict[str, Decimal] = defaultdict(lambda: ZERO)
+    for key, amount in rows:
+        totals[key] += _dec(amount)
+    return dict(totals)
+
+
+def _with_previous(current: dict[str, Decimal], previous: dict[str, Decimal]) -> list[AmountBucket]:
+    """Every key of either period, largest first; a key only the previous period had shows 0 now."""
+    buckets = [
+        AmountBucket(key=key, amount=_round(current.get(key, ZERO)), previous=_round(previous.get(key, ZERO)))
+        for key in current.keys() | previous.keys()
+    ]
+    return sorted(buckets, key=lambda bucket: (-bucket.amount, -(bucket.previous or 0), bucket.key))
 
 
 async def _investments(session: AsyncSession, org_id: uuid.UUID, to_date: date) -> InvestmentsPosition:

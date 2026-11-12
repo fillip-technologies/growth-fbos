@@ -295,3 +295,132 @@ def test_without_financials_finance_is_left_out():
     assert (result.finance.available, result.finance.reason) == (False, "no_access")
     assert result.alerts.expenses_awaiting_approval is None
     assert "777777" not in result.model_dump_json() and "888888" not in result.model_dump_json()
+
+
+# --------------------------------------------------------------------------- design gaps (phases 1-3, no new data)
+
+
+def test_buckets_carry_the_previous_period_when_a_source_gives_it():
+    merged = merge_buckets(
+        [[{"key": "29", "amount": 10, "previous": 4}], [{"key": "29", "amount": 5, "previous": 1}, {"key": "27", "amount": 0, "previous": 9}]],
+        "key", "amount",
+    )
+    assert [(b.key, b.amount, b.previous) for b in merged] == [("29", 15, 5), ("27", 0, 9)]
+    # An older service without `previous` keeps it None, not 0.
+    assert merge_buckets([[{"key": "a", "amount": 1}]], "key", "amount")[0].previous is None
+
+
+def _revenue_with_extras(**extra) -> SourceResult:
+    result = revenue(1000, 500)
+    result.data.update(extra)
+    return result
+
+
+def test_revenue_previous_period_units_and_top_products():
+    first = _revenue_with_extras(
+        revenue_by_state=[{"key": "29", "amount": _money(1000), "previous": _money(400)}],
+        amc={"active_contracts": 1, "active_value": _money(0), "clients": 1, "renewals_due": 0,
+             "revenue": _money(300), "revenue_previous": _money(100)},
+        hardware_units={"amount": 5, "previous": 2},
+        top_products=[{"offering_id": str(uuid.uuid4()), "name": "Camera", "units": 3, "revenue": _money(900)},
+                      {"offering_id": str(uuid.uuid4()), "name": "NVR", "units": 1, "revenue": _money(100)}],
+    )
+    second = _revenue_with_extras(
+        revenue_by_state=[{"key": "29", "amount": _money(200), "previous": _money(0)}],
+        hardware_units={"amount": 1, "previous": 1},
+        top_products=[{"offering_id": str(uuid.uuid4()), "name": "Camera", "units": 1, "revenue": _money(250)}],
+    )
+    companies = {A.id: company(revenue=first), B.id: company(revenue=second)}
+
+    result = screen(companies).revenue
+    assert [(b.key, b.amount, b.previous) for b in result.by_state] == [("29", 1200, 400)]
+    assert (result.amc.revenue, result.amc.revenue_previous) == (300, 100)
+    assert (result.hardware_units.amount, result.hardware_units.previous) == (6, 3)
+    assert [(p.name, p.units, p.revenue) for p in result.top_products] == [("Camera", 4, 1150), ("NVR", 1, 100)]
+    # Without financials the units stay and the money goes.
+    assert [(p.name, p.revenue) for p in screen(companies, financials=False).revenue.top_products] == [("Camera", None), ("NVR", None)]
+
+
+def test_business_segments_move_associate_projects_into_associate():
+    project, other = str(uuid.uuid4()), str(uuid.uuid4())
+    sales = _revenue_with_extras(
+        revenue_by_business_segment=[{"key": "hardware_sales", "amount": _money(1000)}, {"key": "private_india", "amount": _money(500)}],
+        business_segments_by_work_unit=[{"work_unit_id": project, "key": "hardware_sales", "amount": _money(600)},
+                                        {"work_unit_id": other, "key": "private_india", "amount": _money(200)}],
+    )
+    work = delivery(1, 0, 0)
+    work.data["partners"] = [{"organization_id": str(B.id), "projects": 1, "running": 1, "subcontract_costs": 0, "work_unit_ids": [project]}]
+
+    segments = screen({A.id: company(revenue=sales, delivery=work), B.id: company()}).revenue.by_business_segment
+    assert {b.key: b.amount for b in segments} == {"associate": 600, "private_india": 500, "hardware_sales": 400}
+
+
+def test_projects_by_state_joins_deliverys_customers_with_revenues_states():
+    acme, globex = str(uuid.uuid4()), str(uuid.uuid4())
+    work = delivery(4, 0, 0)
+    work.data["running_by_client"] = [{"client_id": acme, "count": 2}, {"client_id": globex, "count": 1}, {"client_id": None, "count": 1}]
+    states = SourceResult("ok", {"states": {acme: "29", globex: None}})
+    second = delivery(1, 0, 0)
+    second.data["running_by_client"] = [{"client_id": str(uuid.uuid4()), "count": 1}]
+
+    card = screen({
+        A.id: company(revenue=revenue(1, 0), delivery=work, client_states=states),
+        B.id: company(revenue=DOWN, delivery=second, client_states=DOWN),
+    }).revenue.projects_by_state
+    assert card.available and card.organizations_missing == 1
+    assert [(r.key, r.count) for r in card.rows] == [("29", 2), ("none", 2)]
+
+    unreachable = screen({A.id: company(delivery=work, client_states=DOWN), B.id: company(delivery=DENIED)}).revenue.projects_by_state
+    assert (unreachable.available, unreachable.reason) == (False, "unavailable")
+
+
+def test_freelancer_card_counts_who_has_work_and_their_categories():
+    team = people(10, 0)
+    team.data["freelancer_details"] = [
+        {"user_id": str(uuid.uuid4()), "category": "Design"}, {"user_id": str(uuid.uuid4()), "category": "Design"},
+        {"user_id": None, "category": "Electrician"},
+    ]
+    work = SourceResult("ok", {"working_user_ids": [team.data["freelancer_details"][0]["user_id"]], "running_projects": 2})
+
+    card = screen({A.id: company(people=team, freelancer_work=work), B.id: company(people=DENIED)}).people.freelancer_details
+    assert (card.total, card.active, card.without_login, card.projects) == (3, 1, 1, 2)
+    assert [(c.key, c.count) for c in card.top_categories] == [("Design", 2), ("Electrician", 1)]
+    # Delivery could not say who has work: the card says so instead of showing 0 active.
+    assert screen({A.id: company(people=team, freelancer_work=DOWN), B.id: company(people=DENIED)}).people.freelancer_details.reason == "unavailable"
+    assert screen({A.id: company(people=DENIED), B.id: company(people=DENIED)}).people.freelancer_details.reason == "no_access"
+
+
+def _procurement(companies, financials=True):
+    return build_screen(period=PERIOD, previous_period=PREVIOUS, organizations=[A, B], companies=companies,
+                        inventory=INVENTORY, can_see_financials=financials, inventory_company=A.id).procurement
+
+
+def test_procurement_is_set_against_the_inventory_companys_procurement_budget():
+    plan = management(None, (100_000, 0))
+    plan.data["budget"]["procurement_for_period"] = 16_000
+    budget = _procurement({A.id: company(management=plan), B.id: company()}).budget
+    assert (budget.available, budget.budget, budget.committed, budget.used_pct, budget.over_budget) == (True, 16_000, 20_000, 125, 4_000)
+
+    no_lines = management(None, (100_000, 0))
+    assert _procurement({A.id: company(management=no_lines), B.id: company()}).budget.reason == "not_set_up"
+    assert _procurement({A.id: company(management=DOWN), B.id: company()}).budget.reason == "unavailable"
+    assert _procurement({A.id: company(management=plan), B.id: company()}, financials=False).budget is None
+
+
+def test_field_activity_today():
+    inventory = SourceResult("ok", {
+        **INVENTORY.data,
+        "technicians": {"total": 6, "available": 2, "fbos_user_ids": ["u1", "u2", "u3", "u4", "u5"], "unlinked": 1},
+        "visits_today": {"completed": 3, "in_progress": 1, "pending": 2, "escalated": 1},
+    })
+    presence = SourceResult("ok", {"workers": 4, "unknown": 1, "on_leave": 1, "working": {"office": 1, "field": 1, "remote": 0, "not_said": 0}})
+    field = build_screen(period=PERIOD, previous_period=PREVIOUS, organizations=[A], companies={A.id: company()},
+                         inventory=inventory, can_see_financials=True, inventory_company=A.id, technicians_today=presence).field
+    assert field.visits_today.model_dump() == {"completed": 3, "in_progress": 1, "pending": 2, "escalated": 1}
+    today = field.technicians_today
+    assert (today.at_office, today.in_field, today.on_leave, today.not_marked, today.unlinked) == (1, 1, 1, 1, 2)
+
+    unreadable = build_screen(period=PERIOD, previous_period=PREVIOUS, organizations=[A], companies={A.id: company()},
+                              inventory=inventory, can_see_financials=True, inventory_company=A.id,
+                              technicians_today=DENIED).field.technicians_today
+    assert (unreadable.available, unreadable.reason) == (False, "no_access")
