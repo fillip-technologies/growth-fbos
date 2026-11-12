@@ -12,7 +12,7 @@ from models.activity import Activity
 from models.client import ClientContact
 from services.mail_client import mail_client
 from tests.conftest import TEST_USER_ID
-from tests.test_sales_flow import ADDRESS, BASE, CONSENT, _act, _converted_lead, _quotation
+from tests.test_sales_flow import ADDRESS, BASE, CONSENT, _act, _qualified_lead, _quotation, _worked_lead
 
 pytestmark = pytest.mark.asyncio
 
@@ -59,7 +59,7 @@ def _file(name: str, size: int = 10) -> dict:
 
 
 async def _quote_with_contact(client: httpx.AsyncClient, db_session) -> tuple[dict, dict]:
-    converted = await _converted_lead(client)
+    converted = await _qualified_lead(client)
     db_session.add(ClientContact(client_id=uuid.UUID(converted["client"]["id"]), name="Asha Rao", email="asha@client.test", is_primary=True))
     await db_session.commit()
     return converted, await _quotation(client, converted["opportunity"]["id"])
@@ -159,7 +159,7 @@ async def test_bad_address_is_refused(async_client, db_session, outbox):
 
 
 async def test_quotation_awaiting_approval_is_not_emailed(async_client, db_session, outbox):
-    converted = await _converted_lead(async_client)
+    converted = await _qualified_lead(async_client)
     quote = await _quotation(async_client, converted["opportunity"]["id"], discount_pct=30)
     pending = (await _act(async_client, quote, "submit")).json()
     assert pending["status"] == "pending_approval"
@@ -193,13 +193,9 @@ async def test_failed_mail_leaves_quotation_unsent(async_client, db_session, quo
 
 
 async def _ravi_quote(async_client) -> dict:
-    lead = await async_client.post(
-        f"{BASE}/leads",
-        json={"vertical_id": str(uuid.uuid4()), "contact_name": "Ravi Kumar", "contact_email": "ravi@client.test", "consent": CONSENT},
-    )
-    assert lead.status_code == 201, lead.json()
+    lead_id, etag = await _worked_lead(async_client, contact_name="Ravi Kumar", contact_email="ravi@client.test")
     converted = await async_client.post(
-        f"{BASE}/leads/{lead.json()['id']}/convert",
+        f"{BASE}/leads/{lead_id}/qualify",
         json={
             "new_client": {
                 "name": "Ravi Traders",
@@ -213,13 +209,13 @@ async def _ravi_quote(async_client) -> dict:
                 "expected_close_date": "2026-12-31",
             },
         },
-        headers={"If-Match": lead.headers["ETag"]},
+        headers={"If-Match": etag},
     )
     assert converted.status_code == 200, converted.json()
     return await _quotation(async_client, converted.json()["opportunity"]["id"])
 
 
-async def test_the_converted_leads_contact_is_the_customers_primary(async_client, outbox):
+async def test_the_qualified_leads_contact_is_the_customers_primary(async_client, outbox):
     quote = await _ravi_quote(async_client)
 
     draft = (await async_client.get(f"{BASE}/quotations/{quote['id']}/email-draft")).json()

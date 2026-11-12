@@ -303,15 +303,19 @@ async def list_people(
         None, description="Only people who work in this unit or below it (home unit, or a current extra team membership)"
     ),
     user_id: Optional[uuid.UUID] = Query(None, description="Only this person: answers whether they qualify"),
+    permission: Optional[str] = Query(
+        None, max_length=200, description="Only people who hold this permission code, in any scope (revenue: who may take a lead)"
+    ),
     x_fbos_internal_token: Optional[str] = Header(None, alias="X-FBOS-Internal-Token"),
     db: AsyncSession = Depends(get_db_session),
 ) -> PeopleResponse:
     """
-    Other services (delivery) ask who may be given work in a unit, and whether one person may.
+    Other services ask who may be given work in a unit (delivery) or who holds a permission
+    (revenue hands leads only to people who may work them), and whether one person may.
     The caller already checked the signed-in user's permission; this answers ids and names only.
     """
     verify_internal_caller(x_fbos_internal_token)
-    return await active_people(db, organization_id, unit_id, user_id, PEOPLE_LIMIT)
+    return await active_people(db, organization_id, unit_id, user_id, PEOPLE_LIMIT, permission)
 
 
 @internal_router.get(

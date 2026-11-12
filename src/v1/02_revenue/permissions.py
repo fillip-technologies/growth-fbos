@@ -25,3 +25,10 @@ CLIENT_WRITE = "revenue.client.write"
 
 # The business summary (CEO Command Center): revenue, receivables, pipeline, AMC, totals only.
 SUMMARY_READ = "revenue.summary.read"
+
+# Leads: everyone with read sees every lead; write lets someone claim a lead and work the ones
+# they handle (calls, qualify, disqualify, pass it on); assign is for sales managers: hand any
+# lead to anyone and work any lead.
+LEAD_READ = "revenue.lead.read"
+LEAD_WRITE = "revenue.lead.write"
+LEAD_ASSIGN = "revenue.lead.assign"

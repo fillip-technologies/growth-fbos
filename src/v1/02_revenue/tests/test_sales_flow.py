@@ -22,15 +22,33 @@ ADDRESS = {
 }
 
 
-async def _converted_lead(client: httpx.AsyncClient, headers: dict | None = None) -> dict:
+async def _first_call(client: httpx.AsyncClient, lead_id: str, headers: dict | None = None) -> str:
+    """Logs a call on a lead the test user handles (contacted after it); returns the lead's new ETag."""
+    res = await client.post(f"{BASE}/leads/{lead_id}/calls", json={"summary": "Discussed their needs"}, headers=headers)
+    assert res.status_code == 201, res.text
+    return res.headers["ETag"]
+
+
+async def _worked_lead(client: httpx.AsyncClient, headers: dict | None = None, **fields) -> tuple[str, str]:
+    """A lead the test user handles and has called, ready to qualify: (its id, its ETag)."""
     lead = await client.post(
         f"{BASE}/leads",
-        json={"vertical_id": str(uuid.uuid4()), "contact_name": "Deepak Sharma", "consent": CONSENT},
+        json={
+            "vertical_id": str(uuid.uuid4()),
+            "contact_name": "Deepak Sharma",
+            "consent": CONSENT,
+            "owner_user_id": str(TEST_USER_ID),
+        } | fields,
         headers=headers,
     )
-    assert lead.status_code == 201
+    assert lead.status_code == 201, lead.text
+    return lead.json()["id"], await _first_call(client, lead.json()["id"], headers)
+
+
+async def _qualified_lead(client: httpx.AsyncClient, headers: dict | None = None) -> dict:
+    lead_id, etag = await _worked_lead(client, headers)
     res = await client.post(
-        f"{BASE}/leads/{lead.json()['id']}/convert",
+        f"{BASE}/leads/{lead_id}/qualify",
         json={
             "new_client": {
                 "name": "Reliance Digital",
@@ -44,9 +62,9 @@ async def _converted_lead(client: httpx.AsyncClient, headers: dict | None = None
                 "expected_close_date": "2026-12-31",
             },
         },
-        headers={**(headers or {}), "If-Match": lead.headers["ETag"]},
+        headers={**(headers or {}), "If-Match": etag},
     )
-    assert res.status_code == 200
+    assert res.status_code == 200, res.text
     return res.json()
 
 
@@ -92,7 +110,7 @@ async def _sent_quotation(client: httpx.AsyncClient, opportunity_id: str, **kwar
 
 
 async def test_converted_customer_is_a_prospect_until_a_quotation_is_accepted(async_client: httpx.AsyncClient):
-    converted = await _converted_lead(async_client)
+    converted = await _qualified_lead(async_client)
     assert converted["client_created"] is True
     assert converted["client"]["status"] == "prospect"
 
@@ -107,10 +125,15 @@ async def test_converted_customer_is_a_prospect_until_a_quotation_is_accepted(as
     assert customer.json()["status"] == "active"
     opportunity = await async_client.get(f"{BASE}/opportunities/{converted['opportunity']['id']}")
     assert opportunity.json()["stage"] == "won"
+    # The lead was qualified until now; acceptance converts it, crediting who handled it.
+    assert converted["lead"]["status"] == "qualified"
+    lead = (await async_client.get(f"{BASE}/leads/{converted['lead']['id']}")).json()
+    assert (lead["status"], lead["converted_by_user_id"]) == ("converted", str(TEST_USER_ID))
+    assert lead["converted_at"] is not None
 
 
 async def test_large_discount_waits_for_approval(async_client: httpx.AsyncClient):
-    converted = await _converted_lead(async_client)
+    converted = await _qualified_lead(async_client)
     quote = await _quotation(async_client, converted["opportunity"]["id"], discount_pct=30)
 
     submitted = await _act(async_client, quote, "submit")
@@ -124,7 +147,7 @@ async def test_large_discount_waits_for_approval(async_client: httpx.AsyncClient
 
 
 async def test_opportunity_lists_its_quotations_and_contract(async_client: httpx.AsyncClient):
-    converted = await _converted_lead(async_client)
+    converted = await _qualified_lead(async_client)
     opportunity_id = converted["opportunity"]["id"]
     first = await _sent_quotation(async_client, opportunity_id)
     revised = await async_client.post(f"{BASE}/quotations/{first['id']}/revise")
@@ -154,7 +177,7 @@ async def test_opportunity_lists_its_quotations_and_contract(async_client: httpx
 
 
 async def test_quotations_are_scoped_to_the_organization(async_client: httpx.AsyncClient):
-    converted = await _converted_lead(async_client)
+    converted = await _qualified_lead(async_client)
     quote = await _quotation(async_client, converted["opportunity"]["id"])
 
     other_org = {"X-Organization-Id": str(uuid.uuid4())}
@@ -186,11 +209,9 @@ async def test_converting_into_a_new_customer_needs_customer_access(async_client
         )
 
     app.dependency_overrides[get_actor] = sales_rep
-    lead = await async_client.post(
-        f"{BASE}/leads", json={"vertical_id": str(uuid.uuid4()), "contact_name": "Asha", "consent": CONSENT}
-    )
+    lead_id, etag = await _worked_lead(async_client, contact_name="Asha")
     res = await async_client.post(
-        f"{BASE}/leads/{lead.json()['id']}/convert",
+        f"{BASE}/leads/{lead_id}/qualify",
         json={
             "new_client": {
                 "name": "Asha Traders",
@@ -204,7 +225,7 @@ async def test_converting_into_a_new_customer_needs_customer_access(async_client
                 "expected_close_date": "2026-12-31",
             },
         },
-        headers={"If-Match": lead.headers["ETag"]},
+        headers={"If-Match": etag},
     )
     assert res.status_code == 403
     assert res.json()["detail"]["meta"] == {"required_permission": "revenue.client.write"}

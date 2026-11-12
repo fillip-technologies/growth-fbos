@@ -19,6 +19,8 @@ from schemas.quotation import (
     QuotationWithdrawal,
 )
 from services import notifications, quotation_email_service, quotation_events
+from services.lead_service import lead_of_opportunity
+from services.website_leads_client import website_leads_client
 from services.documents_client import SubjectRef
 from schemas.common import PageResponse
 from services.quotation_service import QuotationService, get_quote_in_org, list_quotations
@@ -247,6 +249,9 @@ async def accept_quotation(
     )
     await session.commit()
     await notifications.deal_won(session, actor, quotation)
+    lead = await lead_of_opportunity(session, org_id, quotation.opportunity_id)
+    if lead and lead.status == "converted":
+        website_leads_client.push_status(org_id, lead)
     response.headers["ETag"] = f'"{quotation.version}"'
     return quotation
 

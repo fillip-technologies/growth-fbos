@@ -515,3 +515,83 @@ class ContractNotEmailableError(RevenueServiceError):
             f"A contract that is {current_status.replace('_', ' ')} can't be emailed to the customer.",
             meta={"status": current_status},
         )
+
+
+class LeadAlreadyClaimedError(RevenueServiceError):
+    """409: Someone else claimed the lead first."""
+
+    def __init__(self, owner_user_id: uuid.UUID) -> None:
+        super().__init__(
+            status.HTTP_409_CONFLICT,
+            "LEAD_ALREADY_CLAIMED",
+            "Someone else has already claimed this lead.",
+            meta={"owner_user_id": str(owner_user_id)},
+        )
+
+
+class LeadNotClaimedError(RevenueServiceError):
+    """409: The lead needs someone handling it before this can be done."""
+
+    def __init__(self) -> None:
+        super().__init__(
+            status.HTTP_409_CONFLICT,
+            "LEAD_NOT_CLAIMED",
+            "Claim this lead first: it has nobody handling its sales outreach.",
+        )
+
+
+class NotLeadOwnerError(RevenueServiceError):
+    """403: Only the person handling the lead, or someone who may assign leads, may do this."""
+
+    def __init__(self) -> None:
+        super().__init__(
+            status.HTTP_403_FORBIDDEN,
+            "NOT_LEAD_OWNER",
+            "Only the person handling this lead, or a sales manager, can do this.",
+            meta={"required_permission": "revenue.lead.assign"},
+        )
+
+
+class LeadAssigneeNotAllowedError(RevenueServiceError):
+    """422: The person can't be given leads: inactive, or without lead write access."""
+
+    def __init__(self, user_id: uuid.UUID) -> None:
+        super().__init__(
+            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            "LEAD_ASSIGNEE_NOT_ALLOWED",
+            "This person can't take leads: they need to be active and allowed to work leads.",
+            meta={"user_id": str(user_id)},
+        )
+
+
+class LeadCallRequiredError(RevenueServiceError):
+    """409: A lead is qualified only after a call with them was logged."""
+
+    def __init__(self) -> None:
+        super().__init__(
+            status.HTTP_409_CONFLICT,
+            "LEAD_CALL_REQUIRED",
+            "Log a call with this lead before qualifying it.",
+        )
+
+
+class LeadReopenNotAllowedError(RevenueServiceError):
+    """409: A lead that was qualified (it has a customer and an opportunity) can't be reopened."""
+
+    def __init__(self) -> None:
+        super().__init__(
+            status.HTTP_409_CONFLICT,
+            "LEAD_REOPEN_NOT_ALLOWED",
+            "This lead was qualified before it was disqualified, so it can't be reopened. Open a new opportunity on its customer instead.",
+        )
+
+
+class PeopleUnavailableError(RevenueServiceError):
+    """503: Identity could not say who may take leads."""
+
+    def __init__(self) -> None:
+        super().__init__(
+            status.HTTP_503_SERVICE_UNAVAILABLE,
+            "PEOPLE_UNAVAILABLE",
+            "Who can take leads could not be checked right now. Try again shortly.",
+        )

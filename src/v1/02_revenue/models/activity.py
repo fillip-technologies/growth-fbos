@@ -1,8 +1,8 @@
 import uuid
-from datetime import datetime
+from datetime import date, datetime
 from typing import Optional
 
-from sqlalchemy import DateTime, String, Text, UniqueConstraint
+from sqlalchemy import Date, DateTime, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column
 
 from database.base import Base
@@ -33,3 +33,9 @@ class Activity(Base):
     # Added by the migration `a7d3c9e1f5b2`.
     source_type: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
     source_id: Mapped[Optional[uuid.UUID]] = mapped_column(UUIDType, nullable=True)
+    # A call's details (POST /leads/{id}/calls, or a follow-up on any activity). Added by the
+    # migration `f3a9c1e7b5d2`.
+    requirements: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    expectations: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    next_action: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    follow_up_on: Mapped[Optional[date]] = mapped_column(Date, nullable=True)

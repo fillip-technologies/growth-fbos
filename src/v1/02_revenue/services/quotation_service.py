@@ -45,6 +45,7 @@ from schemas.quotation import (
 )
 from schemas.tax import LineTax, TaxAmount, WithholdingPreview
 from services import quotation_events
+from services.lead_service import convert_on_acceptance
 from services.quotation_events import label, now_utc
 from services.tax_service import (
     DocumentLineSpec,
@@ -684,7 +685,10 @@ class QuotationService:
         if_match: Optional[str] = None,
         actor_user_id: Optional[uuid.UUID] = None,
     ) -> QuotationResponse:
-        """The customer agreed: the opportunity is won and a prospect becomes a customer. Expired is no bar."""
+        """
+        The customer agreed: the opportunity is won, its lead converted and a prospect becomes a
+        customer. Expired is no bar.
+        """
         quote = await get_quote_in_org(session, org_id, quotation_id)
         _check_version(if_match, quote.version)
 
@@ -717,6 +721,8 @@ class QuotationService:
             if opp:
                 opp.status = "won"
                 opp.version += 1
+                # The lead it came from is converted, crediting whoever handled it.
+                await convert_on_acceptance(session, org_id, opp.lead_id, actor_user_id)
 
         # A prospect becomes a customer once it accepts a quotation.
         client = await session.get(Client, quote.client_id)

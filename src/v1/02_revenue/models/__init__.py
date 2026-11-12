@@ -12,7 +12,7 @@ from models.document_tax import DocumentTaxLine
 from models.finance_settings import FinanceSettings
 from models.invoice import Invoice, InvoiceLine
 from models.invoice_series import InvoiceSeries
-from models.lead import Lead
+from models.lead import Lead, LeadEvent
 from models.offering import Offering
 from models.opportunity import Opportunity
 from models.payment import Payment, PaymentAllocation, Refund
@@ -32,6 +32,7 @@ __all__ = [
     "ServiceProvider",
     "ClientServiceRecord",
     "Lead",
+    "LeadEvent",
     "Deal",
     "Opportunity",
     "Offering",
