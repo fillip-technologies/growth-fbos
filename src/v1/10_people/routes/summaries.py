@@ -7,8 +7,8 @@ from fastapi import APIRouter, Depends, Query
 from dependencies import DatabaseSession, OrgId, require_permission, verify_internal_caller
 from exceptions import ValidationFailedError
 import permissions
-from schemas.business_summary import PeopleBusinessSummary
-from services.business_summary import people_summary
+from schemas.business_summary import PeopleBusinessSummary, Presence, PresenceQuery
+from services.business_summary import people_summary, presence
 
 router = APIRouter(tags=["summaries"])
 
@@ -55,3 +55,16 @@ async def get_people_summary_internal(
     CEO Command Center snapshots)."""
     check_period(from_date, to_date)
     return await people_summary(session, organization_id, from_date, to_date)
+
+
+@router.post(
+    "/internal/workers/presence",
+    response_model=Presence,
+    tags=["internal"],
+    dependencies=[Depends(verify_internal_caller)],
+)
+async def get_presence_internal(payload: PresenceQuery, session: DatabaseSession) -> Presence:
+    """Where a group of users is today: on leave, or at work and where. For the gateway's "field
+    activity today" (Fixly knows its technicians' FBOS users). A POST because the list of ids can
+    be too long for a URL; it changes nothing."""
+    return await presence(session, payload.organization_id, payload.user_ids)

@@ -7,7 +7,7 @@ Command Center).
 - `income` is income other than sales (interest, dividends, rent...), gross, received in the period.
 - Investments are a position (what is held today), not a period figure.
 """
-from typing import List
+from typing import List, Optional
 
 from pydantic import BaseModel
 
@@ -17,6 +17,7 @@ from schemas.common import Period
 class AmountBucket(BaseModel):
     key: str
     amount: float
+    previous: Optional[float] = None  # the same key in the previous period, where the summary has one
 
 
 class CategoryAmount(BaseModel):
@@ -64,5 +65,7 @@ class FinanceBusinessSummary(BaseModel):
     pending_approval: PendingApproval
     income: float
     income_previous: float
+    # Per income type, with the previous period. Income from investments in FBOS companies is its own
+    # type, `investment_in_companies`, and not counted under interest or dividend as well.
     income_by_type: List[AmountBucket]
     investments: InvestmentsPosition

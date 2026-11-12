@@ -103,3 +103,46 @@ async def test_no_fiscal_year_leaves_the_budget_unavailable(async_client):
     assert body["health"]["available"] is False
     assert body["budget"]["available"] is False
     assert (await async_client.get(f"{BASE}/summaries/health?from=2030-02-28&to=2030-02-01")).status_code == 422
+
+
+def test_a_yearly_budget_is_shared_evenly_over_the_periods_days():
+    from services.business_summary import share_of_year
+
+    year = (date(2030, 1, 1), date(2030, 12, 31))
+    assert share_of_year(365_000, *year, date(2030, 2, 1), date(2030, 2, 28)) == 28_000
+    # Only the days inside the year count.
+    assert share_of_year(365_000, *year, date(2029, 12, 1), date(2030, 1, 10)) == 10_000
+    assert share_of_year(365_000, *year, date(2031, 1, 1), date(2031, 1, 31)) == 0
+
+
+async def test_procurement_budget_is_the_years_procurement_lines_shared_over_the_period(db_session: AsyncSession):
+    from models.planning import Budget, BudgetLine
+
+    year = FiscalYear(organization_id=TEST_ORG_ID, code="FY30", start_date=date(2030, 1, 1), end_date=date(2030, 12, 31))
+    db_session.add(year)
+    await db_session.flush()
+    budget = Budget(organization_id=TEST_ORG_ID, fiscal_year_id=year.id, code="B-1", name="Ops", currency="INR", status="approved")
+    db_session.add(budget)
+    await db_session.flush()
+    db_session.add_all([
+        BudgetLine(budget_id=budget.id, category="procurement", planned_amount=200_000, approved_amount=182_500),
+        BudgetLine(budget_id=budget.id, category="procurement", planned_amount=200_000, approved_amount=182_500),
+        BudgetLine(budget_id=budget.id, category="travel", planned_amount=50_000, approved_amount=50_000),
+    ])
+    await db_session.commit()
+
+    summary = await management_summary(db_session, TEST_ORG_ID, date(2030, 2, 1), date(2030, 2, 28))
+
+    assert summary.budget.procurement_approved == 365_000
+    assert summary.budget.procurement_for_period == 28_000
+
+
+async def test_no_procurement_lines_means_no_procurement_budget(db_session: AsyncSession):
+    year = FiscalYear(organization_id=TEST_ORG_ID, code="FY30", start_date=date(2030, 1, 1), end_date=date(2030, 12, 31))
+    db_session.add(year)
+    await db_session.commit()
+
+    summary = await management_summary(db_session, TEST_ORG_ID, date(2030, 2, 1), date(2030, 2, 28))
+
+    assert summary.budget.available is True
+    assert (summary.budget.procurement_approved, summary.budget.procurement_for_period) == (None, None)

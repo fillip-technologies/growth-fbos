@@ -32,6 +32,11 @@ class BudgetVsActual(BaseModel):
     approved: float = 0
     actual: float = 0
     used_pct: Optional[float] = None  # actual / approved
+    # The year's approved amount on budget lines of category "procurement" (None when there are
+    # none), and its share for the days of the period inside that year: the gateway sets it
+    # against the purchase orders committed in the period.
+    procurement_approved: Optional[float] = None
+    procurement_for_period: Optional[float] = None
 
 
 class ManagementBusinessSummary(BaseModel):

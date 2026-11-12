@@ -37,6 +37,7 @@ class Amount(BaseModel):
 class Bucket(BaseModel):
     key: str
     amount: float
+    previous: Optional[float] = None  # the same key in the previous period, where the source gives one
 
 
 class CountBucket(BaseModel):
@@ -80,6 +81,7 @@ class AmcCard(BaseModel):
     clients: int = 0
     renewals_due: int = 0
     revenue: float = 0
+    revenue_previous: Optional[float] = None
 
 
 class SegmentAmount(BaseModel):
@@ -94,6 +96,18 @@ class SegmentCount(BaseModel):
     count: int
 
 
+class TopProduct(BaseModel):
+    name: str  # products of the same name in several companies are one row
+    units: float
+    revenue: Optional[float] = None  # financials
+
+
+class ProjectsByStateCard(Section):
+    """Running projects by their customer's GST state (Delivery's projects, Revenue's customers)."""
+
+    rows: list[CountBucket] = []  # key = GST state code, or "none" (no customer, or a customer without a state)
+
+
 class RevenueSection(Section):
     by_month: list[MonthAmount] = []
     by_vertical: list[Bucket] = []  # key = Identity vertical id, or "none"
@@ -105,6 +119,13 @@ class RevenueSection(Section):
     clients_by_segment: list[SegmentCount] = []
     clients_by_state: list[CountBucket] = []  # key = GST state code, or "none"
     amc: Optional[AmcCard] = None
+    hardware_units: Optional[Amount] = None  # units of hardware offerings sold, net of credit notes
+    top_products: list[TopProduct] = []  # by revenue, largest first
+    # One segment per invoice line, the first that matches: associate, amc_hardware, amc_services,
+    # hardware_sales, government_india, government_international, private_india,
+    # private_international, other. Shares add up to the revenue invoiced line by line.
+    by_business_segment: list[Bucket] = []
+    projects_by_state: ProjectsByStateCard = ProjectsByStateCard(reason="unavailable")
 
 
 class CompanyRow(BaseModel):
@@ -164,6 +185,16 @@ class WorkingToday(BaseModel):
     not_said: int = 0
 
 
+class FreelancerCard(Section):
+    """Freelancers (People) and which of them have work (Delivery)."""
+
+    total: int = 0
+    active: int = 0  # with an open task or on a running project
+    without_login: int = 0  # no FBOS user, so Delivery cannot say whether they have work
+    projects: int = 0  # running projects freelancers are on (a project counts once per company)
+    top_categories: list[CountBucket] = []  # job family, else designation; largest first
+
+
 class PeopleSection(Section):
     headcount: int = 0
     by_employment_type: list[CountBucket] = []
@@ -171,6 +202,7 @@ class PeopleSection(Section):
     on_leave_today: int = 0
     working_today: WorkingToday = WorkingToday()
     payroll: Optional[Amount] = None  # financials
+    freelancer_details: FreelancerCard = FreelancerCard(reason="unavailable")
 
 
 class CompanyHealth(BaseModel):
@@ -254,6 +286,16 @@ class StatusAmount(BaseModel):
     total: Optional[float] = None  # financials
 
 
+class ProcurementBudget(Section):
+    """Committed purchase orders against the procurement budget (Management's budget lines of
+    category "procurement", the year's approved amount shared evenly over the period's days)."""
+
+    budget: float = 0
+    committed: float = 0
+    used_pct: Optional[float] = None
+    over_budget: float = 0  # committed above the budget; 0 when within it
+
+
 class ProcurementSection(Section):
     committed: Optional[Amount] = None  # financials
     committed_count: int = 0
@@ -262,12 +304,34 @@ class ProcurementSection(Section):
     goods_receipts: int = 0
     installations: int = 0
     new_installs: int = 0
+    budget: Optional[ProcurementBudget] = None  # financials
+
+
+class VisitsToday(BaseModel):
+    completed: int = 0
+    in_progress: int = 0
+    pending: int = 0  # scheduled, not due yet
+    escalated: int = 0  # still scheduled after its time
+
+
+class TechniciansToday(Section):
+    """Where the technicians are today, from People's attendance and leave for their FBOS users."""
+
+    at_office: int = 0
+    in_field: int = 0
+    remote: int = 0
+    not_said: int = 0  # at work without saying where
+    on_leave: int = 0
+    not_marked: int = 0  # neither at work nor on leave in People
+    unlinked: int = 0  # no FBOS user, or no worker in People: their day cannot be read
 
 
 class FieldSection(Section):
     technicians: int = 0
     technicians_available: int = 0
     open_repairs: int = 0
+    visits_today: Optional[VisitsToday] = None  # None when the inventory service does not give it yet
+    technicians_today: TechniciansToday = TechniciansToday(reason="unavailable")
 
 
 class AlertsSection(BaseModel):

@@ -86,13 +86,54 @@ async def test_income_and_investments(admin):
     body = (await admin.get(f"{BASE}/summaries/finance", params=OCTOBER)).json()
     assert body["income"] == 7500.0
     assert body["income_previous"] == 500.0
-    assert body["income_by_type"] == [{"key": "interest", "amount": 6000.0}, {"key": "dividend", "amount": 1500.0}]
+    assert body["income_by_type"] == [
+        {"key": "interest", "amount": 6000.0, "previous": 500.0},
+        {"key": "dividend", "amount": 1500.0, "previous": 0.0},
+    ]
     investments = body["investments"]
     assert investments["active"] == 2
     assert investments["principal"] == 300000.0
     assert investments["current_value"] == 330000.0  # FD at principal, fund at its recorded value
     assert investments["maturing_soon"] == 1
     assert [row["key"] for row in investments["by_type"]] == ["mutual_fund", "fixed_deposit"]
+
+
+async def test_income_from_investments_in_companies_is_its_own_type(admin):
+    """Dividends from a company in FBOS move out of `dividend`, so nothing is counted twice; a type
+    the previous period had and this one hasn't still shows, at 0."""
+    stake = (
+        await admin.post(
+            f"{BASE}/investments",
+            json={"name": "Stake", "investment_type": "equity", "principal": "500000", "start_date": "2026-01-01",
+                  "investee_organization_id": str(uuid.uuid4())},
+        )
+    ).json()
+    listed = (
+        await admin.post(
+            f"{BASE}/investments",
+            json={"name": "Listed", "investment_type": "equity", "principal": "1000", "start_date": "2026-01-01"},
+        )
+    ).json()
+    entries = [
+        ("dividend", "4000", "2026-10-10", stake["id"]),
+        ("dividend", "300", "2026-10-11", listed["id"]),
+        ("dividend", "2500", "2026-09-10", stake["id"]),
+        ("rent", "700", "2026-09-12", None),
+    ]
+    for kind, amount, day, investment in entries:
+        res = await admin.post(
+            f"{BASE}/income-entries",
+            json={"income_type": kind, "amount": amount, "received_on": day, "investment_id": investment},
+        )
+        assert res.status_code == 201, res.text
+
+    body = (await admin.get(f"{BASE}/summaries/finance", params=OCTOBER)).json()
+    assert body["income"] == 4300.0
+    assert body["income_by_type"] == [
+        {"key": "investment_in_companies", "amount": 4000.0, "previous": 2500.0},
+        {"key": "dividend", "amount": 300.0, "previous": 0.0},
+        {"key": "rent", "amount": 0.0, "previous": 700.0},
+    ]
 
 
 async def test_mixed_currencies_are_flagged(admin):

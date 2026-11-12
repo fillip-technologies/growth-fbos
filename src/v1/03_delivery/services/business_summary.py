@@ -12,9 +12,19 @@ from sqlalchemy import and_, case, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from models.financial import CostEntry
-from models.work_unit import WorkUnit
-from schemas.business_summary import CategoryCost, DeliveryBusinessSummary, PartnerWork, Period, ProjectCounts
+from models.task import Task
+from models.work_unit import WorkUnit, WorkUnitMember
+from schemas.business_summary import (
+    CategoryCost,
+    ClientProjects,
+    DeliveryBusinessSummary,
+    PartnerWork,
+    Period,
+    ProjectCounts,
+    Workload,
+)
 from services.stats import RUNNING_PROJECT_STATUSES
+from services.tasks import _OPEN_TASK_STATUSES
 
 DEFAULT_CURRENCY = "INR"
 AT_RISK_HEALTH = ("red", "amber")
@@ -49,7 +59,59 @@ async def delivery_summary(
             for category, amount in sorted(by_category.items(), key=lambda item: -item[1])
         ],
         partners=await _partners(session, org_id, from_date, to_date),
+        running_by_client=await _running_by_client(session, org_id),
     )
+
+
+async def workload(
+    session: AsyncSession, org_id: uuid.UUID, user_ids: list[uuid.UUID], today: Optional[date] = None
+) -> Workload:
+    """Which of these users have work: an open task, or a place on a running project."""
+    if not user_ids:
+        return Workload(working_user_ids=[], running_projects=0)
+    today = today or date.today()
+    running = (WorkUnit.organization_id == org_id, WorkUnit.status.in_(RUNNING_PROJECT_STATUSES))
+    staffed_today = and_(
+        WorkUnitMember.valid_from <= today, or_(WorkUnitMember.valid_to.is_(None), WorkUnitMember.valid_to >= today)
+    )
+    members = (
+        await session.execute(
+            select(WorkUnitMember.user_id, WorkUnit.id)
+            .join(WorkUnit, WorkUnit.id == WorkUnitMember.work_unit_id)
+            .where(*running, WorkUnitMember.user_id.in_(user_ids), staffed_today)
+        )
+    ).all()
+    managers = (
+        await session.execute(select(WorkUnit.manager_user_id, WorkUnit.id).where(*running, WorkUnit.manager_user_id.in_(user_ids)))
+    ).all()
+    with_tasks = (
+        await session.execute(
+            select(Task.assignee_user_id)
+            .where(
+                Task.organization_id == org_id,
+                Task.assignee_user_id.in_(user_ids),
+                Task.status.in_(_OPEN_TASK_STATUSES),
+            )
+            .distinct()
+        )
+    ).scalars().all()
+    on_projects = [*members, *managers]
+    working = {user_id for user_id, _ in on_projects} | set(with_tasks)
+    return Workload(
+        working_user_ids=sorted(working, key=str),
+        running_projects=len({project_id for _, project_id in on_projects}),
+    )
+
+
+async def _running_by_client(session: AsyncSession, org_id: uuid.UUID) -> list[ClientProjects]:
+    rows = (
+        await session.execute(
+            select(WorkUnit.client_id, func.count())
+            .where(WorkUnit.organization_id == org_id, WorkUnit.status.in_(RUNNING_PROJECT_STATUSES))
+            .group_by(WorkUnit.client_id)
+        )
+    ).all()
+    return sorted((ClientProjects(client_id=client_id, count=int(count)) for client_id, count in rows), key=lambda row: -row.count)
 
 
 def _round(amount: Decimal) -> float:

@@ -27,6 +27,8 @@ from services.kpi_service import active_goals_in
 STATUS_SCORE = {"green": 100, "amber": 50, "red": 0}
 # (lowest score, label), best first.
 HEALTH_LABELS = ((85, "excellent"), (70, "good"), (50, "needs_attention"), (0, "critical"))
+# Budget lines of this category are the procurement budget (CEO design gaps plan, decision D1).
+PROCUREMENT_CATEGORY = "procurement"
 
 
 @dataclass(frozen=True)
@@ -68,7 +70,7 @@ async def management_summary(
         period=Period(from_date=from_date, to_date=to_date),
         previous_period=Period(from_date=previous_from, to_date=previous_to),
         health=health,
-        budget=await _budget(session, org_id, to_date),
+        budget=await _budget(session, org_id, from_date, to_date),
     )
 
 
@@ -133,12 +135,22 @@ async def _scored_kpis(session: AsyncSession, org_id: uuid.UUID, period: Plannin
     return scored
 
 
-async def _budget(session: AsyncSession, org_id: uuid.UUID, as_of: date) -> BudgetVsActual:
+def share_of_year(amount: float, year_start: date, year_end: date, from_date: date, to_date: date) -> float:
+    """The part of a yearly amount that falls on the period's days inside the year, spread evenly."""
+    overlap_days = (min(to_date, year_end) - max(from_date, year_start)).days + 1
+    if overlap_days <= 0:
+        return 0.0
+    year_days = (year_end - year_start).days + 1
+    return round(amount * overlap_days / year_days, 2)
+
+
+async def _budget(session: AsyncSession, org_id: uuid.UUID, from_date: date, to_date: date) -> BudgetVsActual:
     """The fiscal year the period ends in (else the latest), as the budget summary reads it."""
     try:
-        year = await budget_summary(session, org_id, None, today=as_of)
+        year = await budget_summary(session, org_id, None, today=to_date)
     except FiscalYearNotFoundError:
         return BudgetVsActual(available=False)
+    procurement = next((row for row in year.by_category if row.category == PROCUREMENT_CATEGORY), None)
     return BudgetVsActual(
         available=True,
         fiscal_year_code=year.fiscal_year_code,
@@ -147,4 +159,8 @@ async def _budget(session: AsyncSession, org_id: uuid.UUID, as_of: date) -> Budg
         approved=round(year.approved, 2),
         actual=round(year.actual, 2),
         used_pct=round(year.actual / year.approved * 100, 1) if year.approved else None,
+        procurement_approved=round(procurement.approved, 2) if procurement else None,
+        procurement_for_period=share_of_year(procurement.approved, year.start_date, year.end_date, from_date, to_date)
+        if procurement
+        else None,
     )
