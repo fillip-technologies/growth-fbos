@@ -4,6 +4,7 @@ from typing import AsyncIterator
 
 import httpx
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 
 from config import settings
 from router import router
@@ -21,7 +22,22 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     await client.aclose()
 
 
+def configure_cors(app: FastAPI, enabled: bool, origins: str) -> None:
+    """Answer cross-origin requests when CORS_ENABLED is on; `origins` is a comma list or *."""
+    if not enabled:
+        return
+    allowed = [origin.strip() for origin in (origins or "").split(",") if origin.strip()] or ["*"]
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=allowed,
+        allow_methods=["*"],
+        allow_headers=["*"],
+        expose_headers=["*"],
+    )
+
+
 app = FastAPI(title="Gateway Service", version="1.0.0", lifespan=lifespan)
+configure_cors(app, settings.cors_enabled, settings.cors_origins)
 app.include_router(router)
 
 

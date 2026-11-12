@@ -1,18 +1,22 @@
 from contextlib import asynccontextmanager
+import logging
 import uuid
 
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 import httpx
+from sqlalchemy.exc import OperationalError
 
 from config import settings
 from database.base import Base
-from database.session import dispose_engine, engine
-from exceptions import DocumentsServiceError
+from database.session import dispose_engine, engine, warm_pool
+from exceptions import DatabaseUnavailableError, DocumentsServiceError
 import models  # noqa: F401 - Register all models with Base.metadata
 from router import router
 from services.identity_client import IdentityClient
 from services.subject_client import SubjectClient
+
+logger = logging.getLogger(__name__)
 
 _PROBLEM_META: dict[str, tuple[str, bool]] = {
     "NOT_FOUND": ("Resource not found", False),
@@ -35,6 +39,7 @@ _PROBLEM_META: dict[str, tuple[str, bool]] = {
     "SUBJECT_LOCKED": ("This record no longer accepts documents", False),
     "AUTH_SERVICE_UNAVAILABLE": ("Sign-in could not be checked", True),
     "SUBJECT_SERVICE_UNAVAILABLE": ("Linked record could not be checked", True),
+    "DATABASE_UNAVAILABLE": ("The database could not be reached", True),
 }
 
 
@@ -42,6 +47,7 @@ _PROBLEM_META: dict[str, tuple[str, bool]] = {
 async def lifespan(app: FastAPI):
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
+    await warm_pool()
     async with (
         httpx.AsyncClient(base_url=settings.identity_service_url, timeout=settings.identity_timeout_seconds) as identity_http,
         httpx.AsyncClient(timeout=settings.subject_check_timeout_seconds) as subject_http,
@@ -79,6 +85,17 @@ async def documents_error_handler(request: Request, exc: DocumentsServiceError) 
     if exc.details:
         body["errors"] = exc.details
     return JSONResponse(status_code=exc.status_code, content=body)
+
+
+@app.exception_handler(OperationalError)
+async def database_unavailable_handler(request: Request, exc: OperationalError) -> JSONResponse:
+    """
+    The database dropped or refused the connection (the hosted server closes idle ones, and
+    every service shares its connection limit). Answer a retryable 503 rather than a bare
+    500: the console retries a read once on 503, by which time the pool has a fresh connection.
+    """
+    logger.warning("Database unavailable for %s %s: %s", request.method, request.url.path, exc.orig)
+    return await documents_error_handler(request, DatabaseUnavailableError())
 
 
 @app.get("/health", tags=["health"])

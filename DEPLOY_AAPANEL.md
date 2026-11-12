@@ -17,7 +17,7 @@ rewrite rules) and serves the client-admin build for everything else.
 Both repos have `.github/workflows/ci-cd.yml`:
 
 - **Every push to `main`:** backend runs each service's tests;
-  frontend builds `clientadmin` and `superadmin`.
+  frontend builds `clientadmin`.
 - **If that passes:** the deploy job connects to the server over SSH and runs
   `fbos-deploy backend` (or `frontend`), which fast-forwards that checkout to `origin/main` and
   runs its `scripts/deploy_aapanel.sh`. A deploy can also be started by hand from the Actions tab
