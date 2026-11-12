@@ -131,12 +131,15 @@ class LeadService:
         if source:
             query = query.where(Lead.source == source)
 
-        if cursor:
-            c_data = decode_cursor(cursor)
-            if "last_name" in c_data:
-                query = query.where(Lead.name > c_data["last_name"])
+        # Newest first; the id breaks ties between leads added in the same second.
+        after = decode_cursor(cursor) if cursor else {}
+        if after.get("created_at") and after.get("id"):
+            created_at, last_id = datetime.fromisoformat(after["created_at"]), uuid.UUID(after["id"])
+            query = query.where(
+                (Lead.created_at < created_at) | ((Lead.created_at == created_at) & (Lead.id < last_id))
+            )
 
-        query = query.order_by(Lead.name.asc()).limit(limit + 1)
+        query = query.order_by(Lead.created_at.desc(), Lead.id.desc()).limit(limit + 1)
         result = await session.execute(query)
         rows = list(result.scalars().all())
 
@@ -145,7 +148,8 @@ class LeadService:
 
         next_cursor = None
         if has_more and data_rows:
-            next_cursor = encode_cursor({"last_name": data_rows[-1].name})
+            last = data_rows[-1]
+            next_cursor = encode_cursor({"created_at": last.created_at.isoformat(), "id": str(last.id)})
 
         return PageResponse(
             data=[format_lead_response(ld) for ld in data_rows],
