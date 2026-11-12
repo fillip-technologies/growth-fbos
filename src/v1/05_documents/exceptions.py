@@ -310,6 +310,17 @@ class SubjectServiceUnavailableError(DocumentsServiceError):
         )
 
 
+class DatabaseUnavailableError(DocumentsServiceError):
+    """503: The database dropped or refused the connection; a retry gets a fresh one."""
+
+    def __init__(self) -> None:
+        super().__init__(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            code="DATABASE_UNAVAILABLE",
+            message="The documents could not be loaded right now. Try again shortly.",
+        )
+
+
 class ValidationFailedError(DocumentsServiceError):
     """422: The request is well-formed but its values don't fit together."""
 

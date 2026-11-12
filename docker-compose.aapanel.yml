@@ -42,6 +42,11 @@ services:
     # Records documents attach to: revenue's (in this compose) and inventory's (the Fixly backend).
     environment:
       SUBJECT_SERVICES: '{"revenue": "http://revenue:8000/api/revenue/v1", "delivery": "http://delivery:8000/api/delivery/v1", "inventory": "https://fixly-backend.fillipsoftware.com/api/inventory/v1", "people": "http://people:8000/api/people/v1", "finance": "http://finance:8000/api/finance/v1"}'
+      # Small pool on the shared Hostinger database user, recycled before the per-connection
+      # idle timeout (DB_SESSION_WAIT_TIMEOUT) — wins over older values in the server's .env.
+      DB_POOL_SIZE: "5"
+      DB_MAX_OVERFLOW: "5"
+      DB_POOL_RECYCLE: "3300"
   communication: { restart: always, ports: !reset [], depends_on: !reset {} }
   management:    { restart: always, ports: !reset [], depends_on: !reset {} }
   insight:       { restart: always, ports: !reset [], depends_on: !reset {} }
