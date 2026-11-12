@@ -37,6 +37,10 @@ def format_activity_response(act: Activity) -> ActivityResponse:
         outcome=act.outcome,
         owner=UserRef(id=act.owner_user_id, name="Activity Owner"),
         source=ActivitySource(type=act.source_type, id=act.source_id) if act.source_type and act.source_id else None,
+        requirements=act.requirements,
+        expectations=act.expectations,
+        next_action=act.next_action,
+        follow_up_on=act.follow_up_on,
     )
 
 
@@ -116,6 +120,10 @@ class ActivityService:
             summary=payload.summary,
             outcome=payload.outcome,
         )
+        # The follow-up is kept on the activity: what to do next, and by when.
+        if payload.follow_up:
+            activity.next_action = payload.follow_up.title
+            activity.follow_up_on = _naive_utc(payload.follow_up.due_at).date()
         session.add(activity)
         await session.flush()
         return format_activity_response(activity)

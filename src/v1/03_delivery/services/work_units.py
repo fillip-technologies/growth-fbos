@@ -24,7 +24,8 @@ from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 from typing import Optional
 
-from sqlalchemy import ColumnElement, func, or_, select
+from sqlalchemy import ColumnElement, and_, case, func, or_, select
+from sqlalchemy.orm import aliased
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from exceptions import (
@@ -82,7 +83,9 @@ from schemas.work_units import (
     WorkTemplateVersionResponse,
     WorkPackageResponse,
     WorkUnitCreate,
+    WorkUnitRef,
     WorkUnitResponse,
+    WorkstreamCreate,
     WorkUnitStatusChange,
     WorkUnitSummaryResponse,
     WorkUnitTypeCreate,
@@ -448,6 +451,22 @@ async def _work_unit_responses(session: AsyncSession, work_units: list[WorkUnit]
     }
 
     running_workflows = await workflow_instances.running_instance_ids(session, WORK_UNIT_SUBJECT, work_unit_ids)
+    progress = dict((await session.execute(select(WorkUnit.id, progress_pct()).where(WorkUnit.id.in_(work_unit_ids)))).all())
+    parent_ids = {w.parent_work_unit_id for w in work_units if w.parent_work_unit_id}
+    parents = (
+        {p.id: p for p in (await session.execute(select(WorkUnit).where(WorkUnit.id.in_(parent_ids)))).scalars()}
+        if parent_ids
+        else {}
+    )
+    workstream_counts = dict(
+        (
+            await session.execute(
+                select(WorkUnit.parent_work_unit_id, func.count())
+                .where(WorkUnit.parent_work_unit_id.in_(work_unit_ids))
+                .group_by(WorkUnit.parent_work_unit_id)
+            )
+        ).all()
+    )
 
     responses = []
     for work_unit in work_units:
@@ -464,7 +483,7 @@ async def _work_unit_responses(session: AsyncSession, work_units: list[WorkUnit]
                 status=work_unit.status,
                 priority=work_unit.priority,
                 health=work_unit.health,
-                progress_pct=float(work_unit.progress_pct),
+                progress_pct=float(progress.get(work_unit.id) or 0),
                 owning_unit=unit_ref(work_unit.owning_unit_id),
                 vertical=vertical_ref(work_unit.vertical_id),
                 client=client_ref(work_unit.client_id),
@@ -479,12 +498,18 @@ async def _work_unit_responses(session: AsyncSession, work_units: list[WorkUnit]
                 budget=_budget_amounts(budget),
                 workflow_instance_id=running_workflows.get(work_unit.id),
                 attributes=work_unit.attributes or {},
+                parent=_parent_ref(parents.get(work_unit.parent_work_unit_id)),
+                workstream_count=int(workstream_counts.get(work_unit.id, 0)),
                 version=work_unit.version,
                 created_at=work_unit.created_at,
                 updated_at=work_unit.updated_at,
             )
         )
     return responses
+
+
+def _parent_ref(parent: Optional[WorkUnit]) -> Optional[WorkUnitRef]:
+    return WorkUnitRef(id=parent.id, code=parent.code, name=parent.name) if parent else None
 
 
 def _budget_amounts(budget: Optional[WorkBudget]) -> dict:
@@ -514,9 +539,19 @@ async def list_work_units(
     cursor: Optional[str],
     view: Optional["ProjectView"] = None,
     contract_id: Optional[uuid.UUID] = None,
+    top_level: bool = False,
+    parent_id: Optional[uuid.UUID] = None,
 ) -> PageResponse[WorkUnitResponse]:
-    """Projects matching the filters; only those in `view` when someone may not see every project."""
+    """
+    Projects matching the filters; only those in `view` when someone may not see every project.
+    `top_level` leaves workstreams out (they show under their project); `parent_id` lists one
+    project's workstreams.
+    """
     query = select(WorkUnit).where(WorkUnit.organization_id == org_id)
+    if top_level:
+        query = query.where(WorkUnit.parent_work_unit_id.is_(None))
+    if parent_id is not None:
+        query = query.where(WorkUnit.parent_work_unit_id == parent_id)
     if view is not None:
         query = query.where(visible_work_units(org_id, view))
     if status is not None:
@@ -561,15 +596,57 @@ async def _type_and_template_version(
 async def create_work_unit(
     session: AsyncSession, org_id: uuid.UUID, user_id: uuid.UUID, data: WorkUnitCreate
 ) -> WorkUnitResponse:
+    """A project, with its workstreams if given; or, with `parent_work_unit_id`, a workstream of a project."""
+    parent = None
+    if data.parent_work_unit_id is not None:
+        parent = await _get_work_unit(session, org_id, data.parent_work_unit_id)
+        if parent.parent_work_unit_id is not None or data.workstreams:
+            raise ValidationFailedError("parent_work_unit_id", "Workstreams belong to a project, one level deep")
+
+    work_unit = await _new_work_unit(session, org_id, user_id, data, parent)
+    if data.workstreams:
+        project_type = (await session.get(WorkUnitType, work_unit.work_unit_type_id)).code
+        for stream in data.workstreams:
+            await _new_work_unit(session, org_id, user_id, _workstream_create(data, stream, project_type), work_unit)
+    return await _work_unit_response(session, work_unit)
+
+
+def _workstream_create(project: WorkUnitCreate, stream: WorkstreamCreate, project_type: str) -> WorkUnitCreate:
+    """A workstream shares its project's customer, contract, sale, dates and terms; its team and manager are its own."""
+    same_type = None if stream.template_code else (stream.work_unit_type_code or project_type)
+    return WorkUnitCreate(
+        template_code=stream.template_code,
+        work_unit_type_code=same_type,
+        name=stream.name,
+        objective=stream.objective,
+        owning_unit_id=stream.owning_unit_id,
+        vertical_id=stream.vertical_id,
+        client_id=project.client_id,
+        contract_id=project.contract_id,
+        partner_organization_id=project.partner_organization_id,
+        manager_user_id=stream.manager_user_id,
+        planned_start=project.planned_start,
+        planned_end=project.planned_end,
+        priority=project.priority,
+        billable=project.billable,
+        deal_id=project.deal_id,
+    )
+
+
+async def _new_work_unit(
+    session: AsyncSession, org_id: uuid.UUID, user_id: uuid.UUID, data: WorkUnitCreate, parent: Optional[WorkUnit]
+) -> WorkUnit:
     unit_type, template_version, template_vertical_id = await _type_and_template_version(session, org_id, data)
     workflow_code = template_version.workflow_definition_code if template_version else None
     if data.start_workflow and not workflow_code:
         raise ValidationFailedError("start_workflow", "Only a project made from a template with a workflow can start one")
-    if unit_type.requires_client and data.client_id is None:
+    client_id = data.client_id or (parent.client_id if parent else None)
+    if unit_type.requires_client and client_id is None:
         raise ClientRequiredError()
 
     work_unit = WorkUnit(
         organization_id=org_id,
+        parent_work_unit_id=parent.id if parent else None,
         code=await next_work_unit_code(session, org_id),
         name=data.name,
         objective=data.objective,
@@ -577,8 +654,9 @@ async def create_work_unit(
         template_version_id=template_version.id if template_version else None,
         vertical_id=data.vertical_id or template_vertical_id,
         owning_unit_id=data.owning_unit_id,
-        client_id=data.client_id,
-        contract_id=data.contract_id,
+        client_id=client_id,
+        contract_id=data.contract_id or (parent.contract_id if parent else None),
+        deal_id=data.deal_id or (parent.deal_id if parent else None),
         partner_organization_id=_partner(org_id, data.partner_organization_id),
         manager_user_id=data.manager_user_id,
         planned_start=data.planned_start,
@@ -602,8 +680,7 @@ async def create_work_unit(
             definition_code=workflow_code, subject=SubjectRefInput(type=WORK_UNIT_SUBJECT, id=work_unit.id)
         )
         await workflow_instances.start_workflow_instance(session, org_id, user_id, start)
-
-    return await _work_unit_response(session, work_unit)
+    return work_unit
 
 
 async def _copy_template_structure(session: AsyncSession, work_unit: WorkUnit, structure: dict) -> None:
@@ -702,7 +779,7 @@ def _templated_milestone_date(item: dict, work_unit: WorkUnit) -> date:
     return work_unit.planned_end
 
 
-def own_work_units(org_id: uuid.UUID, user_id: uuid.UUID) -> ColumnElement[bool]:
+def own_work_units(org_id: uuid.UUID, user_id: uuid.UUID, unit=WorkUnit) -> ColumnElement[bool]:
     """Someone's own projects: they manage it, are on its team, or have a task in it."""
     on_the_team = select(WorkUnitMember.work_unit_id).where(
         WorkUnitMember.user_id == user_id,
@@ -711,7 +788,7 @@ def own_work_units(org_id: uuid.UUID, user_id: uuid.UUID) -> ColumnElement[bool]
     with_own_tasks = select(Task.work_unit_id).where(
         Task.organization_id == org_id, Task.work_unit_id.is_not(None), own_tasks(user_id)
     )
-    return or_(WorkUnit.manager_user_id == user_id, WorkUnit.id.in_(on_the_team), WorkUnit.id.in_(with_own_tasks))
+    return or_(unit.manager_user_id == user_id, unit.id.in_(on_the_team), unit.id.in_(with_own_tasks))
 
 
 @dataclass(frozen=True)
@@ -723,10 +800,42 @@ class ProjectView:
     unit_ids: frozenset[uuid.UUID] = frozenset()
 
 
+def _directly_visible(org_id: uuid.UUID, view: ProjectView, unit=WorkUnit) -> ColumnElement[bool]:
+    own = own_work_units(org_id, view.user_id, unit)
+    return or_(own, unit.owning_unit_id.in_(view.unit_ids)) if view.unit_ids else own
+
+
 def visible_work_units(org_id: uuid.UUID, view: ProjectView) -> ColumnElement[bool]:
-    """Their own projects, and the projects of the units their read covers."""
-    own = own_work_units(org_id, view.user_id)
-    return or_(own, WorkUnit.owning_unit_id.in_(view.unit_ids)) if view.unit_ids else own
+    """
+    Their own projects, the projects of the units their read covers, and the project any of
+    those is a workstream of: whoever works on one department's part sees the whole it is part of.
+    """
+    workstream = aliased(WorkUnit)
+    parents_of_visible = select(workstream.parent_work_unit_id).where(
+        workstream.organization_id == org_id,
+        workstream.parent_work_unit_id.is_not(None),
+        _directly_visible(org_id, view, workstream),
+    )
+    return or_(_directly_visible(org_id, view), WorkUnit.id.in_(parents_of_visible))
+
+
+def progress_pct(unit=WorkUnit) -> ColumnElement:
+    """
+    How far along a project is: its done tasks out of its tasks (cancelled ones aside), its
+    workstreams' tasks included, so a project's progress weighs each workstream by its tasks.
+    With no tasks yet, the progress recorded on the project itself.
+    """
+    workstream = aliased(WorkUnit)
+    in_project = or_(
+        Task.work_unit_id == unit.id,
+        Task.work_unit_id.in_(
+            select(workstream.id).where(workstream.parent_work_unit_id == unit.id).correlate(unit).scalar_subquery()
+        ),
+    )
+    counted = and_(in_project, Task.status != "cancelled")
+    total = select(func.count(Task.id)).where(counted).correlate(unit).scalar_subquery()
+    done = select(func.count(Task.id)).where(counted, Task.status == "done").correlate(unit).scalar_subquery()
+    return case((total == 0, unit.progress_pct), else_=func.round(done * 100.0 / total, 2))
 
 
 async def ensure_work_unit_visible(

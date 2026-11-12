@@ -12,7 +12,7 @@ from models.activity import Activity
 from models.client import ClientContact
 from services.mail_client import mail_client
 from tests.conftest import TEST_USER_ID
-from tests.test_sales_flow import ADDRESS, BASE, CONSENT, _act, _converted_lead, _quotation
+from tests.test_sales_flow import ADDRESS, BASE, CONSENT, _act, _qualified_lead, _quotation, _worked_lead
 
 pytestmark = pytest.mark.asyncio
 
@@ -39,11 +39,15 @@ def quotation_files(fake_documents, monkeypatch: pytest.MonkeyPatch) -> dict[str
     """Files attached to quotations, by quotation id; their content is their name."""
     files: dict[str, list[dict]] = {}
 
+    stored_files, stored_download = fake_documents.list_for_subject, fake_documents.download
+
     async def list_for_subject(authorization, organization_id, subject):
-        return files.get(str(subject.id), [])
+        return files.get(str(subject.id), []) + await stored_files(authorization, organization_id, subject)
 
     async def download(authorization, organization_id, document_id, version_no, timeout):
-        doc = next(d for docs in files.values() for d in docs if d["id"] == str(document_id))
+        doc = next((d for docs in files.values() for d in docs if d["id"] == str(document_id)), None)
+        if doc is None:  # the quotation's own PDF, stored when it was sent
+            return await stored_download(authorization, organization_id, document_id, version_no, timeout)
         return doc["current_version"]["file_name"].encode()
 
     monkeypatch.setattr(fake_documents, "list_for_subject", list_for_subject, raising=False)
@@ -59,7 +63,7 @@ def _file(name: str, size: int = 10) -> dict:
 
 
 async def _quote_with_contact(client: httpx.AsyncClient, db_session) -> tuple[dict, dict]:
-    converted = await _converted_lead(client)
+    converted = await _qualified_lead(client)
     db_session.add(ClientContact(client_id=uuid.UUID(converted["client"]["id"]), name="Asha Rao", email="asha@client.test", is_primary=True))
     await db_session.commit()
     return converted, await _quotation(client, converted["opportunity"]["id"])
@@ -99,13 +103,18 @@ async def test_emails_chosen_files_marks_sent_and_logs_activity(async_client, db
     body = res.json()
     assert body["from_address"] == "sales@acme.test"
     assert body["cc"] == ["boss@client.test"]
-    assert [f["file_name"] for f in body["attachments"]] == ["quote.pdf"]
+    # The quotation's own PDF goes first, then the files chosen.
+    pdf_name = f"{quote['quote_no']} rev 1.pdf"
+    assert [f["file_name"] for f in body["attachments"]] == [pdf_name, "quote.pdf"]
     assert body["quotation"]["status"] == "sent"
 
     email = outbox[0]
     assert email["to"] == ["asha@client.test"] and email["bcc"] == ["me@acme.test"]
-    assert [a["file_name"] for a in email["attachments"]] == ["quote.pdf"]
-    assert base64.b64decode(email["attachments"][0]["content_base64"]) == b"quote.pdf"
+    assert [a["file_name"] for a in email["attachments"]] == [pdf_name, "quote.pdf"]
+    assert base64.b64decode(email["attachments"][0]["content_base64"]).startswith(b"%PDF")
+    assert base64.b64decode(email["attachments"][1]["content_base64"]) == b"quote.pdf"
+    assert body["quotation"]["pdf_document_id"] and body["quotation"]["pdf_version_no"] == 1
+    assert body["message_id"] == "<1@acme.test>"
 
     activities = (await db_session.execute(select(Activity).where(Activity.activity_type == "email"))).scalars().all()
     assert len(activities) == 1
@@ -159,7 +168,7 @@ async def test_bad_address_is_refused(async_client, db_session, outbox):
 
 
 async def test_quotation_awaiting_approval_is_not_emailed(async_client, db_session, outbox):
-    converted = await _converted_lead(async_client)
+    converted = await _qualified_lead(async_client)
     quote = await _quotation(async_client, converted["opportunity"]["id"], discount_pct=30)
     pending = (await _act(async_client, quote, "submit")).json()
     assert pending["status"] == "pending_approval"
@@ -193,13 +202,9 @@ async def test_failed_mail_leaves_quotation_unsent(async_client, db_session, quo
 
 
 async def _ravi_quote(async_client) -> dict:
-    lead = await async_client.post(
-        f"{BASE}/leads",
-        json={"vertical_id": str(uuid.uuid4()), "contact_name": "Ravi Kumar", "contact_email": "ravi@client.test", "consent": CONSENT},
-    )
-    assert lead.status_code == 201, lead.json()
+    lead_id, etag = await _worked_lead(async_client, contact_name="Ravi Kumar", contact_email="ravi@client.test")
     converted = await async_client.post(
-        f"{BASE}/leads/{lead.json()['id']}/convert",
+        f"{BASE}/leads/{lead_id}/qualify",
         json={
             "new_client": {
                 "name": "Ravi Traders",
@@ -213,13 +218,13 @@ async def _ravi_quote(async_client) -> dict:
                 "expected_close_date": "2026-12-31",
             },
         },
-        headers={"If-Match": lead.headers["ETag"]},
+        headers={"If-Match": etag},
     )
     assert converted.status_code == 200, converted.json()
     return await _quotation(async_client, converted.json()["opportunity"]["id"])
 
 
-async def test_the_converted_leads_contact_is_the_customers_primary(async_client, outbox):
+async def test_the_qualified_leads_contact_is_the_customers_primary(async_client, outbox):
     quote = await _ravi_quote(async_client)
 
     draft = (await async_client.get(f"{BASE}/quotations/{quote['id']}/email-draft")).json()

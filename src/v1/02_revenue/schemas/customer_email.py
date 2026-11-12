@@ -65,7 +65,8 @@ class CustomerEmailDraft(BaseModel):
 
 
 class EmailedFile(BaseModel):
-    document_id: uuid.UUID
+    # None for a PDF drawn for the email and not stored (a quotation sent before PDFs were kept).
+    document_id: Optional[uuid.UUID] = None
     file_name: str
     size_bytes: int
 
@@ -78,3 +79,5 @@ class CustomerEmailSent(BaseModel):
     bcc: list[str]
     subject: str
     attachments: list[EmailedFile]
+    # The mail server's id for it, when it gave one.
+    message_id: Optional[str] = None

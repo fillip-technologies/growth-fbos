@@ -18,7 +18,9 @@ from schemas.quotation import (
     QuotationValidityUpdate,
     QuotationWithdrawal,
 )
-from services import notifications, quotation_email_service, quotation_events
+from services import notifications, quotation_documents, quotation_email_service, quotation_events
+from services.lead_service import lead_of_opportunity
+from services.website_leads_client import website_leads_client
 from services.documents_client import SubjectRef
 from schemas.common import PageResponse
 from services.quotation_service import QuotationService, get_quote_in_org, list_quotations
@@ -172,11 +174,16 @@ async def send_quotation(
     session: DatabaseSession,
     org_id: OrgId,
     actor: CurrentActor,
+    authorization: Authorization,
+    documents: Documents,
     response: Response,
     if_match: Optional[str] = Header(None, alias="If-Match"),
     idempotency_key: Optional[str] = Header(None, alias="Idempotency-Key"),
 ) -> QuotationResponse:
-    """Send approved quotation to the client and freeze revision."""
+    """
+    Send the quotation: marked sent and frozen, its PDF stored as the customer's copy. A draft
+    whose discount is over 20% goes for approval instead (status `pending_approval`).
+    """
     quotation = await QuotationService.send_quotation(
         session=session,
         quotation_id=quotation_id,
@@ -184,6 +191,10 @@ async def send_quotation(
         if_match=if_match,
         actor_user_id=actor.user_id,
     )
+    if quotation.status == "sent":
+        quote = await get_quote_in_org(session, org_id, quotation_id)
+        await quotation_documents.store_final_pdf(session, org_id, quote, documents, authorization)
+        quotation = quotation.model_copy(update={"pdf_document_id": quote.pdf_document_id, "pdf_version_no": quote.pdf_version_no})
     await session.commit()
     response.headers["ETag"] = f'"{quotation.version}"'
     return quotation
@@ -247,6 +258,9 @@ async def accept_quotation(
     )
     await session.commit()
     await notifications.deal_won(session, actor, quotation)
+    lead = await lead_of_opportunity(session, org_id, quotation.opportunity_id)
+    if lead and lead.status == "converted":
+        website_leads_client.push_status(org_id, lead)
     response.headers["ETag"] = f'"{quotation.version}"'
     return quotation
 
@@ -359,6 +373,27 @@ async def list_quotation_events(
     """The quotation's history, oldest first."""
     await get_quote_in_org(session, org_id, quotation_id)
     return await quotation_events.list_events(session, org_id, quotation_id)
+
+
+@router.get(
+    "/{quotation_id}/pdf",
+    dependencies=[CAN_READ],
+    response_class=Response,
+    responses={200: {"content": {"application/pdf": {}}, "description": "The quotation as a PDF"}},
+)
+async def quotation_pdf(
+    quotation_id: uuid.UUID,
+    session: DatabaseSession,
+    org_id: OrgId,
+    authorization: Authorization,
+    documents: Documents,
+) -> Response:
+    """
+    The PDF: before it is sent, a preview marked "Draft" (not stored); once sent, the copy the
+    customer got.
+    """
+    content, name = await quotation_documents.pdf_for_viewing(session, org_id, quotation_id, documents, authorization)
+    return Response(content=content, media_type="application/pdf", headers={"Content-Disposition": f'inline; filename="{name}"'})
 
 
 @router.get(

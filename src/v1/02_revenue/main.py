@@ -46,7 +46,6 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             import_task = start_import_loop(
                 website_leads_client,
                 settings.website_leads_organization_id,
-                settings.website_leads_owner_user_id,
                 settings.website_leads_import_interval_seconds,
             )
         yield

@@ -12,6 +12,7 @@ from models.invoice import Invoice
 from models.lead import Lead
 from models.opportunity import Opportunity
 from models.payment import Payment, PaymentAllocation
+from models.proposal import Proposal
 from models.quotation import Quotation
 from tests.conftest import TEST_ORG_ID, TEST_SUPPLIER_GSTIN, TEST_USER_ID
 from tests.test_permissions import client_as  # noqa: F401  (fixture)
@@ -31,6 +32,16 @@ async def _sale(db: AsyncSession, org=TEST_ORG_ID) -> dict:
     opp = Opportunity(organization_id=org, client_id=client.id, lead_id=lead.id, name="Website", status="won", expected_value=100_000, owner_user_id=TEST_USER_ID)
     db.add(opp)
     await db.flush()
+    first = Proposal(
+        organization_id=org, opportunity_id=opp.id, client_id=client.id, proposal_no="PRP-1", version_no=1, title="Website",
+        status="superseded", total=90_000, created_at=datetime(2026, 9, 1),
+    )
+    db.add(first)
+    await db.flush()
+    db.add(Proposal(
+        organization_id=org, opportunity_id=opp.id, client_id=client.id, proposal_no="PRP-1", version_no=2, title="Website",
+        status="accepted", total=100_000, previous_version_id=first.id, created_at=datetime(2026, 9, 10),
+    ))
     accepted = Quotation(client_id=client.id, opportunity_id=opp.id, quote_no="Q-1", status="accepted", grand_total=118_000, created_at=datetime(2026, 10, 1))
     old = Quotation(client_id=client.id, opportunity_id=opp.id, quote_no="Q-0", status="superseded", grand_total=90_000, created_at=datetime(2026, 9, 1))
     other = Quotation(client_id=client.id, opportunity_id=opp.id, quote_no="Q-2", status="rejected", grand_total=50_000, created_at=datetime(2026, 10, 2))
@@ -81,6 +92,8 @@ async def test_the_same_journey_from_any_record_on_it(db_session: AsyncSession, 
     assert body["client"]["name"] == "Acme"
     assert body["lead"]["number"] == "LD-2026-0001" and body["lead"]["name"] == "Asha"
     assert body["opportunity"]["id"] == str(sale["opp"].id)
+    # A proposal shows as its latest version.
+    assert [(p["number"], p["kind"], p["status"]) for p in body["proposals"]] == [("PRP-1", "v2", "accepted")]
     # The superseded revision is history; the accepted one is marked.
     assert [(q["number"], q["is_main"]) for q in body["quotations"]] == [("Q-1", True), ("Q-2", False)]
     assert [c["number"] for c in body["contracts"]] == ["CT-1"]
@@ -104,7 +117,7 @@ async def test_stages_the_caller_cannot_read_are_hidden_not_empty(db_session: As
     assert body["contracts"][0]["number"] == "CT-1"
     assert body["lead"] is None and body["opportunity"] is None and body["quotations"] == []
     assert body["invoices"] == [] and body["payments"] == [] and body["totals"] is None
-    assert set(body["hidden"]) == {"lead", "opportunity", "quotations", "invoices", "payments"}
+    assert set(body["hidden"]) == {"lead", "opportunity", "proposals", "quotations", "invoices", "payments"}
 
 
 @pytest.mark.asyncio

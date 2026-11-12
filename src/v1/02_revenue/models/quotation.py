@@ -55,6 +55,13 @@ class Quotation(Base):
     name: Mapped[Optional[str]] = mapped_column(String(120), nullable=True)
     # One per opportunity (kept so by the service): its value is the opportunity's expected value.
     is_main: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default=false())
+    # The accepted proposal it was made from, if any.
+    proposal_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUIDType, ForeignKey("proposals.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    # The PDF the customer got, stored in documents when it was first sent.
+    pdf_document_id: Mapped[Optional[uuid.UUID]] = mapped_column(UUIDType, nullable=True)
+    pdf_version_no: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     version: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
 
 
