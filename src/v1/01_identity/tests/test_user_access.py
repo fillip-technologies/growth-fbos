@@ -565,8 +565,24 @@ async def test_internal_actor_names_the_codes_held_only_for_own_records(async_cl
     ])
     act_as(person.id)
     actor = (await async_client.get(f"{API}/internal/authz/actor")).json()
-    assert actor["permissions"] == ["delivery.task.read", "delivery.work_unit.read", "identity.user.read"]
+    assert actor["permissions"] == ["delivery.task.personal", "delivery.task.read", "delivery.work_unit.read", "identity.user.read"]
     assert actor["own_records_only"] == ["delivery.task.read"]
+
+
+@pytest.mark.asyncio
+async def test_everyone_keeps_and_reads_their_own_tasks_without_a_grant(async_client, db_session):
+    # Personal tasks need no setup: someone granted nothing still holds them, and reads their own tasks.
+    person = await make_user(db_session, "no.grants@example.com", grants=[])
+    act_as(person.id)
+    actor = (await async_client.get(f"{API}/internal/authz/actor")).json()
+    assert actor["permissions"] == ["delivery.task.personal", "delivery.task.read"]
+    assert actor["own_records_only"] == ["delivery.task.read"]
+
+    # A company-wide grant of the same code is kept as given, not narrowed.
+    reader = await make_user(db_session, "all.tasks@example.com", grants=[("delivery.task.read", None, False)])
+    act_as(reader.id)
+    actor = (await async_client.get(f"{API}/internal/authz/actor")).json()
+    assert actor["own_records_only"] == []
 
 
 @pytest.mark.asyncio

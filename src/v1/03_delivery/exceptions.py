@@ -720,13 +720,35 @@ class TaskNeedsReviewError(DeliveryServiceError):
 
 
 class PersonalTaskOwnOnlyError(DeliveryServiceError):
-    """422: A task with no team was given to someone else, or a reviewer."""
+    """422: A task with no team was given to someone else."""
 
     def __init__(self) -> None:
         super().__init__(
             status.HTTP_422_UNPROCESSABLE_ENTITY,
             "PERSONAL_TASK_OWN_ONLY",
-            "A task with no team is your own: it can't be assigned to someone else or have a reviewer.",
+            "A task with no team is your own: it can't be assigned to someone else.",
+        )
+
+
+class ReviewerRequiredError(DeliveryServiceError):
+    """422: A personal task of a kind that goes for review was handed in with nobody to review it."""
+
+    def __init__(self) -> None:
+        super().__init__(
+            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            "REVIEWER_REQUIRED",
+            "This kind of task goes for review: choose who will review it.",
+        )
+
+
+class ReviewerNotAllowedError(DeliveryServiceError):
+    """422: The reviewer named is the task's own assignee, or not an active person of the company."""
+
+    def __init__(self) -> None:
+        super().__init__(
+            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            "REVIEWER_NOT_ALLOWED",
+            "Choose someone else in the company to review it, not yourself.",
         )
 
 

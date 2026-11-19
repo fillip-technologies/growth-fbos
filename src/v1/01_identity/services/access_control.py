@@ -22,6 +22,7 @@ from exceptions import PermissionDeniedError
 from models.org_unit import OrgUnit
 from models.user import User
 from models.user_permission import UserPermission
+from services.permission_catalog import EVERYONE_HOLDS
 
 
 @dataclass(frozen=True)
@@ -139,4 +140,10 @@ async def load_grants(session: AsyncSession, user_id: uuid.UUID) -> list[Grant]:
             scope_path=row.scope_unit.path if row.scope_unit else None,
             self_only=row.self_only,
         ))
+    held = {grant.permission for grant in grants}
+    grants.extend(
+        Grant(permission=code, scope_unit_id=None, scope_path=None, self_only=own_only)
+        for code, own_only in EVERYONE_HOLDS
+        if code not in held
+    )
     return grants

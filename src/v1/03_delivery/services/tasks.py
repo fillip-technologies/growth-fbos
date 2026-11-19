@@ -49,6 +49,8 @@ from exceptions import (
     PersonalTaskOwnOnlyError,
     PermissionDeniedError,
     PreconditionRequiredError,
+    ReviewerNotAllowedError,
+    ReviewerRequiredError,
     RRuleInvalidError,
     SameUnitError,
     SubjectNotFoundError,
@@ -184,19 +186,32 @@ def is_own_personal(actor: Actor, task: Task) -> bool:
     return task.owning_unit_id is None and task.created_by == actor.user_id and task.assignee_user_id == actor.user_id
 
 
-def personal_task_rules(actor: Actor, data: TaskCreate) -> TaskCreate:
+def is_personal(task: Task) -> bool:
+    """A personal task: no team, kept by the person who created it (a workflow's team-less tasks have no creator)."""
+    return task.owning_unit_id is None and task.created_by is not None and task.created_by == task.assignee_user_id
+
+
+async def personal_task_rules(actor: Actor, data: TaskCreate, people: PeopleDirectory) -> TaskCreate:
     """
-    A task with no team is its creator's own: assigned to them, with no reviewer. Without
-    TASK_WRITE (only TASK_PERSONAL) that is the only task someone may create, and not under
-    another task.
+    A task with no team is its creator's own: assigned to them, optionally with someone else
+    to review it. Without TASK_WRITE (only TASK_PERSONAL) that is the only task someone may
+    create, and not under another task.
     """
     if data.owning_unit_id is None:
-        if data.assignee_user_id not in (None, actor.user_id) or data.reviewer_user_id is not None:
+        if data.assignee_user_id not in (None, actor.user_id):
             raise PersonalTaskOwnOnlyError()
+        if data.reviewer_user_id is not None:
+            await ensure_reviewer(people, actor.organization_id, actor.user_id, data.reviewer_user_id)
         data = data.model_copy(update={"assignee_user_id": actor.user_id})
     if not actor.has(permissions.TASK_WRITE) and (data.owning_unit_id is not None or data.parent_task_id is not None):
         raise PermissionDeniedError(permissions.TASK_WRITE)
     return data
+
+
+async def ensure_reviewer(people: PeopleDirectory, org_id: uuid.UUID, assignee_id: uuid.UUID, reviewer_id: uuid.UUID) -> None:
+    """A personal task's reviewer: someone else, active in the company (REVIEWER_NOT_ALLOWED)."""
+    if reviewer_id == assignee_id or not await people.people(org_id, user_id=reviewer_id):
+        raise ReviewerNotAllowedError()
 
 
 def _may_review(actor: Actor, task: Task) -> bool:
@@ -1512,13 +1527,15 @@ async def submit_task(
     attrs = merge_attributes(dict(task.attributes or {}), data.attributes or {}, profile.fields)
     await _ensure_ready_to_hand_in(session, task, profile, attrs, _outcome_issues(profile, data.outcome))
 
+    goes_for_review = await _reviewer_for_hand_in(session, people, org_id, user_id, task, task_type, data)
+
     now = datetime.now(timezone.utc)
     if data.outcome:
         attrs["outcome"] = data.outcome
     task.attributes = attrs
     from_status = task.status
 
-    if task_type and task_type.requires_review:
+    if goes_for_review:
         task.status = "submitted"
         notify.review_requested(session, task, user_id)
     else:
@@ -1540,6 +1557,40 @@ async def submit_task(
     task.version += 1
     await session.flush()
     return await _build_task_response(session, task)
+
+
+async def _reviewer_for_hand_in(
+    session: AsyncSession,
+    people: PeopleDirectory,
+    org_id: uuid.UUID,
+    user_id: uuid.UUID,
+    task: Task,
+    task_type: Optional[TaskType],
+    data: TaskSubmit,
+) -> bool:
+    """
+    Whether the hand-in goes for review, naming the reviewer first when asked. A team's task
+    goes when its kind needs review, as before. A personal task goes when its kind needs review
+    (then someone must be named: REVIEWER_REQUIRED) or when it has a reviewer anyway.
+    """
+    needs_review = bool(task_type and task_type.requires_review)
+    if not is_personal(task):
+        if data.reviewer_user_id is not None:
+            raise ValidationFailedError("reviewer_user_id", "Only a personal task names its reviewer when handed in")
+        return needs_review
+
+    if data.reviewer_user_id is not None and data.reviewer_user_id != task.reviewer_user_id:
+        await ensure_reviewer(people, org_id, user_id, data.reviewer_user_id)
+        await _end_assignments(session, task.id, "reviewer", "Reviewer changed")
+        session.add(
+            TaskAssignment(
+                task_id=task.id, unit_id=None, user_id=data.reviewer_user_id, assignment_role="reviewer", assigned_by=user_id
+            )
+        )
+        task.reviewer_user_id = data.reviewer_user_id
+    if needs_review and task.reviewer_user_id is None:
+        raise ReviewerRequiredError()
+    return needs_review or task.reviewer_user_id is not None
 
 
 def _outcome_issues(profile: Profile, outcome: Optional[str]) -> list[dict[str, str]]:
