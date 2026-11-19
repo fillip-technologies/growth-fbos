@@ -1,7 +1,7 @@
 """
-Kanban boards (services/boards.py): a project's board and a customer's, columns that hold task
-statuses, cards placed by hand within and across columns, and moves that take the task's real
-step or are refused.
+Project boards (services/boards.py): a project's work divided into modules in columns the team
+names; modules move and reorder freely and never change a task; tasks may be linked to a module;
+a customer's board shows the modules of all its projects.
 """
 import random
 import uuid
@@ -9,10 +9,9 @@ import uuid
 import pytest
 
 import permissions
-from services.boards import board_step
 from services.identity_client import Actor
 from services.ranks import rank_between, spread_ranks
-from tests.conftest import TEST_ORG_ID, TEST_USER_ID
+from tests.conftest import TEST_ORG_ID
 from tests.test_own_records import ADMIN, act_as  # noqa: F401  (fixture)
 from tests.test_smoke import BASE, create_project, create_task, if_match, ok
 
@@ -38,172 +37,84 @@ def column(board: dict, name: str) -> dict:
 
 
 def titles(board: dict, name: str) -> list[str]:
-    return [t["title"] for t in column(board, name)["tasks"]]
+    return [m["title"] for m in column(board, name)["modules"]]
 
 
-async def project_task(client, project: dict, title: str, **overrides) -> dict:
-    return await create_task(client, title=title, subject={"type": "work.work_unit", "id": project["id"]}, **overrides)
+async def add_module(client, board: dict, name: str, title: str, **fields) -> dict:
+    body = {"column_id": column(board, name)["id"], "title": title, **fields}
+    return await ok(await client.post(f"{BASE}/boards/{board['id']}/modules", json=body), 201)
 
 
-async def place(client, board: dict, task: dict, name: str, **anchors) -> object:
+async def place(client, board: dict, module: dict, name: str, **anchors):
     body = {"column_id": column(board, name)["id"], **{k: v["id"] for k, v in anchors.items()}}
-    return await client.put(f"{BASE}/boards/{board['id']}/items/{task['id']}", json=body, headers=if_match(task))
+    return await client.put(f"{BASE}/boards/{board['id']}/modules/{module['id']}/position", json=body)
 
 
-# --- The board and where cards land ----------------------------------------------------
+# --- The board, modules and where they sit ---------------------------------------------
 
 
-async def test_a_project_gets_its_default_board_once(async_client):
+async def test_a_project_gets_its_board_once_with_the_default_columns(async_client):
     project = await create_project(async_client)
     first = await ok(await async_client.get(f"{BASE}/boards", params={"work_unit_id": project["id"]}))
     again = await ok(await async_client.get(f"{BASE}/boards", params={"work_unit_id": project["id"]}))
     assert [b["id"] for b in first["data"]] == [b["id"] for b in again["data"]]
     board = await ok(await async_client.get(f"{BASE}/boards/{first['data'][0]['id']}"))
     assert [c["name"] for c in board["columns"]] == ["Backlog", "Ready", "In progress", "In review", "Done"]
-    assert column(board, "Backlog")["description"] == "This item hasn't been started"
-    assert board["can_configure"] is True
-    assert board["uncovered_statuses"] == []
+    assert column(board, "Ready")["description"] == "This is ready to be picked up"
+    assert board["can_edit"] is True
 
 
-async def test_cards_land_by_status_with_counts_and_estimates(async_client):
+async def test_modules_carry_their_own_details_and_add_up_per_column(async_client):
     project = await create_project(async_client)
-    await project_task(async_client, project, "Unassigned", estimate_minutes=90)
-    await project_task(async_client, project, "Mine", assignee_user_id=str(TEST_USER_ID), estimate_minutes=30)
-    await create_task(async_client, title="Another project's")
     board = await project_board(async_client, project)
-    assert titles(board, "Backlog") == ["Unassigned"]
-    assert titles(board, "Ready") == ["Mine"]
-    assert (column(board, "Backlog")["count"], column(board, "Backlog")["estimate_minutes_total"]) == (1, 90)
-    assert column(board, "Ready")["estimate_minutes_total"] == 30
-
-
-async def test_moving_between_columns_of_the_same_status_changes_only_the_place(async_client):
-    project = await create_project(async_client)
-    task = await project_task(async_client, project, "Spec")
-    board = await project_board(async_client, project)
-    item = await ok(await place(async_client, board, task, "Ready"))
-    assert (item["task"]["status"], item["task"]["version"]) == ("open", task["version"])
-    board = await project_board(async_client, project)
-    assert titles(board, "Ready") == ["Spec"] and titles(board, "Backlog") == []
-
-
-async def test_cards_reorder_within_a_column(async_client):
-    project = await create_project(async_client)
-    a, b, c = [await project_task(async_client, project, name, priority="p3") for name in ("A", "B", "C")]
-    board = await project_board(async_client, project)
-    assert titles(board, "Backlog") == ["A", "B", "C"]  # most urgent first, then oldest
-
-    await ok(await place(async_client, board, c, "Backlog", before_task_id=a))
-    assert titles(await project_board(async_client, project), "Backlog") == ["C", "A", "B"]
-    # Between two cards that were never placed by hand: the column is numbered first.
-    await ok(await place(async_client, board, b, "Backlog", after_task_id=c))
-    assert titles(await project_board(async_client, project), "Backlog") == ["C", "B", "A"]
-    await ok(await place(async_client, board, c, "Backlog", after_task_id=a))
-    assert titles(await project_board(async_client, project), "Backlog") == ["B", "A", "C"]
-    res = await place(async_client, board, a, "Backlog", after_task_id=a)
-    assert res.status_code == 422
-
-
-async def test_a_status_changed_elsewhere_moves_the_card_only_when_its_column_no_longer_fits(async_client):
-    project = await create_project(async_client)
-    task = await project_task(async_client, project, "Build")
-    board = await project_board(async_client, project)
-    await ok(await place(async_client, board, task, "Ready"))
-    # Assigned on the task page: Ready still holds it, so the card stays.
-    task = await ok(await async_client.post(
-        f"{BASE}/tasks/{task['id']}/assign", json={"assignee_user_id": str(TEST_USER_ID)}, headers=if_match(task),
-    ))
-    assert titles(await project_board(async_client, project), "Ready") == ["Build"]
-    await ok(await async_client.post(f"{BASE}/tasks/{task['id']}/start", headers=if_match(task)))
-    board = await project_board(async_client, project)
-    assert titles(board, "In progress") == ["Build"] and titles(board, "Ready") == []
-
-
-async def test_a_move_to_another_status_takes_the_tasks_step(async_client):
-    project = await create_project(async_client)
-    task = await project_task(async_client, project, "Build", assignee_user_id=str(TEST_USER_ID))
-    board = await project_board(async_client, project)
-    item = await ok(await place(async_client, board, task, "In progress"))
-    assert item["task"]["status"] == "in_progress"
-    # Unassigned work is taken and started by whoever drags it.
-    queued = await project_task(async_client, project, "Queued")
-    item = await ok(await place(async_client, board, queued, "In progress"))
-    assert (item["task"]["status"], item["task"]["assignee"]["id"]) == ("in_progress", str(TEST_USER_ID))
-
-
-async def test_steps_that_need_details_are_not_taken(async_client):
-    project = await create_project(async_client)
-    task = await project_task(async_client, project, "Build", assignee_user_id=str(TEST_USER_ID))
-    board = await project_board(async_client, project)
-    started = (await ok(await place(async_client, board, task, "In progress")))["task"]
-    res = await place(async_client, board, started, "In review")
-    assert (res.status_code, res.json()["detail"]["code"]) == (409, "BOARD_MOVE_NEEDS_INPUT")
-    assert res.json()["detail"]["meta"]["needs_input"] == "submit"
-    task = await ok(await async_client.get(f"{BASE}/tasks/{task['id']}"))
-    assert task["status"] == "in_progress"
-
-
-async def test_a_move_no_step_allows_is_refused(async_client):
-    project = await create_project(async_client)
-    task = await project_task(async_client, project, "Spec")
-    board = await project_board(async_client, project)
-    res = await place(async_client, board, task, "Done")
-    assert (res.status_code, res.json()["detail"]["code"]) == (409, "BOARD_MOVE_NOT_ALLOWED")
-    res = await async_client.put(
-        f"{BASE}/boards/{board['id']}/items/{task['id']}", json={"column_id": column(board, "Ready")["id"]},
+    owner = str(uuid.uuid4())
+    module = await add_module(
+        async_client, board, "Backlog", "Payments module", description="Card and UPI", owner_user_id=owner,
+        estimate_minutes=600, due_on="2026-12-31", priority="p1", labels=["backend", " backend ", "api"],
     )
-    assert res.status_code == 428
+    assert (module["owner"]["id"], module["priority"], module["labels"]) == (owner, "p1", ["backend", "api"])
+    await add_module(async_client, board, "Backlog", "Login", estimate_minutes=120)
+    board = await project_board(async_client, project)
+    backlog = column(board, "Backlog")
+    assert (titles(board, "Backlog"), backlog["count"], backlog["estimate_minutes_total"]) == (["Payments module", "Login"], 2, 720)
+
+    changed = await ok(await async_client.patch(
+        f"{BASE}/boards/{board['id']}/modules/{module['id']}", json={"title": "Payments", "owner_user_id": None}, headers=if_match(module),
+    ))
+    assert (changed["title"], changed["owner"], changed["version"]) == ("Payments", None, module["version"] + 1)
+    res = await async_client.patch(f"{BASE}/boards/{board['id']}/modules/{module['id']}", json={"title": "x"}, headers=if_match(module))
+    assert res.status_code == 412
 
 
-def test_which_step_a_move_takes():
-    assert board_step("open", False, {"in_progress", "blocked"}) == "claim_start"
-    assert board_step("open", True, {"in_progress"}) is None
-    assert board_step("blocked", True, {"in_progress"}) == "unblock"
-    assert board_step("in_progress", True, {"submitted", "in_review"}) == "submit"
-    assert board_step("in_review", True, {"done"}) == "approve"
-    assert board_step("submitted", True, {"open", "assigned", "rework"}) == "send_back"
-    assert board_step("assigned", True, {"blocked"}) == "block"
-    assert board_step("open", False, {"done"}) is None
-
-
-# --- Setting a board up ------------------------------------------------------------------
-
-
-async def test_columns_are_added_changed_ordered_and_removed(async_client):
+async def test_modules_move_and_reorder_freely(async_client):
     project = await create_project(async_client)
     board = await project_board(async_client, project)
-    url = f"{BASE}/boards/{board['id']}/columns"
+    a, b, c = [await add_module(async_client, board, "Backlog", name) for name in ("A", "B", "C")]
 
-    blocked = await ok(await async_client.post(url, json={
-        "name": "Blocked", "statuses": ["blocked"], "is_default_for_status": True, "wip_limit": 3,
-    }), 201)
-    task = await project_task(async_client, project, "Waiting", assignee_user_id=str(TEST_USER_ID))
-    await ok(await async_client.post(f"{BASE}/tasks/{task['id']}/block", json={"reason": "Client"}, headers=if_match(task)))
+    await ok(await place(async_client, board, c, "Backlog", before_module_id=a))
+    assert titles(await project_board(async_client, project), "Backlog") == ["C", "A", "B"]
+    await ok(await place(async_client, board, b, "Backlog", after_module_id=c))
+    assert titles(await project_board(async_client, project), "Backlog") == ["C", "B", "A"]
+    # Any column, in any order: Backlog straight to Done.
+    await ok(await place(async_client, board, b, "Done"))
     board = await project_board(async_client, project)
-    assert titles(board, "Blocked") == ["Waiting"] and titles(board, "In progress") == []
-
-    await ok(await async_client.patch(f"{url}/{blocked['id']}", json={"name": "On hold", "wip_limit": None}))
-    order = [blocked["id"], *[c["id"] for c in board["columns"] if c["id"] != blocked["id"]]]
-    columns = await ok(await async_client.put(f"{url}/order", json={"column_ids": order}))
-    assert [c["name"] for c in columns][:2] == ["On hold", "Backlog"]
-    res = await async_client.put(f"{url}/order", json={"column_ids": order[1:]})
+    assert (titles(board, "Backlog"), titles(board, "Done")) == (["C", "A"], ["B"])
+    res = await place(async_client, board, a, "Backlog", after_module_id=a)
     assert res.status_code == 422
 
-    assert (await async_client.delete(f"{url}/{blocked['id']}")).status_code == 204
-    board = await project_board(async_client, project)
-    assert titles(board, "In progress") == ["Waiting"]
 
-
-async def test_a_board_keeps_one_column_and_shows_what_isnt_covered(async_client):
+async def test_many_moves_to_the_same_spot_keep_the_order(async_client):
     project = await create_project(async_client)
     board = await project_board(async_client, project)
-    url = f"{BASE}/boards/{board['id']}/columns"
-    for c in board["columns"][:-1]:
-        assert (await async_client.delete(f"{url}/{c['id']}")).status_code == 204
-    res = await async_client.delete(f"{url}/{board['columns'][-1]['id']}")
-    assert (res.status_code, res.json()["detail"]["code"]) == (409, "LAST_BOARD_COLUMN")
-    board = await project_board(async_client, project)
-    assert "open" in board["uncovered_statuses"] and "done" not in board["uncovered_statuses"]
+    first = await add_module(async_client, board, "Ready", "First")
+    last = await add_module(async_client, board, "Ready", "Last")
+    names = []
+    for i in range(40):
+        module = await add_module(async_client, board, "Ready", f"M{i}")
+        await ok(await place(async_client, board, module, "Ready", after_module_id=first))
+        names.insert(0, f"M{i}")
+    assert titles(await project_board(async_client, project), "Ready") == ["First", *names, "Last"]
+    assert last
 
 
 async def test_a_column_past_its_limit_says_so(async_client):
@@ -212,41 +123,104 @@ async def test_a_column_past_its_limit_says_so(async_client):
     ready = column(board, "Ready")
     await ok(await async_client.patch(f"{BASE}/boards/{board['id']}/columns/{ready['id']}", json={"wip_limit": 1}))
     for name in ("One", "Two"):
-        await project_task(async_client, project, name, assignee_user_id=str(TEST_USER_ID))
+        await add_module(async_client, board, "Ready", name)
     board = await project_board(async_client, project)
     assert (column(board, "Ready")["count"], column(board, "Ready")["over_limit"]) == (2, True)
     assert column(board, "Backlog")["over_limit"] is False
 
 
-async def test_a_task_is_added_straight_into_a_column(async_client):
+# --- Columns -------------------------------------------------------------------------------
+
+
+async def test_columns_are_added_renamed_ordered_and_removed(async_client):
     project = await create_project(async_client)
     board = await project_board(async_client, project)
     url = f"{BASE}/boards/{board['id']}/columns"
-    item = await ok(await async_client.post(f"{url}/{column(board, 'Ready')['id']}/items", json={"title": "Quick one"}), 201)
-    assert item["task"]["subject"]["id"] == project["id"]
-    assert item["task"]["owning_unit"]["id"] == project["owning_unit"]["id"]
+    qa = await ok(await async_client.post(url, json={"name": "QA", "description": "Testing", "wip_limit": 3}), 201)
+    await ok(await async_client.patch(f"{url}/{qa['id']}", json={"name": "Testing", "wip_limit": None}))
+    order = [qa["id"], *[c["id"] for c in board["columns"]]]
+    columns = await ok(await async_client.put(f"{url}/order", json={"column_ids": order}))
+    assert [c["name"] for c in columns][:2] == ["Testing", "Backlog"]
+    assert (await async_client.put(f"{url}/order", json={"column_ids": order[1:]})).status_code == 422
+
     board = await project_board(async_client, project)
-    assert titles(board, "Ready") == ["Quick one"]
-    res = await async_client.post(f"{url}/{column(board, 'Done')['id']}/items", json={"title": "Already done"})
-    assert (res.status_code, res.json()["detail"]["code"]) == (422, "COLUMN_TAKES_NO_NEW_TASKS")
+    await add_module(async_client, board, "Backlog", "Old")
+    moved = await add_module(async_client, board, "Testing", "Being tested")
+    assert (await async_client.delete(f"{url}/{qa['id']}")).status_code == 204
+    board = await project_board(async_client, project)
+    assert titles(board, "Backlog") == ["Old", "Being tested"]
+    assert moved
+
+
+async def test_a_board_keeps_one_column(async_client):
+    project = await create_project(async_client)
+    board = await project_board(async_client, project)
+    url = f"{BASE}/boards/{board['id']}/columns"
+    for c in board["columns"][:-1]:
+        assert (await async_client.delete(f"{url}/{c['id']}")).status_code == 204
+    res = await async_client.delete(f"{url}/{board['columns'][-1]['id']}")
+    assert (res.status_code, res.json()["detail"]["code"]) == (409, "LAST_BOARD_COLUMN")
+
+
+# --- Linked tasks ---------------------------------------------------------------------------
+
+
+async def test_tasks_link_to_a_module_without_changing(async_client):
+    project = await create_project(async_client)
+    board = await project_board(async_client, project)
+    module = await add_module(async_client, board, "In progress", "Checkout")
+    subject = {"type": "work.work_unit", "id": project["id"]}
+    open_task = await create_task(async_client, title="Cart page", subject=subject)
+    done_task = await create_task(async_client, title="Price rules", subject=subject)
+    await ok(await async_client.post(f"{BASE}/tasks/{done_task['id']}/cancel", json={"reason": "Not needed"}, headers=if_match(done_task)))
+    url = f"{BASE}/boards/{board['id']}/modules/{module['id']}/tasks"
+
+    linked = await ok(await async_client.put(f"{url}/{open_task['id']}"))
+    linked = await ok(await async_client.put(f"{url}/{done_task['id']}"))
+    assert (linked["task_count"], linked["tasks_done"]) == (1, 0)  # cancelled work isn't counted
+    detail = await ok(await async_client.get(f"{BASE}/boards/{board['id']}/modules/{module['id']}"))
+    assert [t["title"] for t in detail["tasks"]] == ["Cart page", "Price rules"]
+    task = await ok(await async_client.get(f"{BASE}/tasks/{open_task['id']}"))
+    assert (task["status"], task["version"]) == (open_task["status"], open_task["version"])
+
+    # Moving the module doesn't move its tasks either.
+    await ok(await place(async_client, board, module, "Done"))
+    assert (await ok(await async_client.get(f"{BASE}/tasks/{open_task['id']}")))["status"] == "open"
+
+    # One module per task: linking it elsewhere takes it from the first.
+    other = await add_module(async_client, board, "Backlog", "Later")
+    await ok(await async_client.put(f"{BASE}/boards/{board['id']}/modules/{other['id']}/tasks/{open_task['id']}"))
+    detail = await ok(await async_client.get(f"{BASE}/boards/{board['id']}/modules/{module['id']}"))
+    assert [t["title"] for t in detail["tasks"]] == ["Price rules"]
+    assert (await async_client.delete(f"{BASE}/boards/{board['id']}/modules/{other['id']}/tasks/{open_task['id']}")).status_code == 204
+
+    elsewhere = await create_task(async_client, title="Another project's")
+    res = await async_client.put(f"{url}/{elsewhere['id']}")
+    assert (res.status_code, res.json()["detail"]["code"]) == (422, "TASK_NOT_IN_PROJECT")
+    assert (await async_client.delete(f"{BASE}/boards/{board['id']}/modules/{module['id']}")).status_code == 204
+    assert (await ok(await async_client.get(f"{BASE}/tasks/{open_task['id']}")))["status"] == "open"
 
 
 # --- A customer's board ------------------------------------------------------------------
 
 
-async def test_a_customer_board_shows_all_its_projects(async_client):
+async def test_a_customer_board_shows_all_its_projects_modules_by_column_name(async_client):
     client_id = str(uuid.uuid4())
-    first = await create_project(async_client, client_id=client_id, name="Website")
-    second = await create_project(async_client, client_id=client_id, name="App")
+    website = await create_project(async_client, client_id=client_id, name="Website")
+    app = await create_project(async_client, client_id=client_id, name="App")
     other = await create_project(async_client, name="Someone else's")
-    for project, title in ((first, "Homepage"), (second, "Login"), (other, "Not theirs")):
-        await project_task(async_client, project, title)
-    boards = await ok(await async_client.get(f"{BASE}/boards", params={"client_id": client_id}))
-    board = await ok(await async_client.get(f"{BASE}/boards/{boards['data'][0]['id']}"))
-    assert sorted(titles(board, "Backlog")) == ["Homepage", "Login"]
-    res = await async_client.post(f"{BASE}/boards/{board['id']}/columns/{column(board, 'Backlog')['id']}/items", json={"title": "x"})
-    assert res.status_code == 422
-    assert (await async_client.get(f"{BASE}/boards")).status_code == 422
+    website_board = await project_board(async_client, website)
+    app_board = await project_board(async_client, app)
+    await add_module(async_client, website_board, "Ready", "Homepage", estimate_minutes=60)
+    await add_module(async_client, app_board, "Ready", "Login", estimate_minutes=30)
+    await add_module(async_client, await project_board(async_client, other), "Ready", "Not theirs")
+    await ok(await async_client.post(f"{BASE}/boards/{app_board['id']}/columns", json={"name": "Store review"}), 201)
+
+    view = await ok(await async_client.get(f"{BASE}/customer-boards/{client_id}"))
+    ready = next(c for c in view["columns"] if c["name"] == "Ready")
+    assert ([m["title"] for m in ready["modules"]], ready["estimate_minutes_total"]) == (["Homepage", "Login"], 90)
+    assert [c["name"] for c in view["columns"]][-1] == "Store review"
+    assert {(p["work_unit_id"], p["name"]) for p in view["projects"]} == {(website["id"], "Website"), (app["id"], "App")}
 
 
 # --- Who may do what ---------------------------------------------------------------------
@@ -258,34 +232,27 @@ async def test_another_organizations_board_is_not_found(act_as):
     outsider = Actor(user_id=uuid.uuid4(), organization_id=uuid.uuid4(), user_type="client_admin", name="Out", is_superuser=True)
     res = await act_as(outsider).get(f"{BASE}/boards/{board['id']}")
     assert (res.status_code, res.json()["detail"]["code"]) == (404, "BOARD_NOT_FOUND")
-    res = await act_as(outsider).get(f"{BASE}/boards", params={"work_unit_id": project["id"]})
-    assert res.status_code == 404
+    assert (await act_as(outsider).get(f"{BASE}/boards", params={"work_unit_id": project["id"]})).status_code == 404
+    view = await ok(await act_as(outsider).get(f"{BASE}/customer-boards/{uuid.uuid4()}"))
+    assert view["columns"] == []
 
 
-async def test_only_task_managers_or_the_projects_manager_set_a_board_up(act_as):
+async def test_only_project_managers_or_the_projects_manager_change_a_board(act_as):
     theirs = await create_project(act_as(ADMIN))
     mine = await create_project(act_as(ADMIN), manager_user_id=str(ME))
-    body = {"name": "QA", "statuses": ["in_review"]}
 
     board = await project_board(act_as(member()), theirs)
-    assert board["can_configure"] is False
-    res = await act_as(member()).post(f"{BASE}/boards/{board['id']}/columns", json=body)
-    assert (res.status_code, res.json()["detail"]["meta"]["required_permission"]) == (403, permissions.TASK_WRITE)
-
-    board = await project_board(act_as(member()), mine)
-    assert board["can_configure"] is True
-    await ok(await act_as(member()).post(f"{BASE}/boards/{board['id']}/columns", json=body), 201)
-    # Adding tasks is still for task managers.
-    res = await act_as(member()).post(f"{BASE}/boards/{board['id']}/columns/{board['columns'][0]['id']}/items", json={"title": "x"})
+    assert board["can_edit"] is False
+    body = {"column_id": board["columns"][0]["id"], "title": "Nope"}
+    res = await act_as(member()).post(f"{BASE}/boards/{board['id']}/modules", json=body)
+    assert (res.status_code, res.json()["detail"]["meta"]["required_permission"]) == (403, permissions.WORK_UNIT_WRITE)
+    res = await act_as(member()).post(f"{BASE}/boards/{board['id']}/columns", json={"name": "QA"})
     assert res.status_code == 403
 
-
-async def test_moving_someone_elses_card_follows_the_task_rules(act_as):
-    project = await create_project(act_as(ADMIN))
-    task = await project_task(act_as(ADMIN), project, "Theirs", assignee_user_id=str(uuid.uuid4()))
-    board = await project_board(act_as(member()), project)
-    res = await place(act_as(member()), board, task, "In progress")
-    assert (res.status_code, res.json()["detail"]["code"]) == (403, "NOT_ASSIGNEE")
+    board = await project_board(act_as(member()), mine)
+    assert board["can_edit"] is True
+    await ok(await act_as(member()).post(f"{BASE}/boards/{board['id']}/modules", json={"column_id": board["columns"][0]["id"], "title": "Mine"}), 201)
+    assert (await project_board(act_as(member(permissions.WORK_UNIT_WRITE)), theirs))["can_edit"] is True
 
 
 # --- Ranks --------------------------------------------------------------------------------
