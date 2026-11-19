@@ -2,14 +2,16 @@ from datetime import date
 from typing import Literal
 import uuid
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, Query, status
 from sqlalchemy import func, select
 
-from dependencies import CurrentActor, DatabaseSession, verify_internal_caller
+from dependencies import CurrentActor, DatabaseSession, People, verify_internal_caller
 from exceptions import ValidationFailedError
 from models.task_tracking import TimeEntry
+from schemas.activity_tasks import ActivityTaskComplete, ActivityTaskCreate, ActivityTaskResult
 from schemas.effort_feed import EffortListResponse, EffortRow
 from schemas.subject_access import SubjectAccessResponse
+from services import activity_tasks
 from services.subject_access_service import check_subject_access
 
 router = APIRouter(prefix="/internal", tags=["internal"], dependencies=[Depends(verify_internal_caller)])
@@ -70,3 +72,41 @@ async def list_effort(
             for user_id, day, billable, minutes in rows
         ]
     )
+
+
+@router.post(
+    "/tasks",
+    response_model=ActivityTaskResult,
+    status_code=status.HTTP_201_CREATED,
+    summary="A personal task for an activity on a revenue record (internal)",
+    description=(
+        "Asked by revenue with the user's forwarded credentials when they log a call: a task about the "
+        "record for the caller, with no team; done at once with `completion` (and its follow-up "
+        "scheduled when asked). Needs delivery.task.write or delivery.task.personal."
+    ),
+)
+async def create_activity_task(
+    payload: ActivityTaskCreate, session: DatabaseSession, actor: CurrentActor, people: People
+) -> ActivityTaskResult:
+    result = await activity_tasks.record_task(session, actor, payload, people)
+    await session.commit()
+    return result
+
+
+@router.post(
+    "/tasks/{task_id}/completion",
+    response_model=ActivityTaskResult,
+    summary="Finish the caller's own task with an activity (internal)",
+    description=(
+        "Asked by revenue with the user's forwarded credentials: one of the caller's open tasks about "
+        "the record is finished with the call. 403 NOT_ASSIGNEE for someone else's task, 422 "
+        "TASK_NOT_ABOUT_RECORD for a task about another record, 409 TASK_NEEDS_REVIEW for one that "
+        "goes for review."
+    ),
+)
+async def complete_activity_task(
+    task_id: uuid.UUID, payload: ActivityTaskComplete, session: DatabaseSession, actor: CurrentActor, people: People
+) -> ActivityTaskResult:
+    result = await activity_tasks.complete_task(session, actor, task_id, payload, people)
+    await session.commit()
+    return result

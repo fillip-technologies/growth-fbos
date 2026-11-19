@@ -8,7 +8,7 @@ import permissions
 import services.stats as stats
 import services.tasks as service
 from services.views import task_view
-from dependencies import CurrentActor, DatabaseSession, OrgId, People, UserId, require_permission
+from dependencies import CurrentActor, DatabaseSession, OrgId, People, UserId, require_any_permission, require_permission
 from exceptions import ValidationFailedError
 from schemas.common import PageMeta, PageResponse
 from schemas.stats import TaskStats, TimeSummary
@@ -54,6 +54,8 @@ router = APIRouter(tags=["tasks"])
 
 CAN_READ = Depends(require_permission(permissions.TASK_READ))
 CAN_WRITE = Depends(require_permission(permissions.TASK_WRITE))
+# Task managers, and anyone keeping personal tasks (services.tasks checks which tasks).
+CAN_WRITE_OR_PERSONAL = Depends(require_any_permission(permissions.TASK_WRITE, permissions.TASK_PERSONAL))
 CAN_READ_HANDOVERS = Depends(require_permission(permissions.HANDOVER_READ))
 CAN_WRITE_HANDOVERS = Depends(require_permission(permissions.HANDOVER_WRITE))
 CAN_MANAGE_TEMPLATES = Depends(require_permission(permissions.TEMPLATE_MANAGE))
@@ -80,6 +82,7 @@ async def task_filters(
     unassigned: bool = Query(False, description="Only tasks nobody has taken yet (a team's queue)"),
     my_teams: bool = Query(False, description="Only tasks of the teams the caller belongs to (with unassigned: their teams' queue)"),
     owning_unit_id: Optional[uuid.UUID] = Query(None),
+    personal: bool = Query(False, description="Only personal tasks: no team, kept by the person who created them"),
     status_: Optional[list[str]] = Query(None, alias="status"),
     priority: Optional[str] = Query(None),
     subject_type: Optional[str] = Query(None),
@@ -97,6 +100,7 @@ async def task_filters(
         unassigned=unassigned,
         owning_unit_ids=actor.member_unit_ids if my_teams else None,
         owning_unit_id=owning_unit_id,
+        personal=personal,
         statuses=status_,
         priority=priority,
         subject_type=subject_type,
@@ -154,18 +158,19 @@ async def get_task_queue(
     return await service.get_queue(session, org_id, caller_user_id, filters, limit)
 
 
-@router.post("/tasks", response_model=TaskResponse, status_code=status.HTTP_201_CREATED, dependencies=[CAN_WRITE])
+@router.post("/tasks", response_model=TaskResponse, status_code=status.HTTP_201_CREATED, dependencies=[CAN_WRITE_OR_PERSONAL])
 async def create_task(
     payload: TaskCreate,
     session: DatabaseSession,
     org_id: OrgId,
-    user_id: UserId,
+    actor: CurrentActor,
     people: People,
     response: Response,
     idempotency_key: Optional[str] = Header(None, alias="Idempotency-Key"),
 ) -> TaskResponse:
-    """Create a task."""
-    task = await service.create_task(session, org_id, user_id, payload, people)
+    """Create a task. With no `owning_unit_id` it is a personal task: the creator's own, assigned to them."""
+    payload = service.personal_task_rules(actor, payload)
+    task = await service.create_task(session, org_id, actor.user_id, payload, people)
     await session.commit()
     response.headers["ETag"] = f'"{task.version}"'
     return task
@@ -398,18 +403,18 @@ async def list_assignments(
     return await service.list_assignments(session, org_id, task_id, limit, cursor)
 
 
-@router.post("/tasks/{task_id}/cancel", response_model=TaskResponse, dependencies=[CAN_WRITE, IN_VIEW])
+@router.post("/tasks/{task_id}/cancel", response_model=TaskResponse, dependencies=[CAN_WRITE_OR_PERSONAL, IN_VIEW])
 async def cancel_task(
     task_id: uuid.UUID,
     payload: TaskCancel,
     session: DatabaseSession,
     org_id: OrgId,
-    user_id: UserId,
+    actor: CurrentActor,
     response: Response,
     if_match: Optional[str] = Header(None, alias="If-Match"),
 ) -> TaskResponse:
-    """Cancel a task."""
-    task = await service.cancel_task(session, org_id, user_id, task_id, payload, if_match)
+    """Cancel a task (a task manager; anyone, their own personal task)."""
+    task = await service.cancel_task(session, org_id, actor, task_id, payload, if_match)
     await session.commit()
     response.headers["ETag"] = f'"{task.version}"'
     return task

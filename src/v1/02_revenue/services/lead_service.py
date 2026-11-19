@@ -29,6 +29,7 @@ from schemas.activity import ActivityResponse
 from schemas.common import PageMeta, PageResponse, decode_cursor, encode_cursor
 from schemas.lead import (
     LeadCallCreate,
+    LeadCallTaskRef,
     LeadCreate,
     LeadDisqualify,
     LeadEventResponse,
@@ -40,6 +41,7 @@ from schemas.lead import (
 )
 from schemas.opportunity import UserRef, VerticalRef
 from services.activity_service import format_activity_response
+from services.call_tasks import TASK_SOURCE, DeliveryCaller, logged_from_task, tasks_for_call
 from services.client_service import ClientService
 from services.identity_client import Actor, IdentityClient
 from services.opportunity_service import format_opportunity_detail
@@ -63,6 +65,8 @@ def _naive_utc(moment: datetime) -> datetime:
 class LeadCallResult:
     lead: LeadResponse
     activity: ActivityResponse
+    task: Optional[LeadCallTaskRef] = None
+    follow_up_task: Optional[LeadCallTaskRef] = None
 
 
 def merge_attributes(stored: Optional[dict], changes: dict) -> dict:
@@ -426,39 +430,48 @@ class LeadService:
         lead_id: uuid.UUID,
         payload: LeadCallCreate,
         actor: Actor,
+        delivery: DeliveryCaller,
     ) -> LeadCallResult:
         """
         A call with the lead, on its timeline as a new entry (nothing is overwritten). Its
         follow-up date becomes the lead's next follow-up; the first call moves a new lead to
-        contacted, in the same transaction.
+        contacted, in the same transaction. Delivery keeps its task first (services/call_tasks.py):
+        a task of the caller's it finishes, or a new one already done, and the follow-up task;
+        the call names that task as its source.
         """
         lead = await _lead_in_org(session, org_id, lead_id)
         if lead.status not in OPEN_STATUSES:
             raise InvalidStateTransitionError(lead.status, "log a call")
         _ensure_claimed_and_workable(actor, lead)
 
+        tasks = await tasks_for_call(delivery, org_id, lead, payload)
         occurred_at = _naive_utc(payload.occurred_at) if payload.occurred_at else now_utc()
-        activity = Activity(
-            organization_id=org_id,
-            subject_type=LEAD_SUBJECT,
-            subject_id=lead.id,
-            activity_type="call",
-            owner_user_id=actor.user_id,
-            occurred_at=occurred_at,
-            summary=payload.summary.strip(),
-            requirements=_clean(payload.requirements),
-            expectations=_clean(payload.expectations),
-            next_action=_clean(payload.next_action),
-            follow_up_on=payload.follow_up_on,
-        )
-        session.add(activity)
+        activity = await logged_from_task(session, org_id, tasks.task.id) if tasks.task else None
+        if activity is None:
+            activity = Activity(organization_id=org_id, subject_type=LEAD_SUBJECT, subject_id=lead.id)
+            session.add(activity)
+        activity.activity_type = "call"
+        activity.owner_user_id = actor.user_id
+        activity.occurred_at = occurred_at
+        activity.summary = payload.summary.strip()
+        activity.requirements = _clean(payload.requirements)
+        activity.expectations = _clean(payload.expectations)
+        activity.next_action = _clean(payload.next_action)
+        activity.follow_up_on = payload.follow_up_on
+        if tasks.task:
+            activity.source_type, activity.source_id = TASK_SOURCE, tasks.task.id
         lead.next_follow_up_on = payload.follow_up_on
         if lead.status == "new":
             lead.status = "contacted"
             record_event(session, lead, "contacted", actor.user_id, from_status="new", to_status="contacted")
         lead.version += 1
         await session.flush()
-        return LeadCallResult(lead=format_lead_response(lead), activity=format_activity_response(activity))
+        return LeadCallResult(
+            lead=format_lead_response(lead),
+            activity=format_activity_response(activity),
+            task=tasks.task,
+            follow_up_task=tasks.follow_up_task,
+        )
 
     @staticmethod
     async def qualify_lead(

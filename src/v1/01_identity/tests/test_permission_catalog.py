@@ -122,9 +122,11 @@ def test_member_preset_leaves_out_sensitive_reads():
     assert permission_catalog.member_permission_codes(codes) == ["control.sla.read"]
 
 
-def test_members_may_send_requests_but_not_manage_tasks():
-    codes = ["delivery.task.read", "delivery.task.request", "delivery.task.write", "delivery.task.review"]
-    assert permission_catalog.member_permission_codes(codes) == ["delivery.task.read", "delivery.task.request"]
+def test_members_may_send_requests_and_keep_personal_tasks_but_not_manage_tasks():
+    codes = ["delivery.task.read", "delivery.task.request", "delivery.task.personal", "delivery.task.write", "delivery.task.review"]
+    assert permission_catalog.member_permission_codes(codes) == [
+        "delivery.task.read", "delivery.task.request", "delivery.task.personal",
+    ]
 
 
 def test_inventory_reads_that_show_costs_or_every_customer_stay_out_of_the_member_preset():

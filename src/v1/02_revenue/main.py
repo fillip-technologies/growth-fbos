@@ -10,6 +10,7 @@ from config import settings
 from database.session import warm_pool
 from finance.errors import FinanceError
 from router import router
+from services.delivery_client import DeliveryClient
 from services.documents_client import DocumentsClient
 from services.identity_client import IdentityClient
 from services.mail_client import mail_client
@@ -26,6 +27,8 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     ) as http, httpx.AsyncClient(
         base_url=settings.documents_service_url, timeout=settings.documents_timeout_seconds
     ) as documents_http, httpx.AsyncClient(
+        base_url=settings.delivery_service_url, timeout=settings.delivery_timeout_seconds
+    ) as delivery_http, httpx.AsyncClient(
         base_url=settings.communication_service_url, timeout=settings.notification_timeout_seconds
     ) as communication_http, httpx.AsyncClient(
         headers={"Authorization": f"Bearer {settings.website_leads_api_key}"},
@@ -33,6 +36,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     ) as website_http:
         app.state.identity_client = IdentityClient(http, settings.internal_service_token)
         app.state.documents_client = DocumentsClient(documents_http, settings.internal_service_token)
+        app.state.delivery_client = DeliveryClient(delivery_http, settings.internal_service_token)
         if settings.communication_service_url:
             notification_client.start(communication_http, settings.internal_service_token)
             mail_client.start(communication_http, settings.internal_service_token)

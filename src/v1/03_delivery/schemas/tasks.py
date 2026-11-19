@@ -12,7 +12,7 @@ TaskStatus = Literal[
 TaskPriority = Literal["p1", "p2", "p3", "p4"]
 DependencyType = Literal["finish_to_start", "start_to_start", "finish_to_finish"]
 TaskSource = Literal[
-    "manual", "workflow", "sla_escalation", "corrective_action", "asset_renewal", "recurring", "followup", "handover", "request"
+    "manual", "workflow", "sla_escalation", "corrective_action", "asset_renewal", "recurring", "followup", "handover", "request", "activity"
 ]
 
 
@@ -72,7 +72,9 @@ class TaskCreate(BaseModel):
     subject: Optional[SubjectRefInput] = Field(
         None, description="What the task is about: a project (work.work_unit), a lead (revenue.lead), ... None for a stand-alone to-do."
     )
-    owning_unit_id: uuid.UUID = Field(..., description="Team that owns the task. Required.")
+    owning_unit_id: Optional[uuid.UUID] = Field(
+        None, description="Team that owns the task. None for a personal task: it is the creator's own, assigned to them."
+    )
     assignee_user_id: Optional[uuid.UUID] = Field(None, description="Must be an active member of the owning unit.")
     reviewer_user_id: Optional[uuid.UUID] = None
     priority: Optional[TaskPriority] = "p3"

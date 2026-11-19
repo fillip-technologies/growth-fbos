@@ -5,13 +5,14 @@ from typing import Optional
 from fastapi import APIRouter, Depends, Header, Query, Response, status
 from pydantic import BaseModel
 
-from dependencies import CurrentActor, DatabaseSession, Identity, OrgId, require_permission
+from dependencies import Authorization, CurrentActor, DatabaseSession, Delivery, Identity, OrgId, require_permission
 from exceptions import PermissionDeniedError
 from permissions import CLIENT_WRITE, LEAD_READ, LEAD_WRITE
 from schemas.activity import ActivityResponse
 from schemas.common import PageResponse
 from schemas.lead import (
     LeadCallCreate,
+    LeadCallTaskRef,
     LeadCreate,
     LeadDisqualify,
     LeadEventResponse,
@@ -23,6 +24,7 @@ from schemas.lead import (
     LeadUpdate,
 )
 from services import notifications
+from services.call_tasks import DeliveryCaller
 from services.lead_service import LeadService
 from services.website_leads_client import website_leads_client
 
@@ -37,6 +39,9 @@ class LeadCallResponse(BaseModel):
 
     lead: LeadResponse
     activity: ActivityResponse
+    # The delivery task the call finished or was recorded as, and the follow-up task it added.
+    task: Optional[LeadCallTaskRef] = None
+    follow_up_task: Optional[LeadCallTaskRef] = None
 
 
 def _etag(response: Response, lead: LeadResponse) -> None:
@@ -216,18 +221,26 @@ async def log_lead_call(
     session: DatabaseSession,
     org_id: OrgId,
     actor: CurrentActor,
+    authorization: Authorization,
+    delivery: Delivery,
     response: Response,
 ) -> LeadCallResponse:
     """
     Log a call with the lead: what was discussed (required), requirements, expectations, next
-    action and follow-up date. The first call moves a new lead to contacted.
+    action and follow-up date. The first call moves a new lead to contacted. `task` says what
+    happens in tasks: the call is recorded as a done task of yours (the default), completes one
+    of your open tasks about the lead, or keeps none; a follow-up date adds a follow-up task.
     """
-    result = await LeadService.log_call(session, org_id, lead_id, payload, actor)
+    result = await LeadService.log_call(
+        session, org_id, lead_id, payload, actor, DeliveryCaller(delivery, authorization)
+    )
     await session.commit()
     if result.lead.status == "contacted":
         website_leads_client.push_status(org_id, result.lead)
     _etag(response, result.lead)
-    return LeadCallResponse(lead=result.lead, activity=result.activity)
+    return LeadCallResponse(
+        lead=result.lead, activity=result.activity, task=result.task, follow_up_task=result.follow_up_task
+    )
 
 
 @router.post(

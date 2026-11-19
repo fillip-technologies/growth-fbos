@@ -86,6 +86,7 @@ PERMISSION_CATALOG: list[tuple[str, str, str]] = [
     ("delivery.task.write", "delivery", "Create, edit, assign, block and cancel tasks and set up recurring tasks"),
     ("delivery.task.review", "delivery", "Review submitted tasks even when you aren't the named reviewer"),
     ("delivery.task.request", "delivery", "Ask other teams for work they take requests for, and follow your own requests"),
+    ("delivery.task.personal", "delivery", "Add, edit and cancel your own tasks that belong to no team (a personal to-do list)"),
     ("delivery.time_entry.read", "delivery", "View the time everyone has logged"),
     ("delivery.handover.read", "delivery", "View handovers of work between teams"),
     ("delivery.handover.write", "delivery", "Request, accept and reject handovers of work between teams"),
@@ -260,8 +261,9 @@ SENSITIVE_READ_CODES = {
 }
 
 
-# Beyond reading, what every member may do: ask another team for work (delivery routes it).
-MEMBER_ACTION_CODES = {"delivery.task.request"}
+# Beyond reading, what every member may do: ask another team for work (delivery routes it), and
+# keep their own tasks that belong to no team.
+MEMBER_ACTION_CODES = {"delivery.task.request", "delivery.task.personal"}
 
 
 def member_permission_codes(catalog_codes: list[str]) -> list[str]:

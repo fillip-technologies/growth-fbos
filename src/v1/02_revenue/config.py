@@ -46,6 +46,10 @@ class Settings(BaseSettings):
     documents_service_url: str = "http://localhost:8005"
     documents_timeout_seconds: float = 10.0
 
+    # Delivery keeps the tasks behind logged calls (/internal/tasks).
+    delivery_service_url: str = "http://localhost:8003"
+    delivery_timeout_seconds: float = 10.0
+
     # In-app notifications (lead assigned, quotation approved...) go to the communication
     # service's /internal/notifications. Empty turns them off.
     communication_service_url: str = ""

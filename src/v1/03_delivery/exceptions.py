@@ -697,6 +697,39 @@ class NotAssigneeError(DeliveryServiceError):
         )
 
 
+class TaskNotAboutRecordError(DeliveryServiceError):
+    """422: The task chosen to finish with an activity is about another record."""
+
+    def __init__(self) -> None:
+        super().__init__(
+            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            "TASK_NOT_ABOUT_RECORD",
+            "That task is about another record. Pick one of your tasks about this one.",
+        )
+
+
+class TaskNeedsReviewError(DeliveryServiceError):
+    """409: A task that goes for review can't be finished from an activity; it is handed in from the task."""
+
+    def __init__(self) -> None:
+        super().__init__(
+            status.HTTP_409_CONFLICT,
+            "TASK_NEEDS_REVIEW",
+            "This task goes for review: hand it in from the task itself.",
+        )
+
+
+class PersonalTaskOwnOnlyError(DeliveryServiceError):
+    """422: A task with no team was given to someone else, or a reviewer."""
+
+    def __init__(self) -> None:
+        super().__init__(
+            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            "PERSONAL_TASK_OWN_ONLY",
+            "A task with no team is your own: it can't be assigned to someone else or have a reviewer.",
+        )
+
+
 class NotReviewerError(DeliveryServiceError):
     """403: Caller is not the reviewer and lacks review permission in scope."""
 
