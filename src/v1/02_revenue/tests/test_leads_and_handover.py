@@ -1,4 +1,4 @@
-"""Lead conversion copies the contact, duplicate suggestions, repeat business, offering fulfilment."""
+"""Qualifying a lead copies the contact, duplicate suggestions, repeat business, offering fulfilment."""
 
 import uuid
 
@@ -7,7 +7,7 @@ import pytest
 
 from models.client import ClientContact
 from tests.conftest import TEST_USER_ID, valid_gstin
-from tests.test_sales_flow import ADDRESS, BASE, CONSENT, _act, _offering, _quotation
+from tests.test_sales_flow import ADDRESS, BASE, CONSENT, _act, _first_call, _offering, _quotation
 
 pytestmark = pytest.mark.asyncio
 
@@ -15,14 +15,19 @@ OPPORTUNITY = {"name": "Website", "expected_value": {"amount": 1000, "currency":
 
 
 async def _lead(client: httpx.AsyncClient, **contact) -> dict:
-    res = await client.post(f"{BASE}/leads", json={"vertical_id": str(uuid.uuid4()), "consent": CONSENT} | contact)
+    res = await client.post(
+        f"{BASE}/leads",
+        json={"vertical_id": str(uuid.uuid4()), "consent": CONSENT, "owner_user_id": str(TEST_USER_ID)} | contact,
+    )
     assert res.status_code == 201, res.json()
     return res.json() | {"etag": res.headers["ETag"]}
 
 
 async def _convert(client: httpx.AsyncClient, lead: dict, **target) -> dict:
+    """Calls the lead, then qualifies it for the customer given."""
+    etag = await _first_call(client, lead["id"])
     res = await client.post(
-        f"{BASE}/leads/{lead['id']}/convert", json={"opportunity": OPPORTUNITY} | target, headers={"If-Match": lead["etag"]}
+        f"{BASE}/leads/{lead['id']}/qualify", json={"opportunity": OPPORTUNITY} | target, headers={"If-Match": etag}
     )
     assert res.status_code == 200, res.json()
     return res.json()

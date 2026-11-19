@@ -14,9 +14,18 @@ import uuid
 
 import httpx
 
-from exceptions import AuthServiceUnavailableError, RevenueServiceError
+from exceptions import AuthServiceUnavailableError, PeopleUnavailableError, RevenueServiceError
 
 ACTOR_PATH = "/api/identity/v1/internal/authz/actor"
+PEOPLE_PATH = "/api/identity/v1/internal/people"
+
+
+@dataclass(frozen=True)
+class Person:
+    """Someone of the organization, as identity names them."""
+
+    id: uuid.UUID
+    name: str
 
 
 @dataclass(frozen=True)
@@ -66,6 +75,28 @@ class IdentityClient:
             is_superuser=body["is_superuser"],
             permissions=frozenset(body["permissions"]),
         )
+
+    async def people(
+        self, organization_id: uuid.UUID, permission: Optional[str], user_id: Optional[uuid.UUID] = None
+    ) -> list[Person]:
+        """
+        The organization's active people, those holding `permission` (in any scope) when given;
+        with `user_id`, only that person when they qualify. Raises PeopleUnavailableError when
+        identity can't answer: never read as "nobody".
+        """
+        params = {"organization_id": str(organization_id)}
+        if permission:
+            params["permission"] = permission
+        if user_id:
+            params["user_id"] = str(user_id)
+        headers = {"X-FBOS-Internal-Token": self._internal_token} if self._internal_token else {}
+        try:
+            response = await self._http.get(PEOPLE_PATH, params=params, headers=headers)
+        except httpx.HTTPError as exc:
+            raise PeopleUnavailableError() from exc
+        if response.status_code >= 400:
+            raise PeopleUnavailableError()
+        return [Person(id=uuid.UUID(p["id"]), name=p["name"]) for p in response.json()["data"]]
 
 
 def relayed_error(response: httpx.Response) -> Optional[RevenueServiceError]:

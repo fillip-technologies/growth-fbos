@@ -79,5 +79,24 @@ class LinkCopyCreate(BaseModel):
     target_label: Optional[str] = Field(None, max_length=500)
 
 
+class StoredFileCreate(BaseModel):
+    """
+    Internal: a file another service generated (a proposal or quotation PDF), stored and linked
+    to its record. With `document_id`, a new version of that document instead of a new one.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    file_name: str = Field(..., min_length=1, max_length=255)
+    mime_type: str = Field(..., min_length=1, max_length=100)
+    content_base64: str = Field(..., min_length=1)
+    category_code: str = Field(..., min_length=1, max_length=100)
+    title: Optional[str] = Field(None, max_length=500)
+    subject: SubjectRefInput
+    link_role: str = Field("attachment", max_length=50)
+    document_id: Optional[uuid.UUID] = None
+    change_note: Optional[str] = Field(None, max_length=500)
+
+
 class LinkCopyResult(BaseModel):
     copied: int

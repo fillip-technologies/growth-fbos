@@ -63,8 +63,8 @@ class Settings(BaseSettings):
     # the database), so only the live server sets it, and it runs a single uvicorn worker.
     website_leads_url: str = "https://filliptechnologies.com/api/integrations/leads"
     website_leads_api_key: str = ""
+    # Imported leads arrive unclaimed (WEBSITE_LEADS_OWNER_USER_ID is no longer read).
     website_leads_organization_id: Optional[uuid.UUID] = None
-    website_leads_owner_user_id: Optional[uuid.UUID] = None
     website_leads_import_interval_seconds: int = 0
     website_leads_timeout_seconds: float = 15.0
 
@@ -76,7 +76,7 @@ class Settings(BaseSettings):
     def default_tax_pack_codes(self) -> list[str]:
         return [code.strip() for code in self.default_tax_packs.split(",") if code.strip()]
 
-    @field_validator("website_leads_organization_id", "website_leads_owner_user_id", mode="before")
+    @field_validator("website_leads_organization_id", mode="before")
     @classmethod
     def _blank_id_is_unset(cls, value: object) -> object:
         return None if value == "" else value
@@ -86,7 +86,6 @@ class Settings(BaseSettings):
         return bool(
             self.website_leads_api_key
             and self.website_leads_organization_id
-            and self.website_leads_owner_user_id
             and self.website_leads_import_interval_seconds > 0
         )
 

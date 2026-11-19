@@ -12,6 +12,10 @@ from exceptions import (
     OfferingNotFoundError,
     OpportunityNotFoundError,
     PreconditionRequiredError,
+    ProposalAlreadyQuotedError,
+    ProposalHasNoServicesError,
+    ProposalRequiredError,
+    QuotationApprovalRequiredError,
     QuotationFrozenError,
     QuotationNotFoundError,
     ValidityInPastError,
@@ -25,6 +29,7 @@ from models.client import Client
 from models.document_tax import DocumentTaxLine
 from models.offering import Offering
 from models.opportunity import Opportunity
+from models.proposal import Proposal, ProposalItem
 from models.quotation import NegotiationNote, Quotation, QuotationItem
 from schemas.common import Money, PageMeta, PageResponse, decode_cursor, encode_cursor
 from schemas.opportunity import ClientRef
@@ -44,7 +49,9 @@ from schemas.quotation import (
     OpportunityRef,
 )
 from schemas.tax import LineTax, TaxAmount, WithholdingPreview
-from services import quotation_events
+from services import opportunity_stage, proposal_service, quotation_events
+from services.opportunity_stage import OPEN_STAGES
+from services.lead_service import convert_on_acceptance
 from services.quotation_events import label, now_utc
 from services.tax_service import (
     DocumentLineSpec,
@@ -78,10 +85,32 @@ WITHDRAWAL_REASONS = {
     "customer_request": "customer's request",
     "other": "other",
 }
-# The open stages, in the order a deal moves through them.
-OPEN_STAGES = ("open", "qualification", "proposal", "negotiation")
 # A copy made once the copied quotation's date has passed is valid this long.
 COPY_VALID_DAYS = 30
+# Over this discount (of the subtotal), a quotation is approved before it goes to the customer.
+APPROVAL_DISCOUNT_PCT = 20.0
+
+
+def needs_discount_approval(quote: Quotation) -> bool:
+    subtotal = float(quote.subtotal or 0)
+    return subtotal > 0 and float(quote.discount_total or 0) / subtotal * 100.0 > APPROVAL_DISCOUNT_PCT
+
+
+async def _ensure_proposal_first(session: AsyncSession, opp: Opportunity) -> None:
+    """
+    A sale that started from a lead is quoted from its accepted proposal. Opportunities quoted
+    before proposals existed (they already have quotations) carry on as they were.
+    """
+    if not opp.lead_id:
+        return
+    accepted = (
+        await session.execute(select(Proposal.id).where(Proposal.opportunity_id == opp.id, Proposal.status == "accepted"))
+    ).scalars().first()
+    if accepted:
+        return
+    quoted = (await session.execute(select(Quotation.id).where(Quotation.opportunity_id == opp.id))).scalars().first()
+    if not quoted:
+        raise ProposalRequiredError()
 
 
 @dataclass(frozen=True)
@@ -265,7 +294,9 @@ def format_quotation_response(
             round_off=_money(quote.round_off, currency),
         ),
         approval_request_id=quote.approved_request_id,
-        pdf_document_id=None,
+        pdf_document_id=quote.pdf_document_id,
+        pdf_version_no=quote.pdf_version_no,
+        proposal_id=quote.proposal_id,
         terms=quote.summary,
         sent_at=quote.sent_at,
         last_sent_at=last_sent_at or quote.sent_at,
@@ -322,14 +353,7 @@ def _check_version(if_match: Optional[str], version: int) -> None:
 
 
 async def _advance_stage(session: AsyncSession, quote: Quotation, stage: str) -> None:
-    """Moves the opportunity forward to `stage`, never back, and never once it is won or lost."""
-    if not quote.opportunity_id:
-        return
-    opp = await session.get(Opportunity, quote.opportunity_id)
-    if not opp or opp.status not in OPEN_STAGES or OPEN_STAGES.index(opp.status) >= OPEN_STAGES.index(stage):
-        return
-    opp.status = stage
-    opp.version += 1
+    await opportunity_stage.advance(session, quote.opportunity_id, stage)
 
 
 async def _quotes_on(session: AsyncSession, opportunity_id: uuid.UUID) -> list[Quotation]:
@@ -391,6 +415,7 @@ class QuotationService:
         opportunity_id: uuid.UUID,
         payload: QuotationCreate,
         actor_user_id: Optional[uuid.UUID] = None,
+        proposal_id: Optional[uuid.UUID] = None,
     ) -> QuotationResponse:
         opp_res = await session.execute(
             select(Opportunity).where(Opportunity.id == opportunity_id, Opportunity.organization_id == org_id)
@@ -400,6 +425,9 @@ class QuotationService:
             raise OpportunityNotFoundError(str(opportunity_id))
         if opp.status not in OPEN_STAGES:
             raise InvalidStateTransitionError(opp.status, "add_quotation")
+        # A copy is of a quotation on this opportunity, which therefore is already being quoted.
+        if not payload.copy_from:
+            await _ensure_proposal_first(session, opp)
 
         source = None
         items, valid_until, terms = payload.items, payload.valid_until, payload.terms
@@ -431,6 +459,7 @@ class QuotationService:
             status="draft",
             valid_until=valid_until,
             name=_clean_name(payload.name),
+            proposal_id=proposal_id,
             # The first open option is the main one; another is made main by hand.
             is_main=not any(q.is_main and q.status in OPEN_QUOTATION for q in siblings),
             version=1,
@@ -445,8 +474,58 @@ class QuotationService:
         if quote.is_main:
             await _make_main(session, quote)
         copied = {"copied_from": str(source.id), "quote_no": source.quote_no, "revision_no": source.revision_no} if source else None
+        if proposal_id:
+            copied = {"proposal_id": str(proposal_id)}
         await quotation_events.record(session, org_id, quote, "created", actor_user_id, data=copied)
         return format_quotation_response(quote, client, items, await load_tax_lines(session, QUOTATION_DOCUMENT, [quote.id]))
+
+    @staticmethod
+    async def create_from_proposal(
+        session: AsyncSession,
+        org_id: uuid.UUID,
+        proposal_id: uuid.UUID,
+        actor_user_id: uuid.UUID,
+    ) -> QuotationResponse:
+        """
+        The quotation for an accepted proposal, as a draft: its services (taxed as of today),
+        its terms, valid for 30 days. The quotation then goes its own way (discounts, revisions).
+        """
+        proposal = await proposal_service.get_in_org(session, org_id, proposal_id)
+        if proposal.status != "accepted":
+            raise InvalidStateTransitionError(proposal.status, "quote")
+        made = (await session.execute(select(Quotation.id).where(Quotation.proposal_id == proposal.id))).scalars().first()
+        if made:
+            raise ProposalAlreadyQuotedError(made)
+        lines = (
+            await session.execute(
+                select(ProposalItem).where(ProposalItem.proposal_id == proposal.id).order_by(ProposalItem.line_no)
+            )
+        ).scalars().all()
+        if not lines:
+            raise ProposalHasNoServicesError()
+        payload = QuotationCreate(
+            name=proposal.title[:120],
+            valid_until=date.today() + timedelta(days=COPY_VALID_DAYS),
+            terms=proposal.terms,
+            items=[
+                QuotationItemInput(
+                    offering_id=line.offering_id,
+                    description=line.description,
+                    quantity=float(line.quantity),
+                    unit_price=_money(line.unit_price, proposal.currency),
+                )
+                for line in lines
+            ],
+        )
+        quotation = await QuotationService.create_quotation(
+            session, org_id, proposal.opportunity_id, payload, actor_user_id, proposal_id=proposal.id
+        )
+        await proposal_service.record(
+            session, org_id, proposal, "quoted", actor_user_id,
+            data={"quotation_id": str(quotation.id), "quote_no": quotation.quote_no},
+            timeline=f"Made quotation {quotation.quote_no} from proposal {proposal_service.label(proposal)}.",
+        )
+        return quotation
 
     @staticmethod
     async def get_quotation(
@@ -504,9 +583,8 @@ class QuotationService:
         if quote.status != "draft":
             raise InvalidStateTransitionError(quote.status, "submit")
 
-        # Approval policy: if discount percentage > 20%, set pending_approval; otherwise approved immediately
-        disc_pct = (float(quote.discount_total) / float(quote.subtotal) * 100.0) if quote.subtotal > 0 else 0.0
-        if disc_pct > 20.0:
+        # Approval policy: a discount over the limit waits for approval; otherwise approved immediately.
+        if needs_discount_approval(quote):
             quote.status = "pending_approval"
             quote.approved_request_id = uuid.uuid4()
         else:
@@ -534,6 +612,19 @@ class QuotationService:
 
         if quote.status not in ("approved", "draft"):
             raise InvalidStateTransitionError(quote.status, "send")
+
+        # A discount over the limit is approved first: Send sends it for approval instead.
+        if quote.status == "draft" and needs_discount_approval(quote):
+            if via_email:
+                raise QuotationApprovalRequiredError()
+            quote.status = "pending_approval"
+            quote.approved_request_id = uuid.uuid4()
+            quote.version += 1
+            await quotation_events.record(
+                session, org_id, quote, "submitted", actor_user_id, data={"status": quote.status}
+            )
+            await session.flush()
+            return await QuotationService.get_quotation(session, quotation_id, org_id)
 
         # What the customer receives is taxed as of the day it is sent, then frozen.
         client = await session.get(Client, quote.client_id)
@@ -684,7 +775,10 @@ class QuotationService:
         if_match: Optional[str] = None,
         actor_user_id: Optional[uuid.UUID] = None,
     ) -> QuotationResponse:
-        """The customer agreed: the opportunity is won and a prospect becomes a customer. Expired is no bar."""
+        """
+        The customer agreed: the opportunity is won, its lead converted and a prospect becomes a
+        customer. Expired is no bar.
+        """
         quote = await get_quote_in_org(session, org_id, quotation_id)
         _check_version(if_match, quote.version)
 
@@ -717,6 +811,8 @@ class QuotationService:
             if opp:
                 opp.status = "won"
                 opp.version += 1
+                # The lead it came from is converted, crediting whoever handled it.
+                await convert_on_acceptance(session, org_id, opp.lead_id, actor_user_id)
 
         # A prospect becomes a customer once it accepts a quotation.
         client = await session.get(Client, quote.client_id)

@@ -8,7 +8,7 @@ import pytest
 import pytest_asyncio
 from sqlalchemy import select
 
-from models.lead import Lead
+from models.lead import Lead, LeadEvent
 from services.website_lead_import import import_new_enquiries, is_sales_enquiry
 from services.website_leads_client import (
     FBOS_STATUS_BY_WEBSITE_STATUS,
@@ -17,7 +17,7 @@ from services.website_leads_client import (
     parse_website_lead,
     website_leads_client,
 )
-from tests.conftest import TEST_ORG_ID, TEST_USER_ID
+from tests.conftest import TEST_ORG_ID
 
 BASE = "/api/revenue/v1"
 LEADS_URL = "https://website.test/api/integrations/leads"
@@ -123,7 +123,7 @@ async def test_only_new_sales_enquiries_are_imported_oldest_first(db_session):
         parse_website_lead(website_record("w-job", source="Careers Application", packageCategory="Careers")),
     ]
 
-    imported = await import_new_enquiries(db_session, website_leads, TEST_ORG_ID, TEST_USER_ID)
+    imported = await import_new_enquiries(db_session, website_leads, TEST_ORG_ID)
     await db_session.commit()
 
     assert [lead.attributes["website_lead_id"] for lead in imported] == ["w-early", "w-late"]
@@ -131,13 +131,16 @@ async def test_only_new_sales_enquiries_are_imported_oldest_first(db_session):
     assert [lead.name for lead in imported] == [f"LD-{year}-0001", f"LD-{year}-0002"]
     early, late = imported
     assert early.source == "website"
-    assert early.owner_user_id == TEST_USER_ID
+    assert early.owner_user_id is None  # waits to be claimed
     assert early.contact_email == "riya@example.com"
     assert early.attributes["message"] == "We need a new website."
     assert early.attributes["location"] == "Patna, Bihar, India"
     assert late.status == "qualified"
 
-    again = await import_new_enquiries(db_session, website_leads, TEST_ORG_ID, TEST_USER_ID)
+    events = (await db_session.execute(select(LeadEvent).where(LeadEvent.lead_id == early.id))).scalars().all()
+    assert [(e.event, e.actor_user_id, e.to_user_id) for e in events] == [("created", None, None)]
+
+    again = await import_new_enquiries(db_session, website_leads, TEST_ORG_ID)
     assert again == []
     rows = await db_session.execute(select(Lead).where(Lead.organization_id == TEST_ORG_ID))
     assert len(rows.scalars().all()) == 2
@@ -152,7 +155,7 @@ async def test_a_hand_made_website_lead_does_not_hide_an_enquiry(async_client, d
     assert res.status_code == 201, res.text
 
     imported = await import_new_enquiries(
-        db_session, [parse_website_lead(website_record("w1"))], TEST_ORG_ID, TEST_USER_ID
+        db_session, [parse_website_lead(website_record("w1"))], TEST_ORG_ID
     )
 
     assert len(imported) == 1
@@ -182,30 +185,34 @@ async def website_patches() -> AsyncGenerator[list[tuple[str, dict]], None]:
 
 async def _import_one(db_session, website_id: str) -> Lead:
     [lead] = await import_new_enquiries(
-        db_session, [parse_website_lead(website_record(website_id))], TEST_ORG_ID, TEST_USER_ID
+        db_session, [parse_website_lead(website_record(website_id))], TEST_ORG_ID
     )
     await db_session.commit()
     return lead
+
+
+async def _claim_and_call(async_client, lead_id, headers: dict | None = None) -> httpx.Response:
+    claimed = await async_client.post(f"{BASE}/leads/{lead_id}/claim", headers=headers)
+    assert claimed.status_code == 200, claimed.text
+    return await async_client.post(f"{BASE}/leads/{lead_id}/calls", json={"summary": "Called"}, headers=headers)
 
 
 @pytest.mark.asyncio
 async def test_a_status_change_goes_back_to_the_website(async_client, db_session, website_patches):
     lead = await _import_one(db_session, "w1")
 
-    res = await async_client.patch(
-        f"{BASE}/leads/{lead.id}", json={"status": "qualified"}, headers={"If-Match": f'"{lead.version}"'}
-    )
-    assert res.status_code == 200, res.text
+    res = await _claim_and_call(async_client, lead.id)
+    assert res.status_code == 201, res.text
     res = await async_client.post(
         f"{BASE}/leads/{lead.id}/disqualify",
         json={"reason": "no_budget"},
-        headers={"If-Match": f'"{res.json()["version"]}"'},
+        headers={"If-Match": res.headers["ETag"]},
     )
     assert res.status_code == 200, res.text
     await website_leads_client.drain()
 
     assert website_patches == [
-        ("/api/integrations/leads/w1", {"status": "in-progress"}),
+        ("/api/integrations/leads/w1", {"status": "contacted"}),
         ("/api/integrations/leads/w1", {"status": "disqualified"}),
     ]
 
@@ -218,9 +225,7 @@ async def test_reopening_a_disqualified_lead_goes_back_to_the_website(async_clie
     )
     assert res.status_code == 200, res.text
 
-    res = await async_client.patch(
-        f"{BASE}/leads/{lead.id}", json={"status": "new"}, headers={"If-Match": f'"{res.json()["version"]}"'}
-    )
+    res = await async_client.post(f"{BASE}/leads/{lead.id}/reopen", headers={"If-Match": f'"{res.json()["version"]}"'})
     assert res.status_code == 200, res.text
     await website_leads_client.drain()
 
@@ -238,6 +243,8 @@ async def test_changes_that_leave_the_status_alone_are_not_sent(async_client, db
         f"{BASE}/leads/{lead.id}", json={"score": 70}, headers={"If-Match": f'"{lead.version}"'}
     )
     assert res.status_code == 200, res.text
+    claimed = await async_client.post(f"{BASE}/leads/{lead.id}/claim")
+    assert claimed.status_code == 200, claimed.text
     await website_leads_client.drain()
 
     assert website_patches == []
@@ -249,11 +256,8 @@ async def test_leads_not_from_the_website_are_not_sent(async_client, website_pat
         f"{BASE}/leads",
         json={"vertical_id": str(uuid.uuid4()), "contact_name": "Walk-in", "source": "website", "consent": CONSENT},
     )
-    lead = res.json()
-    res = await async_client.patch(
-        f"{BASE}/leads/{lead['id']}", json={"status": "contacted"}, headers={"If-Match": f'"{lead["version"]}"'}
-    )
-    assert res.status_code == 200, res.text
+    res = await _claim_and_call(async_client, res.json()["id"])
+    assert res.status_code == 201, res.text
     await website_leads_client.drain()
 
     assert website_patches == []
@@ -263,16 +267,12 @@ async def test_leads_not_from_the_website_are_not_sent(async_client, website_pat
 async def test_leads_of_another_organization_are_not_sent(async_client, db_session, website_patches):
     other_org = uuid.uuid4()
     [lead] = await import_new_enquiries(
-        db_session, [parse_website_lead(website_record("w1"))], other_org, TEST_USER_ID
+        db_session, [parse_website_lead(website_record("w1"))], other_org
     )
     await db_session.commit()
 
-    res = await async_client.patch(
-        f"{BASE}/leads/{lead.id}",
-        json={"status": "contacted"},
-        headers={"If-Match": f'"{lead.version}"', "X-Organization-Id": str(other_org)},
-    )
-    assert res.status_code == 200, res.text
+    res = await _claim_and_call(async_client, lead.id, headers={"X-Organization-Id": str(other_org)})
+    assert res.status_code == 201, res.text
     await website_leads_client.drain()
 
     assert website_patches == []
@@ -287,11 +287,9 @@ async def test_the_website_being_down_does_not_fail_the_request(async_client, db
     async with httpx.AsyncClient(transport=httpx.MockTransport(website)) as http:
         website_leads_client.start(http, LEADS_URL, TEST_ORG_ID)
         try:
-            res = await async_client.patch(
-                f"{BASE}/leads/{lead.id}", json={"status": "contacted"}, headers={"If-Match": f'"{lead.version}"'}
-            )
+            res = await _claim_and_call(async_client, lead.id)
             await website_leads_client.drain()
         finally:
             website_leads_client.stop()
 
-    assert res.status_code == 200, res.text
+    assert res.status_code == 201, res.text

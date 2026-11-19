@@ -21,6 +21,7 @@ from models.invoice import Invoice
 from models.lead import Lead
 from models.opportunity import Opportunity
 from models.payment import Payment, PaymentAllocation
+from models.proposal import Proposal
 from models.quotation import Quotation
 from schemas.common import Money
 from schemas.journey import JourneyClient, JourneyRecord, JourneyResponse, JourneySubject, JourneyTotals
@@ -31,6 +32,7 @@ from services.quotation_service import get_quote_in_org
 STAGE_PERMISSIONS = {
     "lead": "revenue.lead.read",
     "opportunity": "revenue.opportunity.read",
+    "proposals": "revenue.opportunity.read",
     "quotations": "revenue.opportunity.read",
     "contracts": "revenue.contract.read",
     "invoices": "revenue.invoice.read",
@@ -62,6 +64,27 @@ def _opportunity_record(opp: Opportunity) -> JourneyRecord:
         id=opp.id, name=opp.name, status=opp.status, amount=_money(opp.expected_value, opp.currency),
         date=opp.expected_close_date,
     )
+
+
+def _proposal_record(proposal: Proposal) -> JourneyRecord:
+    return JourneyRecord(
+        id=proposal.id, number=proposal.proposal_no, name=proposal.title, status=proposal.status,
+        amount=_money(proposal.total, proposal.currency),
+        date=(proposal.sent_at or proposal.created_at).date() if (proposal.sent_at or proposal.created_at) else None,
+        kind=f"v{proposal.version_no}",
+    )
+
+
+async def _proposals(session: AsyncSession, opp: Optional[Opportunity]) -> list[Proposal]:
+    """The opportunity's proposals as they stand: each one's latest version, oldest first."""
+    if opp is None:
+        return []
+    rows = await session.execute(
+        select(Proposal)
+        .where(Proposal.opportunity_id == opp.id, Proposal.status != "superseded")
+        .order_by(Proposal.created_at.asc())
+    )
+    return list(rows.scalars())
 
 
 def _quotation_record(quote: Quotation, accepted_ids: set[uuid.UUID]) -> JourneyRecord:
@@ -124,6 +147,7 @@ class JourneyService:
 
         opp = anchors.opportunity
         quotations = await _quotations(session, opp, anchors.quotation)
+        proposals = await _proposals(session, opp)
         contracts = await _contracts(session, org_id, opp, anchors.contract)
         accepted = {c.accepted_quotation_id for c in contracts if c.accepted_quotation_id}
         invoices = await _invoices(session, org_id, contracts, anchors.invoice)
@@ -145,6 +169,7 @@ class JourneyService:
             client=JourneyClient(id=client.id, name=client.name) if client and client.organization_id == org_id else None,
             lead=_lead_record(anchors.lead) if anchors.lead and can["lead"] else None,
             opportunity=_opportunity_record(opp) if opp and can["opportunity"] else None,
+            proposals=[_proposal_record(p) for p in proposals] if can["proposals"] else [],
             quotations=[_quotation_record(q, accepted) for q in quotations] if can["quotations"] else [],
             contracts=[_contract_record(c) for c in contracts] if can["contracts"] else [],
             invoices=[_invoice_record(i) for i in invoices] if can["invoices"] else [],

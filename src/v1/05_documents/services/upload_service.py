@@ -1,4 +1,8 @@
+import base64
+import binascii
+from dataclasses import dataclass
 from datetime import datetime, timezone
+import hashlib
 import random
 from typing import Optional
 import uuid
@@ -15,10 +19,12 @@ from exceptions import (
     MimeTypeNotAllowedError,
     UploadExpiredError,
     UploadNotFoundError,
+    ValidationFailedError,
 )
 from models.document import (
     Document,
     DocumentAccessLog,
+    DocumentCategory,
     DocumentLink,
     DocumentVersion,
     StorageObject,
@@ -29,6 +35,7 @@ from schemas.document import (
     DocumentLinkResponse,
     DocumentResponse,
     DocumentVersionResponse,
+    StoredFileCreate,
 )
 from schemas.upload import UploadInit, UploadInitResult
 from services.access import PERM_UPLOAD, Caller, require_document_write
@@ -245,98 +252,214 @@ class UploadService:
             link_label = access.label or upload_session.link_subject_type
 
         doc = (await session.execute(document_query(upload_session.document_id, org_id))).scalar_one_or_none()
-        existing_links: list[DocumentLink] = []
         if doc:
             # A new version: the document's records may have closed since the upload started.
             await require_document_write(caller, doc)
-            existing_links = list(doc.links)
-        else:
-            doc_code = f"DOC-{now.year}-{random.randint(1000, 9999):05d}"
-            doc = Document(
-                id=upload_session.document_id,
-                organization_id=org_id,
-                code=doc_code,
-                title=upload_session.title or upload_session.file_name,
-                category_id=cat.id,
-                classification=cat.default_classification,
-                owner_user_id=user_id,
-                owner_user_name=caller.actor.name,
-                status="active",
-                locked=False,
-                legal_hold=False,
-            )
-            session.add(doc)
-            await session.flush()
 
         # The file must actually be in storage before we record it.
         object_key = upload_session.object_key or f"org/{org_id.hex[:8]}/{upload_session.sha256[:16]}-{uuid.uuid4().hex[:8]}"
         await storage_service.verify_object(object_key, upload_session.size_bytes)
 
-        storage_obj = StorageObject(
-            id=uuid.uuid4(),
-            provider=storage_service.provider_name,
-            bucket=settings.imagekit_folder,
-            object_key=object_key,
-            size_bytes=upload_session.size_bytes,
-            mime_type=upload_session.mime_type,
-            sha256=upload_session.sha256,
-            scan_status="pending" if settings.virus_scan_enabled else "not_scanned",
-            encryption="aes256",
+        document_id = await _save_version(
+            session, caller, doc, cat,
+            NewVersion(
+                document_id=upload_session.document_id,
+                version_no=upload_session.version_no,
+                title=upload_session.title or upload_session.file_name,
+                file_name=upload_session.file_name,
+                mime_type=upload_session.mime_type,
+                size_bytes=upload_session.size_bytes,
+                sha256=upload_session.sha256,
+                object_key=object_key,
+                link_subject_type=upload_session.link_subject_type,
+                link_subject_id=upload_session.link_subject_id,
+                link_role=upload_session.link_role,
+                link_label=link_label,
+            ),
+            client_ip,
         )
-        session.add(storage_obj)
-        await session.flush()
-
-        version = DocumentVersion(
-            id=uuid.uuid4(),
-            document_id=doc.id,
-            version_no=upload_session.version_no,
-            storage_object_id=storage_obj.id,
-            file_name=upload_session.file_name,
-            status="draft",
-            uploaded_by=user_id,
-            uploaded_by_name=caller.actor.name,
-            uploaded_at=now,
-        )
-        session.add(version)
-        await session.flush()
-
-        doc.current_version_id = version.id
-
-        already_linked = any(
-            lnk.subject_type == upload_session.link_subject_type and lnk.subject_id == upload_session.link_subject_id
-            for lnk in existing_links
-        )
-        if link_label and not already_linked:
-            session.add(
-                DocumentLink(
-                    id=uuid.uuid4(),
-                    document_id=doc.id,
-                    subject_type=upload_session.link_subject_type,
-                    subject_id=upload_session.link_subject_id,
-                    label=link_label,
-                    link_role=upload_session.link_role or "attachment",
-                    linked_by=user_id,
-                    linked_at=now,
-                )
-            )
-
-        session.add(
-            DocumentAccessLog(
-                id=uuid.uuid4(),
-                document_id=doc.id,
-                version_id=version.id,
-                actor_user_id=user_id,
-                action="upload",
-                ip=client_ip,
-                occurred_at=now,
-            )
-        )
-
         upload_session.status = "completed"
         await session.commit()
 
-        refreshed = (await session.execute(document_query(doc.id, org_id))).scalar_one()
+        refreshed = (await session.execute(document_query(document_id, org_id))).scalar_one()
         return serialize_document(refreshed)
+
+    async def store_file(
+        self,
+        session: AsyncSession,
+        caller: Caller,
+        data: StoredFileCreate,
+    ) -> DocumentResponse:
+        """
+        Store a file another service generated for one of its records, as the signed-in user:
+        a new document linked to the record, or a new version of `document_id`. Whether the
+        user may is the record's owner's answer (attach), as for any upload to it.
+        """
+        org_id = caller.organization_id
+        try:
+            content = base64.b64decode(data.content_base64, validate=True)
+        except binascii.Error as exc:
+            raise ValidationFailedError("content_base64 is not valid base64.") from exc
+
+        cat = await category_service.get_by_code(session, org_id, data.category_code)
+        max_bytes = min(filter(None, (settings.max_upload_size_bytes, cat.max_file_size_bytes)))
+        if len(content) > max_bytes:
+            raise FileTooLargeError(max_bytes=max_bytes)
+        allowed = allowed_mime_types(cat)
+        if allowed and data.mime_type.lower() not in allowed:
+            raise MimeTypeNotAllowedError(data.mime_type)
+
+        access = await caller.check_subject(data.subject.type, data.subject.id, "attach")
+
+        doc = None
+        version_no = 1
+        if data.document_id is not None:
+            doc = (await session.execute(document_query(data.document_id, org_id))).scalar_one_or_none()
+            if not doc:
+                raise DocumentNotFoundError(str(data.document_id))
+            await require_document_write(caller, doc)
+            if doc.locked or doc.legal_hold:
+                raise DocumentLockedError()
+            version_no = max((v.version_no for v in doc.versions), default=0) + 1
+
+        sha256 = hashlib.sha256(content).hexdigest()
+        object_key = f"org/{org_id.hex[:8]}/{sha256[:16]}-{uuid.uuid4().hex[:8]}"
+        await storage_service.store_bytes(object_key, content, data.mime_type)
+
+        document_id = await _save_version(
+            session, caller, doc, cat,
+            NewVersion(
+                document_id=doc.id if doc else uuid.uuid4(),
+                version_no=version_no,
+                title=data.title or data.file_name,
+                file_name=data.file_name,
+                mime_type=data.mime_type,
+                size_bytes=len(content),
+                sha256=sha256,
+                object_key=object_key,
+                link_subject_type=data.subject.type,
+                link_subject_id=data.subject.id,
+                link_role=data.link_role,
+                link_label=access.label or data.subject.type,
+                change_note=data.change_note,
+            ),
+            client_ip=None,
+        )
+        await session.commit()
+
+        refreshed = (await session.execute(document_query(document_id, org_id))).scalar_one()
+        return serialize_document(refreshed)
+
+
+@dataclass(frozen=True)
+class NewVersion:
+    """A file now in storage, to record as a document version (and the document, if new)."""
+
+    document_id: uuid.UUID
+    version_no: int
+    title: str
+    file_name: str
+    mime_type: str
+    size_bytes: int
+    sha256: str
+    object_key: str
+    link_subject_type: Optional[str]
+    link_subject_id: Optional[uuid.UUID]
+    link_role: Optional[str]
+    link_label: Optional[str]
+    change_note: Optional[str] = None
+
+
+async def _save_version(
+    session: AsyncSession,
+    caller: Caller,
+    doc: Optional[Document],
+    category: DocumentCategory,
+    new: NewVersion,
+    client_ip: Optional[str],
+) -> uuid.UUID:
+    """Records the version (and the document when `doc` is None), its link and the upload log. Returns the document's id."""
+    org_id = caller.organization_id
+    user_id = caller.user_id
+    now = datetime.now(timezone.utc)
+    existing_links: list[DocumentLink] = list(doc.links) if doc else []
+    if doc is None:
+        doc = Document(
+            id=new.document_id,
+            organization_id=org_id,
+            code=f"DOC-{now.year}-{random.randint(1000, 9999):05d}",
+            title=new.title,
+            category_id=category.id,
+            classification=category.default_classification,
+            owner_user_id=user_id,
+            owner_user_name=caller.actor.name,
+            status="active",
+            locked=False,
+            legal_hold=False,
+        )
+        session.add(doc)
+        await session.flush()
+
+    storage_obj = StorageObject(
+        id=uuid.uuid4(),
+        provider=storage_service.provider_name,
+        bucket=settings.imagekit_folder,
+        object_key=new.object_key,
+        size_bytes=new.size_bytes,
+        mime_type=new.mime_type,
+        sha256=new.sha256,
+        scan_status="pending" if settings.virus_scan_enabled else "not_scanned",
+        encryption="aes256",
+    )
+    session.add(storage_obj)
+    await session.flush()
+
+    version = DocumentVersion(
+        id=uuid.uuid4(),
+        document_id=doc.id,
+        version_no=new.version_no,
+        storage_object_id=storage_obj.id,
+        file_name=new.file_name,
+        status="draft",
+        uploaded_by=user_id,
+        uploaded_by_name=caller.actor.name,
+        uploaded_at=now,
+        change_note=new.change_note,
+    )
+    session.add(version)
+    await session.flush()
+
+    doc.current_version_id = version.id
+
+    already_linked = any(
+        lnk.subject_type == new.link_subject_type and lnk.subject_id == new.link_subject_id for lnk in existing_links
+    )
+    if new.link_label and not already_linked:
+        session.add(
+            DocumentLink(
+                id=uuid.uuid4(),
+                document_id=doc.id,
+                subject_type=new.link_subject_type,
+                subject_id=new.link_subject_id,
+                label=new.link_label,
+                link_role=new.link_role or "attachment",
+                linked_by=user_id,
+                linked_at=now,
+            )
+        )
+
+    session.add(
+        DocumentAccessLog(
+            id=uuid.uuid4(),
+            document_id=doc.id,
+            version_id=version.id,
+            actor_user_id=user_id,
+            action="upload",
+            ip=client_ip,
+            occurred_at=now,
+        )
+    )
+    return doc.id
 
 
 upload_service = UploadService()

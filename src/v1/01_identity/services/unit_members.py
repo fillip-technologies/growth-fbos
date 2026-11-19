@@ -20,6 +20,7 @@ from exceptions import OrgUnitNotFoundError
 from models.membership import UnitMembership
 from models.org_unit import OrgUnit
 from models.user import User
+from models.user_permission import UserPermission
 from schemas.rbac import PeopleResponse, PersonRef, UnitHead, UnitHeadsResponse
 
 # `unit_memberships.member_role`: the one row mirroring `users.home_unit_id` (where they work),
@@ -49,10 +50,12 @@ async def active_people(
     unit_id: Optional[uuid.UUID],
     user_id: Optional[uuid.UUID],
     limit: int,
+    permission: Optional[str] = None,
 ) -> PeopleResponse:
     """
-    The organization's active people by name, narrowed to those who work in `unit_id` and to
-    `user_id` when given. A unit outside the organization is not found.
+    The organization's active people by name, narrowed to those who work in `unit_id`, to
+    `user_id` and to those who hold `permission` when given. A unit outside the organization
+    is not found.
     """
     query = select(User.id, User.name).where(User.organization_id == organization_id, User.status == "active")
     if unit_id is not None:
@@ -62,10 +65,27 @@ async def active_people(
         query = query.where(belongs_to(unit))
     if user_id is not None:
         query = query.where(User.id == user_id)
+    if permission is not None:
+        query = query.where(holds(permission))
 
     rows = (await session.execute(query.order_by(User.name, User.id).limit(limit + 1))).all()
     people = [PersonRef(id=row.id, name=row.name) for row in rows[:limit]]
     return PeopleResponse(data=people, has_more=len(rows) > limit)
+
+
+def holds(permission: str) -> ColumnElement[bool]:
+    """
+    A condition on `User`: the user holds `permission` in any scope (the whole company, a unit,
+    or only their own records), as identity's access checks read it: client admins hold every
+    code; anyone else through a current grant whose unit still exists.
+    """
+    now = datetime.now(timezone.utc)
+    granted = select(UserPermission.user_id).where(
+        UserPermission.permission_code == permission,
+        UserPermission.valid_to.is_(None) | (UserPermission.valid_to > now),
+        UserPermission.scope_unit_id.is_(None) | UserPermission.scope_unit_id.in_(select(OrgUnit.id)),
+    )
+    return or_(User.user_type == "client_admin", User.id.in_(granted))
 
 
 async def units_at_or_below(session: AsyncSession, organization_id: uuid.UUID, paths: set[str]) -> dict[str, list[uuid.UUID]]:

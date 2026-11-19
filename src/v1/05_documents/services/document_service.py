@@ -28,6 +28,7 @@ from schemas.document import (
     DocumentListResponse,
     DocumentResponse,
     DownloadUrlResponse,
+    LinkCopyCreate,
     LinkCopyResult,
 )
 from services.access import PERM_READ, PERM_UPLOAD, Caller, require_document_read, require_document_write
@@ -282,6 +283,19 @@ class DocumentService:
             copied += 1
         await session.commit()
         return LinkCopyResult(copied=copied)
+
+    async def copy_links_for(self, session: AsyncSession, caller: Caller, data: LinkCopyCreate) -> LinkCopyResult:
+        """
+        `copy_links` for a signed-in user rather than the owning service: they need to read
+        documents, see the source record and be allowed to attach files to the target.
+        """
+        caller.require(PERM_READ)
+        await caller.check_subject(data.source.type, data.source.id, "read")
+        access = await caller.check_subject(data.target.type, data.target.id, "attach")
+        return await self.copy_links(
+            session, caller.organization_id, caller.user_id, data.source, data.target,
+            data.target_label or access.label,
+        )
 
     async def _load(self, session: AsyncSession, caller: Caller, document_id: uuid.UUID) -> Document:
         doc = (await session.execute(document_query(document_id, caller.organization_id))).scalar_one_or_none()

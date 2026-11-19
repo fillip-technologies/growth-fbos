@@ -9,7 +9,7 @@ import httpx
 import pytest
 
 from tests.conftest import TEST_SUPPLIER_GSTIN, TEST_USER_ID, valid_gstin
-from tests.test_sales_flow import BASE, _act, _converted_lead, _quotation
+from tests.test_sales_flow import BASE, _act, _qualified_lead, _quotation
 
 pytestmark = pytest.mark.asyncio
 
@@ -70,7 +70,7 @@ async def pay(client: httpx.AsyncClient, customer_id: str, cash: float, invoice_
 
 
 async def accepted_contract(client: httpx.AsyncClient, fake_documents, payment_terms: list, start: date = TODAY, end: date | None = None) -> dict:
-    converted = await _converted_lead(client)  # a Maharashtra customer: inter-state from Karnataka
+    converted = await _qualified_lead(client)  # a Maharashtra customer: inter-state from Karnataka
     quote = await _quotation(client, converted["opportunity"]["id"])  # one offering at 100,000 before tax
     for action in ("submit", "send", "accept"):
         quote = (await _act(client, quote, action)).json()
@@ -279,7 +279,7 @@ async def test_pack_upgrade_shows_its_changes_and_keeps_local_edits(async_client
 
 
 async def test_legacy_rate_maps_to_a_plain_category_and_inter_state_reads_back(async_client: httpx.AsyncClient):
-    converted = await _converted_lead(async_client)  # Maharashtra
+    converted = await _qualified_lead(async_client)  # Maharashtra
     quote = await _quotation(async_client, converted["opportunity"]["id"])
     assert quote["items"][0]["tax_category_code"] == "SVC_18"
     assert (amount(quote["totals"]["igst"]), amount(quote["totals"]["cgst"])) == ("18000.00", "0.00")

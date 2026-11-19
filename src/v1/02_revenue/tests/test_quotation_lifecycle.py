@@ -9,7 +9,7 @@ from sqlalchemy import select
 
 from models.activity import Activity
 from models.quotation import Quotation
-from tests.test_sales_flow import BASE, _act, _converted_lead, _quotation, _sent_quotation
+from tests.test_sales_flow import BASE, _act, _qualified_lead, _quotation, _sent_quotation
 
 pytestmark = pytest.mark.asyncio
 
@@ -52,7 +52,7 @@ async def _timeline(db_session, opportunity_id: str) -> list[Activity]:
 
 
 async def test_sending_keeps_the_valid_until_date(async_client):
-    converted = await _converted_lead(async_client)
+    converted = await _qualified_lead(async_client)
     quote = await _sent_quotation(async_client, converted["opportunity"]["id"])
 
     assert quote["valid_until"] == "2026-12-31"
@@ -62,7 +62,7 @@ async def test_sending_keeps_the_valid_until_date(async_client):
 
 
 async def test_customer_asks_for_changes_then_a_revision_answers_them(async_client, db_session):
-    converted = await _converted_lead(async_client)
+    converted = await _qualified_lead(async_client)
     opportunity_id = converted["opportunity"]["id"]
     quote = await _sent_quotation(async_client, opportunity_id)
     assert await _stage(async_client, opportunity_id) == "proposal"
@@ -87,7 +87,7 @@ async def test_customer_asks_for_changes_then_a_revision_answers_them(async_clie
 
 
 async def test_change_request_needs_a_note(async_client):
-    converted = await _converted_lead(async_client)
+    converted = await _qualified_lead(async_client)
     quote = await _sent_quotation(async_client, converted["opportunity"]["id"])
 
     res = await _request_changes(async_client, quote, note="   ")
@@ -97,7 +97,7 @@ async def test_change_request_needs_a_note(async_client):
 
 @pytest.mark.parametrize("action", ["change-requests", "accept", "reject"])
 async def test_only_a_sent_quotation_takes_the_customers_answer(async_client, action):
-    converted = await _converted_lead(async_client)
+    converted = await _qualified_lead(async_client)
     draft = await _quotation(async_client, converted["opportunity"]["id"])
 
     body = {"note": "x"} if action == "change-requests" else {"reason": "x"} if action == "reject" else None
@@ -107,7 +107,7 @@ async def test_only_a_sent_quotation_takes_the_customers_answer(async_client, ac
 
 
 async def test_a_quotation_with_changes_requested_can_still_be_rejected(async_client):
-    converted = await _converted_lead(async_client)
+    converted = await _qualified_lead(async_client)
     quote = await _sent_quotation(async_client, converted["opportunity"]["id"])
     changed = (await _request_changes(async_client, quote)).json()
     # Accepting is for what the customer has as sent; changes asked for need a revision first.
@@ -121,7 +121,7 @@ async def test_a_quotation_with_changes_requested_can_still_be_rejected(async_cl
 
 @pytest.mark.parametrize("before", ["draft", "approved", "sent", "changes_requested"])
 async def test_open_quotations_can_be_withdrawn(async_client, db_session, before):
-    converted = await _converted_lead(async_client)
+    converted = await _qualified_lead(async_client)
     quote = await _quotation(async_client, converted["opportunity"]["id"])
     if before == "approved":
         quote = (await _act(async_client, quote, "submit")).json()
@@ -141,7 +141,7 @@ async def test_open_quotations_can_be_withdrawn(async_client, db_session, before
 
 @pytest.mark.parametrize("closing", ["accept", "withdraw", "revise"])
 async def test_closed_quotations_cannot_be_withdrawn_or_revised(async_client, closing):
-    converted = await _converted_lead(async_client)
+    converted = await _qualified_lead(async_client)
     quote = await _sent_quotation(async_client, converted["opportunity"]["id"])
     if closing == "accept":
         closed = (await _act(async_client, quote, "accept")).json()
@@ -156,19 +156,19 @@ async def test_closed_quotations_cannot_be_withdrawn_or_revised(async_client, cl
 
 
 async def test_withdrawal_reason_must_be_one_of_the_list(async_client):
-    converted = await _converted_lead(async_client)
+    converted = await _qualified_lead(async_client)
     quote = await _quotation(async_client, converted["opportunity"]["id"])
     assert (await _withdraw(async_client, quote, reason="bored")).status_code == 422
 
 
 async def test_drafts_cannot_be_revised(async_client):
-    converted = await _converted_lead(async_client)
+    converted = await _qualified_lead(async_client)
     draft = await _quotation(async_client, converted["opportunity"]["id"])
     assert (await async_client.post(f"{BASE}/quotations/{draft['id']}/revise")).status_code == 409
 
 
 async def test_validity_can_be_extended_but_not_into_the_past(async_client, db_session):
-    converted = await _converted_lead(async_client)
+    converted = await _qualified_lead(async_client)
     quote = await _sent_quotation(async_client, converted["opportunity"]["id"])
 
     past = await _set_validity(async_client, quote, date.today() - timedelta(days=1))
@@ -189,7 +189,7 @@ async def test_validity_can_be_extended_but_not_into_the_past(async_client, db_s
 
 
 async def test_sent_quotation_past_its_date_is_expired_and_can_still_be_accepted(async_client, db_session):
-    converted = await _converted_lead(async_client)
+    converted = await _qualified_lead(async_client)
     quote = await _sent_quotation(async_client, converted["opportunity"]["id"])
     stored = await db_session.get(Quotation, uuid.UUID(quote["id"]))
     stored.valid_until = date.today() - timedelta(days=1)
@@ -207,7 +207,7 @@ async def test_sent_quotation_past_its_date_is_expired_and_can_still_be_accepted
 
 
 async def test_stage_moves_forward_only(async_client):
-    converted = await _converted_lead(async_client)
+    converted = await _qualified_lead(async_client)
     opportunity_id = converted["opportunity"]["id"]
     opportunity = (await async_client.get(f"{BASE}/opportunities/{opportunity_id}")).json()
     moved = await async_client.patch(
@@ -220,7 +220,7 @@ async def test_stage_moves_forward_only(async_client):
 
 
 async def test_every_step_is_in_the_history(async_client, db_session):
-    converted = await _converted_lead(async_client)
+    converted = await _qualified_lead(async_client)
     quote = await _quotation(async_client, converted["opportunity"]["id"], discount_pct=30)
     for action in ("submit", "approve", "send", "accept"):
         res = await _act(async_client, quote, action)
@@ -228,12 +228,12 @@ async def test_every_step_is_in_the_history(async_client, db_session):
         quote = res.json()
 
     assert await _events(async_client, quote) == ["created", "submitted", "approved", "sent", "accepted"]
-    timeline = [a.outcome for a in await _timeline(db_session, converted["opportunity"]["id"])]
+    timeline = [a.outcome for a in await _timeline(db_session, converted["opportunity"]["id"]) if "quotation" in a.summary]
     assert timeline == ["sent", "accepted"]
 
 
 async def test_history_of_another_organizations_quotation_is_not_found(async_client):
-    converted = await _converted_lead(async_client)
+    converted = await _qualified_lead(async_client)
     quote = await _quotation(async_client, converted["opportunity"]["id"])
     other = {"X-Organization-Id": "0191f3a2-0011-7011-8077-00000000beef"}
     assert (await async_client.get(f"{BASE}/quotations/{quote['id']}/events", headers=other)).status_code == 404

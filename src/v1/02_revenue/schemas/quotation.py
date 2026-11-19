@@ -168,6 +168,9 @@ class QuotationResponse(BaseModel):
     totals: QuotationTotals
     approval_request_id: Optional[uuid.UUID] = None
     pdf_document_id: Optional[uuid.UUID] = None
+    pdf_version_no: Optional[int] = None
+    # The accepted proposal it was made from, if any.
+    proposal_id: Optional[uuid.UUID] = None
     terms: Optional[str] = None
     sent_at: Optional[datetime] = None
     last_sent_at: Optional[datetime] = None

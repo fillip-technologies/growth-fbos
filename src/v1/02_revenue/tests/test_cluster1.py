@@ -5,6 +5,8 @@ import httpx
 from sqlalchemy import select
 
 from models.lead import Lead
+from tests.conftest import TEST_USER_ID
+from tests.test_sales_flow import _first_call
 
 pytestmark = pytest.mark.asyncio
 
@@ -176,6 +178,7 @@ async def test_lead_lifecycle_and_conversion(async_client: httpx.AsyncClient):
             "text": "I agree to be contacted about my enquiry.",
             "channel": "web_form",
         },
+        "owner_user_id": str(TEST_USER_ID),
     }
 
     # 1. Create Lead
@@ -186,19 +189,18 @@ async def test_lead_lifecycle_and_conversion(async_client: httpx.AsyncClient):
     assert lead_data["status"] == "new"
     assert lead_data["code"].startswith("LD-")
 
-    # 2. Update Lead status to qualified
+    # 2. Score it, then call it: the first call makes it contacted
     etag = create_res.headers["ETag"]
     update_res = await async_client.patch(
         f"/api/revenue/v1/leads/{lead_id}",
-        json={"status": "qualified", "score": 85},
+        json={"score": 85},
         headers={"If-Match": etag},
     )
     assert update_res.status_code == 200
-    assert update_res.json()["status"] == "qualified"
     assert update_res.json()["score"] == 85
+    new_etag = await _first_call(async_client, lead_id)
 
-    # 3. Convert Lead to Client, Deal, and Opportunity
-    new_etag = update_res.headers["ETag"]
+    # 3. Qualify it: Client, Deal, and Opportunity
     convert_payload = {
         "new_client": {
             "name": "Patel Industries",
@@ -224,13 +226,13 @@ async def test_lead_lifecycle_and_conversion(async_client: httpx.AsyncClient):
     }
 
     convert_res = await async_client.post(
-        f"/api/revenue/v1/leads/{lead_id}/convert",
+        f"/api/revenue/v1/leads/{lead_id}/qualify",
         json=convert_payload,
         headers={"If-Match": new_etag},
     )
     assert convert_res.status_code == 200
     result = convert_res.json()
-    assert result["lead"]["status"] == "converted"
+    assert result["lead"]["status"] == "qualified"
     assert result["client"]["name"] == "Patel Industries"
     assert result["opportunity"]["name"] == "Patel ERP Implementation"
     assert result["opportunity"]["deal_id"] is not None
@@ -287,10 +289,13 @@ async def test_every_edit_of_a_leads_extra_values_is_saved(async_client: httpx.A
     assert stored.scalar_one() == {"referral_name": "Meena", "score": 40}  # an emptied value is removed
 
 
-async def _set_status(async_client: httpx.AsyncClient, lead: dict, new_status: str) -> httpx.Response:
-    return await async_client.patch(
-        f"/api/revenue/v1/leads/{lead['id']}", json={"status": new_status}, headers={"If-Match": f'"{lead["version"]}"'}
-    )
+async def test_status_is_not_set_by_hand(async_client: httpx.AsyncClient):
+    lead = await _new_lead(async_client)
+    for change in ({"status": "qualified"}, {"owner_user_id": str(uuid.uuid4())}):
+        res = await async_client.patch(
+            f"/api/revenue/v1/leads/{lead['id']}", json=change, headers={"If-Match": f'"{lead["version"]}"'}
+        )
+        assert res.status_code == 422, res.text
 
 
 async def test_a_disqualified_lead_can_be_reopened(async_client: httpx.AsyncClient, db_session):
@@ -302,23 +307,14 @@ async def test_a_disqualified_lead_can_be_reopened(async_client: httpx.AsyncClie
     )
     assert disqualified.status_code == 200, disqualified.text
 
-    reopened = await _set_status(async_client, disqualified.json(), "contacted")
+    reopened = await async_client.post(
+        f"/api/revenue/v1/leads/{lead['id']}/reopen", headers={"If-Match": f'"{disqualified.json()["version"]}"'}
+    )
 
     assert reopened.status_code == 200, reopened.text
-    assert reopened.json()["status"] == "contacted"
+    assert reopened.json()["status"] == "new"  # never called
     stored = await db_session.get(Lead, uuid.UUID(lead["id"]))
     assert stored.loss_reason is None
-
-
-async def test_a_lead_can_go_back_to_new(async_client: httpx.AsyncClient):
-    lead = await _new_lead(async_client)
-    qualified = await _set_status(async_client, lead, "qualified")
-    assert qualified.status_code == 200, qualified.text
-
-    back = await _set_status(async_client, qualified.json(), "new")
-
-    assert back.status_code == 200, back.text
-    assert back.json()["status"] == "new"
 
 
 async def test_a_converted_lead_keeps_its_status(async_client: httpx.AsyncClient, db_session):
@@ -327,10 +323,12 @@ async def test_a_converted_lead_keeps_its_status(async_client: httpx.AsyncClient
     stored.status = "converted"
     await db_session.commit()
 
-    res = await _set_status(async_client, lead, "new")
-
-    assert res.status_code == 409
-    assert res.json()["detail"]["code"] == "INVALID_STATE_TRANSITION"
+    for action, body in (("disqualify", {"reason": "other"}), ("reopen", None), ("transfer", {"reason": "x"})):
+        res = await async_client.post(
+            f"/api/revenue/v1/leads/{lead['id']}/{action}", json=body, headers={"If-Match": f'"{lead["version"]}"'}
+        )
+        assert res.status_code == 409, (action, res.text)
+        assert res.json()["detail"]["code"] == "INVALID_STATE_TRANSITION"
 
 
 async def test_create_lead_back_dated(async_client: httpx.AsyncClient):

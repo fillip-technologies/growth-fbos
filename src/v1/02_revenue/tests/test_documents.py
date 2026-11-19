@@ -10,7 +10,7 @@ from exceptions import DocumentsServiceUnavailableError
 from main import app
 from services.identity_client import Actor
 from tests.conftest import TEST_ORG_ID, TEST_USER_ID
-from tests.test_sales_flow import BASE, _act, _converted_lead, _quotation, _sent_quotation
+from tests.test_sales_flow import BASE, _act, _qualified_lead, _quotation, _sent_quotation
 
 pytestmark = pytest.mark.asyncio
 
@@ -20,7 +20,7 @@ def access_url(subject_type: str, subject_id: str, action: str = "read") -> str:
 
 
 async def _contract(client: httpx.AsyncClient) -> dict:
-    converted = await _converted_lead(client)
+    converted = await _qualified_lead(client)
     quote = await _quotation(client, converted["opportunity"]["id"])
     for action in ("submit", "send", "accept"):
         quote = (await _act(client, quote, action)).json()
@@ -37,7 +37,7 @@ async def _contract(client: httpx.AsyncClient) -> dict:
 
 
 async def test_open_quotation_accepts_documents(async_client):
-    converted = await _converted_lead(async_client)
+    converted = await _qualified_lead(async_client)
     quote = await _quotation(async_client, converted["opportunity"]["id"])
 
     res = await async_client.get(access_url("revenue.quotation", quote["id"], "attach"))
@@ -47,7 +47,7 @@ async def test_open_quotation_accepts_documents(async_client):
 
 
 async def test_accepted_quotation_is_readable_but_closed_to_new_files(async_client):
-    converted = await _converted_lead(async_client)
+    converted = await _qualified_lead(async_client)
     quote = await _quotation(async_client, converted["opportunity"]["id"])
     for action in ("submit", "send", "accept"):
         quote = (await _act(async_client, quote, action)).json()
@@ -85,7 +85,7 @@ async def test_subject_access_follows_the_records_permissions(async_client):
 
 
 async def test_revision_carries_the_quotations_documents_over(async_client, fake_documents):
-    converted = await _converted_lead(async_client)
+    converted = await _qualified_lead(async_client)
     first = await _sent_quotation(async_client, converted["opportunity"]["id"])
 
     revised = await async_client.post(f"{BASE}/quotations/{first['id']}/revise")
@@ -97,7 +97,7 @@ async def test_revision_carries_the_quotations_documents_over(async_client, fake
 
 
 async def test_revision_is_not_created_when_documents_are_unreachable(async_client, db_session):
-    converted = await _converted_lead(async_client)
+    converted = await _qualified_lead(async_client)
     first = await _sent_quotation(async_client, converted["opportunity"]["id"])
 
     class DocumentsDown:

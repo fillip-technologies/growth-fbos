@@ -8,7 +8,7 @@ import uuid
 import httpx
 
 from config import settings
-from exceptions import ChecksumMismatchError
+from exceptions import ChecksumMismatchError, StorageUnavailableError
 
 IMAGEKIT_UPLOAD_URL = "https://upload.imagekit.io/api/v1/files/upload"
 # ImageKit rejects client-upload tokens that expire more than one hour ahead.
@@ -111,6 +111,31 @@ class StorageService:
             transformation=[{"raw": "orig-true"}] if original else None,
         )
         return url, expires_at
+
+    async def store_bytes(self, object_key: str, content: bytes, mime_type: str) -> None:
+        """
+        Upload a file the server has in hand (one another service generated, e.g. a proposal PDF),
+        privately, at `object_key`. Stub mode keeps nothing, as it verifies nothing.
+        """
+        if not self.is_configured:
+            return
+
+        from imagekitio import APIError, AsyncImageKit
+
+        folder, file_name = self._split_key(object_key)
+        client = AsyncImageKit(private_key=settings.imagekit_private_key)
+        try:
+            await client.files.upload(
+                file=(file_name, content, mime_type),
+                file_name=file_name,
+                folder=folder,
+                is_private_file=True,
+                use_unique_file_name=False,
+            )
+        except APIError as exc:
+            raise StorageUnavailableError() from exc
+        finally:
+            await client.close()
 
     async def verify_object(self, object_key: str, size_bytes: int) -> None:
         """

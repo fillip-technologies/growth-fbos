@@ -1,6 +1,11 @@
 import uuid
 import pytest
+
+from tests.test_sales_flow import _accepted_proposal
 import httpx
+
+from tests.conftest import TEST_USER_ID
+from tests.test_sales_flow import _first_call
 
 pytestmark = pytest.mark.asyncio
 
@@ -51,14 +56,15 @@ async def test_opportunity_lifecycle(async_client: httpx.AsyncClient):
         "source": "website",
         "contact_name": "Deepak Sharma",
         "consent": {"given": True, "text": "I agree to be contacted about my enquiry.", "channel": "web"},
+        "owner_user_id": str(TEST_USER_ID),
     }
     ld_res = await async_client.post("/api/revenue/v1/leads", json=lead_payload)
     assert ld_res.status_code == 201
     lead_id = ld_res.json()["id"]
-    etag = ld_res.headers["ETag"]
+    etag = await _first_call(async_client, lead_id)
 
     convert_res = await async_client.post(
-        f"/api/revenue/v1/leads/{lead_id}/convert",
+        f"/api/revenue/v1/leads/{lead_id}/qualify",
         json={
             "new_client": {
                 "name": "Reliance Digital",
@@ -112,8 +118,9 @@ async def test_opportunity_lifecycle(async_client: httpx.AsyncClient):
     # Create another lead to mark lost
     ld2_res = await async_client.post("/api/revenue/v1/leads", json=lead_payload)
     ld2_id = ld2_res.json()["id"]
+    ld2_etag = await _first_call(async_client, ld2_id)
     conv2 = await async_client.post(
-        f"/api/revenue/v1/leads/{ld2_id}/convert",
+        f"/api/revenue/v1/leads/{ld2_id}/qualify",
         json={
             "existing_client_id": convert_res.json()["client"]["id"],
             "opportunity": {
@@ -122,7 +129,7 @@ async def test_opportunity_lifecycle(async_client: httpx.AsyncClient):
                 "expected_close_date": "2026-11-30",
             },
         },
-        headers={"If-Match": ld2_res.headers["ETag"]},
+        headers={"If-Match": ld2_etag},
     )
     opp2_id = conv2.json()["opportunity"]["id"]
     opp2_get = await async_client.get(f"/api/revenue/v1/opportunities/{opp2_id}")
@@ -146,12 +153,14 @@ async def test_quotation_and_contract_workflow(async_client: httpx.AsyncClient, 
         "source": "website",
         "contact_name": "Anil Ambani",
         "consent": {"given": True, "text": "I agree to be contacted about my enquiry.", "channel": "web"},
+        "owner_user_id": str(TEST_USER_ID),
     }
     ld_res = await async_client.post("/api/revenue/v1/leads", json=lead_payload)
     lead_id = ld_res.json()["id"]
+    lead_etag = await _first_call(async_client, lead_id)
 
     conv_res = await async_client.post(
-        f"/api/revenue/v1/leads/{lead_id}/convert",
+        f"/api/revenue/v1/leads/{lead_id}/qualify",
         json={
             "existing_client_id": client_id,
             "opportunity": {
@@ -160,7 +169,7 @@ async def test_quotation_and_contract_workflow(async_client: httpx.AsyncClient, 
                 "expected_close_date": "2026-11-30",
             },
         },
-        headers={"If-Match": ld_res.headers["ETag"]},
+        headers={"If-Match": lead_etag},
     )
     opp_id = conv_res.json()["opportunity"]["id"]
 
@@ -179,6 +188,7 @@ async def test_quotation_and_contract_workflow(async_client: httpx.AsyncClient, 
         ],
         "terms": "50% advance, 50% on completion",
     }
+    await _accepted_proposal(async_client, opp_id)
     q_res = await async_client.post(f"/api/revenue/v1/opportunities/{opp_id}/quotations", json=quote_payload)
     assert q_res.status_code == 201
     quote_data = q_res.json()

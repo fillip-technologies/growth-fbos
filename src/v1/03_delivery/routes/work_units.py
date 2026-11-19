@@ -148,11 +148,13 @@ async def list_work_units(
     limit: int = Query(25, ge=1, le=100),
     cursor: Optional[str] = Query(None),
     sort: Optional[str] = Query(None),
+    top_level: bool = Query(False, description="Projects only: their workstreams show under them"),
+    parent_id: Optional[uuid.UUID] = Query(None, description="One project's workstreams"),
 ) -> PageResponse[WorkUnitResponse]:
     """List work units: only those the caller may see (services/views.py)."""
     return await service.list_work_units(
         session, org_id, status_, owning_unit_id, vertical_id, client_id, manager_user_id, health, q, limit, cursor,
-        view=await project_view(session, actor), contract_id=contract_id,
+        view=await project_view(session, actor), contract_id=contract_id, top_level=top_level, parent_id=parent_id,
     )
 
 
@@ -165,7 +167,10 @@ async def create_work_unit(
     response: Response,
     idempotency_key: Optional[str] = Header(None, alias="Idempotency-Key"),
 ) -> WorkUnitResponse:
-    """Create a work unit, from a template or of a given type."""
+    """
+    Create a work unit, from a template or of a given type: a project, with `workstreams` (one per
+    department or team, each with its own manager), or a workstream of a project (`parent_work_unit_id`).
+    """
     # Starting the template's workflow with it is also operating a workflow.
     if payload.start_workflow and not actor.has(permissions.WORKFLOW_OPERATE):
         raise PermissionDeniedError(permissions.WORKFLOW_OPERATE)

@@ -8,6 +8,8 @@ from exceptions import ValidationFailedError
 from schemas.common import SubjectRefInput
 from schemas.document import (
     DocumentLinkCreate,
+    LinkCopyCreate,
+    LinkCopyResult,
     DocumentLinkResponse,
     DocumentListResponse,
     DocumentResponse,
@@ -93,6 +95,20 @@ async def get_download_url(
         version_no=version_no,
         client_ip=get_client_ip(request),
     )
+
+
+@router.post(
+    "/document-link-copies",
+    response_model=LinkCopyResult,
+    status_code=status.HTTP_201_CREATED,
+    summary="Attach one record's documents to another record too",
+    description=(
+        "E.g. a sale's accepted proposal and quotation onto the project that delivers it. The caller "
+        "must be able to see the source record and attach files to the target; the files are linked, not copied."
+    ),
+)
+async def copy_document_links(data: LinkCopyCreate, session: DatabaseSession, caller: CurrentCaller) -> LinkCopyResult:
+    return await document_service.copy_links_for(session=session, caller=caller, data=data)
 
 
 @router.post(

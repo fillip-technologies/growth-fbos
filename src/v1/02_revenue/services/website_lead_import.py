@@ -3,6 +3,7 @@ Imports sales enquiries from the company website as leads of one organization.
 
 Only new enquiries are imported; a lead already imported is never updated from the website,
 so after import FBOS owns its status (and sends changes back, see website_leads_client).
+Imported leads wait unclaimed until someone who works leads claims one.
 Job applications from the website's careers form are not sales leads and are skipped.
 """
 
@@ -18,7 +19,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from database.session import async_session_factory
 from models.lead import Lead
-from services.lead_service import lead_code, next_lead_number
+from services.lead_service import lead_code, next_lead_number, record_event
 from services.website_leads_client import WEBSITE_LEAD_ID_ATTRIBUTE, WebsiteLead, WebsiteLeadsClient
 
 logger = logging.getLogger("revenue.website_leads")
@@ -49,10 +50,9 @@ def _enquiry_attributes(website_lead: WebsiteLead) -> dict[str, str]:
     return {key: value for key, value in details.items() if value}
 
 
-def build_lead(
-    website_lead: WebsiteLead, organization_id: uuid.UUID, owner_user_id: uuid.UUID, code: str
-) -> Lead:
+def build_lead(website_lead: WebsiteLead, organization_id: uuid.UUID, code: str) -> Lead:
     return Lead(
+        id=uuid.uuid4(),
         organization_id=organization_id,
         name=code,
         contact_name=_clip(website_lead.name, 255),
@@ -60,7 +60,7 @@ def build_lead(
         contact_phone=_clip(website_lead.phone, 50),
         company_name=_clip(website_lead.company, 255),
         source="website",
-        owner_user_id=owner_user_id,
+        owner_user_id=None,
         status=website_lead.fbos_status,
         attributes=_enquiry_attributes(website_lead),
         created_at=website_lead.created_at,
@@ -85,7 +85,6 @@ async def import_new_enquiries(
     session: AsyncSession,
     website_leads: list[WebsiteLead],
     organization_id: uuid.UUID,
-    owner_user_id: uuid.UUID,
 ) -> list[Lead]:
     """Adds the enquiries not imported yet, oldest first; the caller commits."""
     imported_ids = await _imported_website_ids(session, organization_id)
@@ -99,15 +98,19 @@ async def import_new_enquiries(
     # Counted once for the whole batch: the count does not see unflushed leads.
     first_number = await next_lead_number(session, organization_id)
     new_leads = [
-        build_lead(enquiry, organization_id, owner_user_id, lead_code(first_number + offset))
+        build_lead(enquiry, organization_id, lead_code(first_number + offset))
         for offset, enquiry in enumerate(new_enquiries)
     ]
     session.add_all(new_leads)
     await session.flush()
+    # Each starts its history; nobody added it by hand.
+    for lead in new_leads:
+        record_event(session, lead, "created", None, to_status=lead.status, occurred_at=lead.created_at)
+    await session.flush()
     return new_leads
 
 
-async def import_once(client: WebsiteLeadsClient, organization_id: uuid.UUID, owner_user_id: uuid.UUID) -> int:
+async def import_once(client: WebsiteLeadsClient, organization_id: uuid.UUID) -> int:
     """One import run; a failure is logged and left to the next run."""
     try:
         website_leads = await client.fetch_all()
@@ -117,7 +120,7 @@ async def import_once(client: WebsiteLeadsClient, organization_id: uuid.UUID, ow
 
     try:
         async with async_session_factory() as session:
-            new_leads = await import_new_enquiries(session, website_leads, organization_id, owner_user_id)
+            new_leads = await import_new_enquiries(session, website_leads, organization_id)
             await session.commit()
     except SQLAlchemyError as exc:
         logger.warning("Website leads not imported: %s", exc)
@@ -128,11 +131,9 @@ async def import_once(client: WebsiteLeadsClient, organization_id: uuid.UUID, ow
     return len(new_leads)
 
 
-async def run_import_loop(
-    client: WebsiteLeadsClient, organization_id: uuid.UUID, owner_user_id: uuid.UUID, interval_seconds: int
-) -> None:
+async def run_import_loop(client: WebsiteLeadsClient, organization_id: uuid.UUID, interval_seconds: int) -> None:
     while True:
-        await import_once(client, organization_id, owner_user_id)
+        await import_once(client, organization_id)
         await asyncio.sleep(interval_seconds)
 
 
@@ -141,11 +142,7 @@ def _report_stopped_loop(task: asyncio.Task) -> None:
         logger.error("Website lead import stopped", exc_info=task.exception())
 
 
-def start_import_loop(
-    client: WebsiteLeadsClient, organization_id: uuid.UUID, owner_user_id: uuid.UUID, interval_seconds: int
-) -> asyncio.Task:
-    task = asyncio.get_running_loop().create_task(
-        run_import_loop(client, organization_id, owner_user_id, interval_seconds)
-    )
+def start_import_loop(client: WebsiteLeadsClient, organization_id: uuid.UUID, interval_seconds: int) -> asyncio.Task:
+    task = asyncio.get_running_loop().create_task(run_import_loop(client, organization_id, interval_seconds))
     task.add_done_callback(_report_stopped_loop)
     return task

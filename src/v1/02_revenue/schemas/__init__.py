@@ -41,8 +41,8 @@ from schemas.invoice import (
     InvoiceTotals,
 )
 from schemas.lead import (
-    LeadConvertRequest,
-    LeadConvertResult,
+    LeadQualifyRequest,
+    LeadQualifyResult,
     LeadCreate,
     LeadDisqualify,
     LeadResponse,
@@ -94,8 +94,8 @@ __all__ = [
     "LeadCreate",
     "LeadUpdate",
     "LeadDisqualify",
-    "LeadConvertRequest",
-    "LeadConvertResult",
+    "LeadQualifyRequest",
+    "LeadQualifyResult",
     "LeadResponse",
     "OpportunityInput",
     "ClientRef",

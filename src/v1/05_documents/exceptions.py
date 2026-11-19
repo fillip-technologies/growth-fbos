@@ -310,6 +310,17 @@ class SubjectServiceUnavailableError(DocumentsServiceError):
         )
 
 
+class StorageUnavailableError(DocumentsServiceError):
+    """503: The file store refused or couldn't be reached while saving a file."""
+
+    def __init__(self) -> None:
+        super().__init__(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            code="STORAGE_UNAVAILABLE",
+            message="The file could not be saved right now. Try again shortly.",
+        )
+
+
 class DatabaseUnavailableError(DocumentsServiceError):
     """503: The database dropped or refused the connection; a retry gets a fresh one."""
 

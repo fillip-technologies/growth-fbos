@@ -237,3 +237,27 @@ async def test_employees_of_another_organization_are_not_answered(async_client, 
     await make_person(db_session, "Asha")
     await db_session.commit()
     assert (await employees(async_client, organization_id=str(uuid.uuid4())))["data"] == []
+
+
+@pytest.mark.asyncio
+async def test_permission_narrows_to_people_who_hold_it(async_client, db_session, structure):
+    from models.user_permission import UserPermission
+
+    # Asha holds it company-wide, Chetan only for his own records; Gita's grant has ended.
+    gita = await make_person(db_session, "Gita")
+    for person, self_only, valid_to in (
+        (structure["asha"], False, None),
+        (structure["chetan"], True, None),
+        (gita, False, datetime.now(timezone.utc) - timedelta(days=1)),
+    ):
+        db_session.add(UserPermission(
+            organization_id=TEST_ORG_ID, user_id=person.id, permission_code="revenue.lead.write",
+            self_only=self_only, valid_to=valid_to,
+        ))
+    await db_session.commit()
+
+    holders = await names(async_client, permission="revenue.lead.write")
+    assert {"Asha", "Chetan"} <= set(holders)
+    assert not {"Bina", "Farid", "Gita", "Esha"} & set(holders)
+    # With a unit too: only holders who work there.
+    assert await names(async_client, unit_id=structure["ops"], permission="revenue.lead.write") == ["Chetan"]

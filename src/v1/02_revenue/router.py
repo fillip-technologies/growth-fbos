@@ -14,6 +14,8 @@ from routes.leads import router as leads_router
 from routes.offerings import router as offerings_router
 from routes.opportunities import router as opportunities_router
 from routes.payments import router as payments_router
+from routes.proposals import opportunity_router as opportunity_proposals_router
+from routes.proposals import router as proposals_router
 from routes.quotations import router as quotations_router
 from routes.receivables import router as receivables_router
 from routes.summaries import router as summaries_router
@@ -34,6 +36,8 @@ core_router.include_router(client_services_router)
 core_router.include_router(offerings_router)
 core_router.include_router(leads_router)
 core_router.include_router(opportunities_router)
+core_router.include_router(opportunity_proposals_router)
+core_router.include_router(proposals_router)
 core_router.include_router(quotations_router)
 core_router.include_router(contracts_router)
 core_router.include_router(activities_router)

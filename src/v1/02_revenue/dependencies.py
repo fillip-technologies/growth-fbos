@@ -42,6 +42,7 @@ async def get_actor(
 CurrentActor = Annotated[Actor, Depends(get_actor)]
 Authorization = Annotated[str, Depends(get_authorization)]
 Documents = Annotated[DocumentsClient, Depends(get_documents_client)]
+Identity = Annotated[IdentityClient, Depends(get_identity_client)]
 
 
 def verify_internal_caller(x_fbos_internal_token: Optional[str] = Header(None, alias="X-FBOS-Internal-Token")) -> None:
@@ -96,6 +97,7 @@ __all__ = [
     "CurrentActor",
     "Authorization",
     "Documents",
+    "Identity",
     "verify_internal_caller",
     "OrgId",
     "UserId",

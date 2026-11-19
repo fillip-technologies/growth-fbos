@@ -14,8 +14,9 @@ import uuid
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from exceptions import ContractNotFoundError, PermissionDeniedError, SubjectLockedError, SubjectNotFoundError
+from exceptions import ContractNotFoundError, PermissionDeniedError, ProposalNotFoundError, SubjectLockedError, SubjectNotFoundError
 from models.contract import Contract
+from models.proposal import Proposal
 from schemas.subject_access import SubjectAccessResponse
 from services.identity_client import Actor
 from services.quotation_service import get_quote_in_org
@@ -52,7 +53,23 @@ async def _load_contract(session: AsyncSession, org_id: uuid.UUID, contract_id: 
     return LoadedSubject(status=contract.status, label=contract.contract_no)
 
 
+async def _load_proposal(session: AsyncSession, org_id: uuid.UUID, proposal_id: uuid.UUID) -> LoadedSubject:
+    proposal = (
+        await session.execute(select(Proposal).where(Proposal.id == proposal_id, Proposal.organization_id == org_id))
+    ).scalar_one_or_none()
+    if not proposal:
+        raise ProposalNotFoundError(str(proposal_id))
+    return LoadedSubject(status=proposal.status, label=f"Proposal {proposal.proposal_no} v{proposal.version_no}")
+
+
 SUBJECT_RULES: dict[str, SubjectRule] = {
+    "revenue.proposal": SubjectRule(
+        read_permission="revenue.opportunity.read",
+        attach_permission="revenue.opportunity.write",
+        # Its PDF is stored when it is sent; once answered or replaced it keeps what it has.
+        closed_statuses=frozenset({"accepted", "rejected", "superseded"}),
+        load=_load_proposal,
+    ),
     "revenue.quotation": SubjectRule(
         read_permission="revenue.opportunity.read",
         attach_permission="revenue.opportunity.write",

@@ -24,7 +24,8 @@ class MonthAmount(BaseModel):
 
 
 class OwnerCount(BaseModel):
-    user_id: uuid.UUID
+    # None: open leads nobody has claimed yet.
+    user_id: Optional[uuid.UUID] = None
     count: int
 
 

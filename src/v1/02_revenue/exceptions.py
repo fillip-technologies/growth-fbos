@@ -515,3 +515,183 @@ class ContractNotEmailableError(RevenueServiceError):
             f"A contract that is {current_status.replace('_', ' ')} can't be emailed to the customer.",
             meta={"status": current_status},
         )
+
+
+class LeadAlreadyClaimedError(RevenueServiceError):
+    """409: Someone else claimed the lead first."""
+
+    def __init__(self, owner_user_id: uuid.UUID) -> None:
+        super().__init__(
+            status.HTTP_409_CONFLICT,
+            "LEAD_ALREADY_CLAIMED",
+            "Someone else has already claimed this lead.",
+            meta={"owner_user_id": str(owner_user_id)},
+        )
+
+
+class LeadNotClaimedError(RevenueServiceError):
+    """409: The lead needs someone handling it before this can be done."""
+
+    def __init__(self) -> None:
+        super().__init__(
+            status.HTTP_409_CONFLICT,
+            "LEAD_NOT_CLAIMED",
+            "Claim this lead first: it has nobody handling its sales outreach.",
+        )
+
+
+class NotLeadOwnerError(RevenueServiceError):
+    """403: Only the person handling the lead, or someone who may assign leads, may do this."""
+
+    def __init__(self) -> None:
+        super().__init__(
+            status.HTTP_403_FORBIDDEN,
+            "NOT_LEAD_OWNER",
+            "Only the person handling this lead, or a sales manager, can do this.",
+            meta={"required_permission": "revenue.lead.assign"},
+        )
+
+
+class LeadAssigneeNotAllowedError(RevenueServiceError):
+    """422: The person can't be given leads: inactive, or without lead write access."""
+
+    def __init__(self, user_id: uuid.UUID) -> None:
+        super().__init__(
+            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            "LEAD_ASSIGNEE_NOT_ALLOWED",
+            "This person can't take leads: they need to be active and allowed to work leads.",
+            meta={"user_id": str(user_id)},
+        )
+
+
+class LeadCallRequiredError(RevenueServiceError):
+    """409: A lead is qualified only after a call with them was logged."""
+
+    def __init__(self) -> None:
+        super().__init__(
+            status.HTTP_409_CONFLICT,
+            "LEAD_CALL_REQUIRED",
+            "Log a call with this lead before qualifying it.",
+        )
+
+
+class LeadReopenNotAllowedError(RevenueServiceError):
+    """409: A lead that was qualified (it has a customer and an opportunity) can't be reopened."""
+
+    def __init__(self) -> None:
+        super().__init__(
+            status.HTTP_409_CONFLICT,
+            "LEAD_REOPEN_NOT_ALLOWED",
+            "This lead was qualified before it was disqualified, so it can't be reopened. Open a new opportunity on its customer instead.",
+        )
+
+
+class PeopleUnavailableError(RevenueServiceError):
+    """503: Identity could not say who may take leads."""
+
+    def __init__(self) -> None:
+        super().__init__(
+            status.HTTP_503_SERVICE_UNAVAILABLE,
+            "PEOPLE_UNAVAILABLE",
+            "Who can take leads could not be checked right now. Try again shortly.",
+        )
+
+
+class ProposalNotFoundError(RevenueServiceError):
+    """404: Proposal not found in this organization."""
+
+    def __init__(self, proposal_id: Optional[str] = None) -> None:
+        message = f"Proposal '{proposal_id}' not found" if proposal_id else "Proposal not found"
+        super().__init__(status.HTTP_404_NOT_FOUND, "PROPOSAL_NOT_FOUND", message)
+
+
+class ProposalAlreadyOpenError(RevenueServiceError):
+    """409: The opportunity already has a proposal being worked on; revise that one instead."""
+
+    def __init__(self, proposal_id: uuid.UUID, proposal_no: str) -> None:
+        super().__init__(
+            status.HTTP_409_CONFLICT,
+            "PROPOSAL_ALREADY_OPEN",
+            f"Proposal {proposal_no} is still open on this opportunity. Revise it instead of starting another.",
+            meta={"proposal_id": str(proposal_id)},
+        )
+
+
+class ProposalFrozenError(RevenueServiceError):
+    """409: Only a draft proposal changes; a sent one is revised into a new version."""
+
+    def __init__(self, current_status: str) -> None:
+        super().__init__(
+            status.HTTP_409_CONFLICT,
+            "PROPOSAL_FROZEN",
+            f"A proposal that is {current_status.replace('_', ' ')} can't be changed. Revise it to make a new version.",
+            meta={"status": current_status},
+        )
+
+
+class ProposalNotEmailableError(RevenueServiceError):
+    """409: A replaced or rejected proposal doesn't go to the customer."""
+
+    def __init__(self, current_status: str) -> None:
+        super().__init__(
+            status.HTTP_409_CONFLICT,
+            "PROPOSAL_NOT_EMAILABLE",
+            f"A proposal that is {current_status.replace('_', ' ')} can't be emailed to the customer.",
+            meta={"status": current_status},
+        )
+
+
+class ProposalEmptyError(RevenueServiceError):
+    """422: A proposal goes to the customer with something in it: a scope or a service."""
+
+    def __init__(self) -> None:
+        super().__init__(
+            status.HTTP_422_UNPROCESSABLE_CONTENT,
+            "PROPOSAL_EMPTY",
+            "Add the scope of work or at least one service before sending the proposal.",
+        )
+
+
+class ProposalRequiredError(RevenueServiceError):
+    """409: A sale that started from a lead is quoted from its accepted proposal."""
+
+    def __init__(self) -> None:
+        super().__init__(
+            status.HTTP_409_CONFLICT,
+            "PROPOSAL_REQUIRED",
+            "This opportunity came from a lead: the customer accepts a proposal first, and the quotation is made from it.",
+        )
+
+
+class QuotationApprovalRequiredError(RevenueServiceError):
+    """409: A discount over the limit is approved before the quotation goes to the customer."""
+
+    def __init__(self) -> None:
+        super().__init__(
+            status.HTTP_409_CONFLICT,
+            "QUOTATION_APPROVAL_REQUIRED",
+            "This quotation's discount is over 20%, so it needs approval before it goes to the customer. Send it for approval first.",
+        )
+
+
+class ProposalAlreadyQuotedError(RevenueServiceError):
+    """409: The accepted proposal already has its quotation; work on that one."""
+
+    def __init__(self, quotation_id: uuid.UUID) -> None:
+        super().__init__(
+            status.HTTP_409_CONFLICT,
+            "PROPOSAL_ALREADY_QUOTED",
+            "A quotation was already made from this proposal.",
+            meta={"quotation_id": str(quotation_id)},
+        )
+
+
+class ProposalHasNoServicesError(RevenueServiceError):
+    """422: An accepted proposal without services has nothing to copy into a quotation."""
+
+    def __init__(self) -> None:
+        super().__init__(
+            status.HTTP_422_UNPROCESSABLE_CONTENT,
+            "PROPOSAL_HAS_NO_SERVICES",
+            "The proposal lists no services to copy. Add a quotation with its items on the opportunity instead.",
+        )

@@ -151,8 +151,30 @@ def summary(what: str, data: CustomerEmailCreate, files: list[EmailedFile]) -> s
     return text
 
 
-def event_data(data: CustomerEmailCreate, files: list[EmailedFile]) -> dict:
-    return {
+def event_data(
+    data: CustomerEmailCreate,
+    files: list[EmailedFile],
+    sent: dict | None = None,
+    sent_by: str | None = None,
+    pdf: dict | None = None,
+) -> dict:
+    """
+    What the history keeps of an email: who it went to, what it said, the files, and with
+    `sent` who it went out as and the mail server's message id; `pdf` is the generated
+    document that went with it (its document id, version and file name).
+    """
+    recorded = {
         "to": data.to, "cc": data.cc, "bcc": data.bcc, "subject": data.subject,
         "files": [f.file_name for f in files],
     }
+    if sent is not None:
+        recorded |= {
+            "message": data.message,
+            "from_address": sent.get("from_address"),
+            "from_name": sent.get("from_name"),
+            "message_id": sent.get("message_id"),
+            "sent_by": sent_by,
+        }
+    if pdf is not None:
+        recorded["pdf"] = pdf
+    return recorded

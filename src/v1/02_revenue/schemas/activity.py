@@ -1,5 +1,5 @@
 import uuid
-from datetime import datetime
+from datetime import date, datetime
 from typing import Literal, Optional
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -72,3 +72,8 @@ class ActivityResponse(BaseModel):
     owner: UserRef
     # Logged from another service's record (a finished task) rather than typed in.
     source: Optional[ActivitySource] = None
+    # A call's details (logged on a lead), or a follow-up on any activity.
+    requirements: Optional[str] = None
+    expectations: Optional[str] = None
+    next_action: Optional[str] = None
+    follow_up_on: Optional[date] = None

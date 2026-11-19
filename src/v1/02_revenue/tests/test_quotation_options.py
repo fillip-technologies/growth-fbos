@@ -6,12 +6,13 @@ import pytest
 from exceptions import DocumentsServiceUnavailableError
 from dependencies import get_documents_client
 from main import app
-from tests.test_sales_flow import BASE, _act, _converted_lead, _offering, _quotation, _sent_quotation
+from tests.test_sales_flow import _accepted_proposal, BASE, _act, _qualified_lead, _offering, _quotation, _sent_quotation
 
 pytestmark = pytest.mark.asyncio
 
 
 async def _option(client: httpx.AsyncClient, opportunity_id: str, name: str, price: float = 100000.0) -> dict:
+    await _accepted_proposal(client, opportunity_id)
     res = await client.post(
         f"{BASE}/opportunities/{opportunity_id}/quotations",
         json={
@@ -38,7 +39,7 @@ async def _expected_value(client: httpx.AsyncClient, opportunity_id: str) -> flo
 
 
 async def test_first_option_is_main_and_sets_the_expected_value(async_client):
-    converted = await _converted_lead(async_client)
+    converted = await _qualified_lead(async_client)
     opportunity_id = converted["opportunity"]["id"]
 
     basic = await _option(async_client, opportunity_id, "Option A - Basic", 50000)
@@ -51,7 +52,7 @@ async def test_first_option_is_main_and_sets_the_expected_value(async_client):
 
 
 async def test_making_another_option_main_moves_the_expected_value(async_client):
-    converted = await _converted_lead(async_client)
+    converted = await _qualified_lead(async_client)
     opportunity_id = converted["opportunity"]["id"]
     basic = await _option(async_client, opportunity_id, "Basic", 50000)
     premium = await _option(async_client, opportunity_id, "Premium", 90000)
@@ -67,7 +68,7 @@ async def test_making_another_option_main_moves_the_expected_value(async_client)
 
 
 async def test_rename_and_clear_the_name(async_client):
-    converted = await _converted_lead(async_client)
+    converted = await _qualified_lead(async_client)
     quote = await _option(async_client, converted["opportunity"]["id"], "Old")
 
     renamed = await _patch(async_client, quote, {"name": "  New  "})
@@ -80,7 +81,7 @@ async def test_rename_and_clear_the_name(async_client):
 
 
 async def test_a_closed_quotation_cannot_be_made_main(async_client):
-    converted = await _converted_lead(async_client)
+    converted = await _qualified_lead(async_client)
     opportunity_id = converted["opportunity"]["id"]
     await _option(async_client, opportunity_id, "A")
     other = await _option(async_client, opportunity_id, "B")
@@ -93,7 +94,7 @@ async def test_a_closed_quotation_cannot_be_made_main(async_client):
 
 
 async def test_accepting_one_option_closes_the_others(async_client):
-    converted = await _converted_lead(async_client)
+    converted = await _qualified_lead(async_client)
     opportunity_id = converted["opportunity"]["id"]
     basic = await _option(async_client, opportunity_id, "Basic", 50000)
     premium = await _option(async_client, opportunity_id, "Premium", 90000)
@@ -114,7 +115,7 @@ async def test_accepting_one_option_closes_the_others(async_client):
 
 
 async def test_no_new_quotation_once_the_opportunity_is_won(async_client):
-    converted = await _converted_lead(async_client)
+    converted = await _qualified_lead(async_client)
     opportunity_id = converted["opportunity"]["id"]
     quote = await _sent_quotation(async_client, opportunity_id)
     await _act(async_client, quote, "accept")
@@ -124,7 +125,7 @@ async def test_no_new_quotation_once_the_opportunity_is_won(async_client):
 
 
 async def test_a_revision_keeps_the_name_and_main(async_client):
-    converted = await _converted_lead(async_client)
+    converted = await _qualified_lead(async_client)
     opportunity_id = converted["opportunity"]["id"]
     quote = await _option(async_client, opportunity_id, "Option A")
     quote = (await _act(async_client, quote, "send")).json()
@@ -135,7 +136,7 @@ async def test_a_revision_keeps_the_name_and_main(async_client):
 
 
 async def test_duplicate_copies_lines_terms_and_files(async_client, fake_documents):
-    converted = await _converted_lead(async_client)
+    converted = await _qualified_lead(async_client)
     opportunity_id = converted["opportunity"]["id"]
     source = await _quotation(async_client, opportunity_id, discount_pct=10)
 
@@ -158,8 +159,8 @@ async def test_duplicate_copies_lines_terms_and_files(async_client, fake_documen
 
 
 async def test_duplicate_only_from_the_same_opportunity(async_client):
-    first = await _converted_lead(async_client)
-    second = await _converted_lead(async_client)
+    first = await _qualified_lead(async_client)
+    second = await _qualified_lead(async_client)
     source = await _quotation(async_client, first["opportunity"]["id"])
 
     res = await async_client.post(f"{BASE}/opportunities/{second['opportunity']['id']}/quotations", json={"copy_from": source["id"]})
@@ -167,13 +168,13 @@ async def test_duplicate_only_from_the_same_opportunity(async_client):
 
 
 async def test_new_quotation_without_copy_needs_lines_and_date(async_client):
-    converted = await _converted_lead(async_client)
+    converted = await _qualified_lead(async_client)
     res = await async_client.post(f"{BASE}/opportunities/{converted['opportunity']['id']}/quotations", json={"name": "x"})
     assert res.status_code == 422
 
 
 async def test_copy_is_not_made_when_documents_are_unreachable(async_client, db_session):
-    converted = await _converted_lead(async_client)
+    converted = await _qualified_lead(async_client)
     opportunity_id = converted["opportunity"]["id"]
     source = await _quotation(async_client, opportunity_id)
 

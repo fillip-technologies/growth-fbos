@@ -64,15 +64,36 @@ async def test_assigning_a_lead_tells_the_new_owner(async_client, sent):
 
 
 async def test_nobody_is_told_about_their_own_action(async_client, sent):
+    # Adding a lead you handle yourself, and passing one to yourself, tell nobody.
     lead = await _create_lead(async_client, TEST_USER_ID)
-    res = await async_client.patch(
-        f"{BASE}/leads/{lead['id']}",
-        json={"status": "contacted"},
-        headers={"If-Match": f'"{lead["version"]}"'},
+    released = await async_client.post(
+        f"{BASE}/leads/{lead['id']}/transfer", json={"reason": "Back to the pool"}, headers={"If-Match": f'"{lead["version"]}"'}
+    )
+    assert released.status_code == 200, released.text
+    res = await async_client.post(
+        f"{BASE}/leads/{lead['id']}/transfer",
+        json={"to_user_id": str(TEST_USER_ID), "reason": "Taking it back"},
+        headers={"If-Match": released.headers["ETag"]},
     )
     assert res.status_code == 200, res.text
     await notification_client.drain()
     assert sent == []
+
+
+async def test_passing_a_lead_on_tells_the_new_owner(async_client, sent):
+    lead = await _create_lead(async_client, TEST_USER_ID)
+    colleague = uuid.uuid4()
+    res = await async_client.post(
+        f"{BASE}/leads/{lead['id']}/transfer",
+        json={"to_user_id": str(colleague), "reason": "On leave next week"},
+        headers={"If-Match": f'"{lead["version"]}"'},
+    )
+    assert res.status_code == 200, res.text
+    await notification_client.drain()
+
+    [notification] = sent
+    assert notification["recipient_user_ids"] == [str(colleague)]
+    assert notification["event_type"] == "revenue.lead.assigned.v1"
 
 
 async def test_reassigning_a_customer_tells_the_new_owner(async_client, sent):
