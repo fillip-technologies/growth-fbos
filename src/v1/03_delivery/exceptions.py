@@ -805,3 +805,60 @@ class SubjectLockedError(DeliveryServiceError):
             f"A {current_status} {subject_type.split('.')[-1]} no longer accepts documents.",
             meta={"status": current_status},
         )
+
+
+# --- Boards ------------------------------------------------------------------
+
+
+class BoardNotFoundError(DeliveryServiceError):
+    def __init__(self, board_id: Optional[str] = None) -> None:
+        message = f"Board '{board_id}' not found" if board_id is not None else "Board not found"
+        super().__init__(status.HTTP_404_NOT_FOUND, "BOARD_NOT_FOUND", message)
+
+
+class BoardColumnNotFoundError(DeliveryServiceError):
+    def __init__(self, column_id: Optional[str] = None) -> None:
+        message = f"Column '{column_id}' is not on this board" if column_id is not None else "Column not found"
+        super().__init__(status.HTTP_404_NOT_FOUND, "BOARD_COLUMN_NOT_FOUND", message)
+
+
+class BoardMoveNotAllowedError(DeliveryServiceError):
+    """409: No step of the task's status rules takes it to the column it was dropped on."""
+
+    def __init__(self, from_status: str, to_statuses: list[str]) -> None:
+        super().__init__(
+            status.HTTP_409_CONFLICT,
+            "BOARD_MOVE_NOT_ALLOWED",
+            "This task can't move to that column from where it is now.",
+            meta={"from_status": from_status, "to_statuses": to_statuses},
+        )
+
+
+class BoardMoveNeedsInputError(DeliveryServiceError):
+    """409: The step to that column asks for more first (submit, block, review): nothing changed."""
+
+    def __init__(self, kind: str) -> None:
+        super().__init__(
+            status.HTTP_409_CONFLICT,
+            "BOARD_MOVE_NEEDS_INPUT",
+            "Moving this task there needs a few details first.",
+            meta={"needs_input": kind},
+        )
+
+
+class ColumnTakesNoNewTasksError(DeliveryServiceError):
+    """422: New tasks start open or assigned; a column holding neither can't take one."""
+
+    def __init__(self) -> None:
+        super().__init__(
+            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            "COLUMN_TAKES_NO_NEW_TASKS",
+            "New tasks can only be added to a column for work that hasn't started.",
+        )
+
+
+class LastBoardColumnError(DeliveryServiceError):
+    """409: A board keeps at least one column."""
+
+    def __init__(self) -> None:
+        super().__init__(status.HTTP_409_CONFLICT, "LAST_BOARD_COLUMN", "A board needs at least one column.")

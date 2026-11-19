@@ -1,4 +1,5 @@
 from models.assignment_policy import AssignmentPolicy
+from models.board import Board, BoardColumn, BoardItem
 from models.code_sequence import CodeSequence
 from models.control_register import ChangeRequest, Closure, Issue, Risk
 from models.delivery import Deliverable, Milestone, Phase, WorkDependency, WorkPackage
@@ -23,6 +24,9 @@ from models.work_unit_tracking import Baseline, ProgressSnapshot, StatusHistory
 
 __all__ = [
     "AssignmentPolicy",
+    "Board",
+    "BoardColumn",
+    "BoardItem",
     "CodeSequence",
     "DeliverySettings",
     "OutboxEvent",
