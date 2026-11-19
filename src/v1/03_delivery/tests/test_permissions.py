@@ -150,6 +150,11 @@ async def test_every_route_is_guarded_unless_meant_to_be_open():
         ("put", f"/task-types/{uuid.uuid4()}/workflow", permissions.TEMPLATE_MANAGE),
         ("get", f"/tasks/{uuid.uuid4()}/transitions", permissions.TASK_READ),
         ("get", "/summaries/delivery?from=2026-11-01&to=2026-11-30", permissions.SUMMARY_READ),
+        ("get", f"/boards?work_unit_id={uuid.uuid4()}", permissions.TASK_READ),
+        ("get", f"/boards/{uuid.uuid4()}", permissions.TASK_READ),
+        ("put", f"/boards/{uuid.uuid4()}/items/{uuid.uuid4()}", permissions.TASK_READ),
+        ("post", f"/boards/{uuid.uuid4()}/columns", permissions.TASK_READ),
+        ("post", f"/boards/{uuid.uuid4()}/columns/{uuid.uuid4()}/items", permissions.TASK_WRITE),
     ],
 )
 async def test_missing_permission_is_refused(client_as, method, path, required_permission):
