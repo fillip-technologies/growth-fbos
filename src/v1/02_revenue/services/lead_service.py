@@ -41,7 +41,7 @@ from schemas.lead import (
 )
 from schemas.opportunity import UserRef, VerticalRef
 from services.activity_service import format_activity_response
-from services.call_tasks import TASK_SOURCE, DeliveryCaller, logged_from_task, tasks_for_call
+from services.activity_tasks import ActivityForTask, DeliveryCaller, activity_row, due_at, tasks_for_activity
 from services.client_service import ClientService
 from services.identity_client import Actor, IdentityClient
 from services.opportunity_service import format_opportunity_detail
@@ -435,7 +435,7 @@ class LeadService:
         """
         A call with the lead, on its timeline as a new entry (nothing is overwritten). Its
         follow-up date becomes the lead's next follow-up; the first call moves a new lead to
-        contacted, in the same transaction. Delivery keeps its task first (services/call_tasks.py):
+        contacted, in the same transaction. Delivery keeps its task first (services/activity_tasks.py):
         a task of the caller's it finishes, or a new one already done, and the follow-up task;
         the call names that task as its source.
         """
@@ -444,12 +444,20 @@ class LeadService:
             raise InvalidStateTransitionError(lead.status, "log a call")
         _ensure_claimed_and_workable(actor, lead)
 
-        tasks = await tasks_for_call(delivery, org_id, lead, payload)
+        # Who the call was with: the contact, else the company, else the lead's number.
+        who = lead.contact_name or lead.company_name or lead.name
+        call = ActivityForTask(
+            subject_type=LEAD_SUBJECT,
+            subject_id=lead.id,
+            activity_type="call",
+            title=f"Call with {who}"[:255],
+            summary=payload.summary,
+            follow_up_at=due_at(payload.follow_up_on) if payload.follow_up_on else None,
+            follow_up_title=_clean(payload.next_action) or f"Follow up with {who}",
+        )
+        tasks = await tasks_for_activity(delivery, org_id, call, payload.task)
         occurred_at = _naive_utc(payload.occurred_at) if payload.occurred_at else now_utc()
-        activity = await logged_from_task(session, org_id, tasks.task.id) if tasks.task else None
-        if activity is None:
-            activity = Activity(organization_id=org_id, subject_type=LEAD_SUBJECT, subject_id=lead.id)
-            session.add(activity)
+        activity = await activity_row(session, org_id, LEAD_SUBJECT, lead.id, tasks)
         activity.activity_type = "call"
         activity.owner_user_id = actor.user_id
         activity.occurred_at = occurred_at
@@ -458,8 +466,6 @@ class LeadService:
         activity.expectations = _clean(payload.expectations)
         activity.next_action = _clean(payload.next_action)
         activity.follow_up_on = payload.follow_up_on
-        if tasks.task:
-            activity.source_type, activity.source_id = TASK_SOURCE, tasks.task.id
         lead.next_follow_up_on = payload.follow_up_on
         if lead.status == "new":
             lead.status = "contacted"

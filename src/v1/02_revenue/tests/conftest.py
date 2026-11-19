@@ -111,7 +111,7 @@ class FakeDelivery:
         return CallTasks(task=task, follow_up_task=follow_up)
 
     async def record_task(self, authorization, organization_id, subject, title, completion=None, due_at=None, task_type_code="call"):
-        self.recorded.append({"subject": subject, "title": title, "completion": completion, "due_at": due_at})
+        self.recorded.append({"subject": subject, "title": title, "completion": completion, "due_at": due_at, "task_type_code": task_type_code})
         return self._answer(title, completion)
 
     async def complete_task(self, authorization, organization_id, task_id, subject, completion):

@@ -1,8 +1,9 @@
 import uuid
 from datetime import date, datetime
 from typing import Literal, Optional
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field
 
+from schemas.activity import ActivityTaskChoice, ActivityTaskRef
 from schemas.client import ClientCreate, ClientResponse
 from schemas.common import Consent, Money, PastDate
 from schemas.opportunity import OpportunityDetailResponse, UserRef, VerticalRef
@@ -42,31 +43,9 @@ class LeadTransfer(BaseModel):
     reason: str = Field(..., min_length=1, max_length=1000)
 
 
-class LeadCallTask(BaseModel):
-    """
-    The task behind the call, kept by delivery: `record` makes it a new task of yours, already
-    done; `complete` finishes one of your open tasks about the lead (`task_id`); `none` keeps no
-    task. `follow_up` adds an open task for the follow-up date, when the call has one.
-    """
-
-    mode: Literal["record", "complete", "none"] = "record"
-    task_id: Optional[uuid.UUID] = None
-    follow_up: bool = True
-
-    @model_validator(mode="after")
-    def _task_to_complete(self) -> "LeadCallTask":
-        if self.mode == "complete" and self.task_id is None:
-            raise ValueError("Choose the task this call completes")
-        return self
-
-
-class LeadCallTaskRef(BaseModel):
-    """A delivery task the call finished or created."""
-
-    id: uuid.UUID
-    code: str
-    title: str
-    status: str
+# The call's task and the task it finished or made: the same as any activity's.
+LeadCallTask = ActivityTaskChoice
+LeadCallTaskRef = ActivityTaskRef
 
 
 class LeadCallCreate(BaseModel):
@@ -78,7 +57,7 @@ class LeadCallCreate(BaseModel):
     expectations: Optional[str] = Field(None, max_length=10000, description="The customer's interests and expectations")
     next_action: Optional[str] = Field(None, max_length=2000)
     follow_up_on: Optional[date] = None
-    task: LeadCallTask = Field(default_factory=LeadCallTask)
+    task: ActivityTaskChoice = Field(default_factory=ActivityTaskChoice)
 
 
 class LeadDisqualify(BaseModel):

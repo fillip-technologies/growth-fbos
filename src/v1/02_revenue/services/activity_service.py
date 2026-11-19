@@ -17,6 +17,7 @@ from models.contract import Contract
 from models.lead import Lead
 from models.opportunity import Opportunity
 from schemas.activity import (
+    ActivityLogged,
     ActivityCreate,
     ActivityResponse,
     ActivitySource,
@@ -25,6 +26,16 @@ from schemas.activity import (
 )
 from schemas.common import PageMeta, PageResponse, decode_cursor, encode_cursor
 from schemas.opportunity import UserRef
+from services.activity_tasks import (
+    ActivityForTask,
+    ActivityTaskResult,
+    DeliveryCaller,
+    activity_row,
+    activity_title,
+    has_tasks,
+    summary_line,
+    tasks_for_activity,
+)
 
 
 def format_activity_response(act: Activity) -> ActivityResponse:
@@ -109,24 +120,39 @@ class ActivityService:
         org_id: uuid.UUID,
         user_id: uuid.UUID,
         payload: ActivityCreate,
-    ) -> ActivityResponse:
-        activity = Activity(
-            organization_id=org_id,
-            subject_type=payload.subject.type,
-            subject_id=payload.subject.id,
-            activity_type=payload.activity_type,
-            owner_user_id=user_id,
-            occurred_at=_naive_utc(payload.occurred_at),
-            summary=payload.summary,
-            outcome=payload.outcome,
-        )
+        delivery: DeliveryCaller,
+    ) -> ActivityLogged:
+        """
+        An activity on a record's timeline. On a lead, opportunity or contract delivery keeps its
+        task first (services/activity_tasks.py): one of the caller's tasks it finishes, or a new
+        one already done, and the follow-up task; the activity names that task as its source.
+        """
+        tasks = ActivityTaskResult()
+        if has_tasks(payload.subject.type):
+            about = ActivityForTask(
+                subject_type=payload.subject.type,
+                subject_id=payload.subject.id,
+                activity_type=payload.activity_type,
+                title=activity_title(payload.activity_type, summary_line(payload.summary)),
+                summary=payload.summary,
+                follow_up_at=payload.follow_up.due_at if payload.follow_up else None,
+                follow_up_title=payload.follow_up.title if payload.follow_up else None,
+            )
+            tasks = await tasks_for_activity(delivery, org_id, about, payload.task)
+        activity = await activity_row(session, org_id, payload.subject.type, payload.subject.id, tasks)
+        activity.activity_type = payload.activity_type
+        activity.owner_user_id = user_id
+        activity.occurred_at = _naive_utc(payload.occurred_at)
+        activity.summary = payload.summary
+        activity.outcome = payload.outcome
         # The follow-up is kept on the activity: what to do next, and by when.
         if payload.follow_up:
             activity.next_action = payload.follow_up.title
             activity.follow_up_on = _naive_utc(payload.follow_up.due_at).date()
-        session.add(activity)
         await session.flush()
-        return format_activity_response(activity)
+        return ActivityLogged(
+            **format_activity_response(activity).model_dump(), task=tasks.task, follow_up_task=tasks.follow_up_task,
+        )
 
 
 async def log_from_source(session: AsyncSession, data: InternalActivityCreate) -> tuple[ActivityResponse, bool]:

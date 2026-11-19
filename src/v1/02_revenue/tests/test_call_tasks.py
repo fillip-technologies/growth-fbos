@@ -1,5 +1,5 @@
 """
-The tasks behind a call on a lead (services/call_tasks.py): by default the call is recorded as a
+The tasks behind a call on a lead (services/activity_tasks.py): by default the call is recorded as a
 done task of the caller's; it can finish one of their open tasks about the lead instead, or keep
 none. A follow-up date adds a follow-up task. Delivery is asked first, so its refusal saves nothing.
 """
@@ -123,6 +123,67 @@ async def test_a_call_fills_in_the_activity_delivery_already_logged_for_its_task
 
 
 async def test_follow_up_due_is_midday_utc_on_the_day():
-    from services.call_tasks import due_at
+    from services.activity_tasks import due_at
 
     assert due_at(date(2026, 12, 1)) == datetime(2026, 12, 1, 12, tzinfo=timezone.utc)
+
+
+# --- Any activity on a lead, opportunity or contract ------------------------------
+
+
+def _activity(subject_type: str, subject_id: str, **fields) -> dict:
+    return {
+        "subject": {"type": subject_type, "id": subject_id}, "activity_type": "meeting",
+        "occurred_at": "2026-11-19T10:00:00Z", "summary": "Walked them through the demo\nThey liked it", **fields,
+    }
+
+
+async def test_a_meeting_on_an_opportunity_is_recorded_as_a_done_meeting_task(async_client, fake_delivery):
+    opportunity_id = str(uuid.uuid4())
+    res = await async_client.post(f"{BASE}/activities", json=_activity("commercial.opportunity", opportunity_id))
+    assert res.status_code == 201, res.text
+    [asked] = fake_delivery.recorded
+    assert (asked["subject"].type, str(asked["subject"].id)) == ("revenue.opportunity", opportunity_id)
+    assert asked["title"] == "Meeting: Walked them through the demo"
+    assert asked["task_type_code"] == "meeting"
+    body = res.json()
+    assert body["task"]["status"] == "done" and body["source"] == {"type": "task.task", "id": body["task"]["id"]}
+
+
+async def test_an_activitys_follow_up_becomes_a_follow_up_task(async_client, fake_delivery):
+    res = await async_client.post(f"{BASE}/activities", json=_activity(
+        "commercial.contract", str(uuid.uuid4()), activity_type="email",
+        follow_up={"title": "Chase the signed copy", "due_at": "2026-11-25T12:00:00Z"},
+    ))
+    completion = fake_delivery.recorded[0]["completion"]
+    assert completion.follow_up_title == "Chase the signed copy"
+    assert res.json()["follow_up_task"]["title"] == "Chase the signed copy"
+    assert res.json()["next_action"] == "Chase the signed copy"
+
+
+async def test_an_activity_can_finish_a_task_or_keep_none(async_client, fake_delivery):
+    lead_id = str(uuid.uuid4())
+    planned = uuid.uuid4()
+    res = await async_client.post(f"{BASE}/activities", json=_activity(
+        "commercial.lead", lead_id, activity_type="whatsapp", task={"mode": "complete", "task_id": str(planned)},
+    ))
+    assert res.json()["task"]["id"] == str(planned) and fake_delivery.completed[0]["task_id"] == planned
+
+    res = await async_client.post(f"{BASE}/activities", json=_activity("commercial.lead", lead_id, task={"mode": "none"}))
+    assert res.status_code == 201 and res.json()["task"] is None and res.json()["source"] is None
+    assert fake_delivery.recorded == []
+
+
+async def test_records_delivery_keeps_no_tasks_about_log_without_one(async_client, fake_delivery):
+    res = await async_client.post(f"{BASE}/activities", json=_activity("commercial.client", str(uuid.uuid4())))
+    assert res.status_code == 201, res.text
+    assert (fake_delivery.recorded, res.json()["task"]) == ([], None)
+
+
+async def test_when_delivery_refuses_the_activity_is_not_saved(async_client, fake_delivery, db_session):
+    fake_delivery.refusal = DeliveryServiceUnavailableError()
+    opportunity_id = uuid.uuid4()
+    res = await async_client.post(f"{BASE}/activities", json=_activity("commercial.opportunity", str(opportunity_id)))
+    assert res.status_code == 503
+    rows = (await db_session.execute(select(Activity).where(Activity.subject_id == opportunity_id))).scalars().all()
+    assert rows == []

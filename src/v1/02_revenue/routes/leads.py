@@ -24,7 +24,7 @@ from schemas.lead import (
     LeadUpdate,
 )
 from services import notifications
-from services.call_tasks import DeliveryCaller
+from services.activity_tasks import DeliveryCaller
 from services.lead_service import LeadService
 from services.website_leads_client import website_leads_client
 

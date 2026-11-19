@@ -1,6 +1,7 @@
 """
-Tasks for the activities revenue logs (a call with a lead): the call finishes one of the
-caller's own open tasks about the record, or is recorded as a new personal task, already done.
+Tasks for the activities revenue logs (a call, meeting, email, WhatsApp, site visit or note on a
+lead, opportunity or contract): the activity finishes one of the caller's own open tasks about the
+record, or is recorded as a new personal task, already done.
 Either way the follow-up can be scheduled as the next task.
 
 Revenue asks through /internal/tasks with the user's own credentials, before it saves the call,
@@ -21,6 +22,7 @@ from exceptions import (
     TaskNeedsReviewError,
     TaskNotAboutRecordError,
     TaskNotFoundError,
+    TaskTypeNotFoundError,
     ValidationFailedError,
 )
 from models.task import Task
@@ -39,8 +41,12 @@ from services.revenue_activities import REVENUE_SUBJECTS
 from services.task_profiles import Profile, load_profile
 import services.tasks as tasks
 
-# The outcome a finished activity records when its type asks for one: the call happened.
-_PREFERRED_OUTCOME = "connected"
+# The outcome a finished activity records when its type asks for one: it happened (a call
+# connected, an email sent, a meeting held), without deciding more than the activity said.
+_PREFERRED_OUTCOMES = ("connected", "sent", "held_nurture")
+# The kind of task an activity becomes when the company has no task type of its name
+# (WhatsApp, site visit, note): the general one.
+_GENERAL_TYPE = "task"
 
 
 async def record_task(
@@ -51,6 +57,7 @@ async def record_task(
         raise PermissionDeniedError(permissions.TASK_PERSONAL)
     if data.subject.type not in REVENUE_SUBJECTS:
         raise ValidationFailedError("subject.type", f"Must be one of: {', '.join(REVENUE_SUBJECTS)}")
+    task_type_code = await _usable_type(session, actor.organization_id, data.task_type_code)
 
     created = await tasks.create_task(
         session,
@@ -59,7 +66,7 @@ async def record_task(
         TaskCreate(
             title=data.title,
             description=data.description,
-            task_type_code=data.task_type_code,
+            task_type_code=task_type_code,
             subject=data.subject,
             owning_unit_id=None,
             assignee_user_id=actor.user_id,
@@ -125,12 +132,22 @@ async def _follow_up(session: AsyncSession, org_id: uuid.UUID, task: Task, title
     return follow_up
 
 
+async def _usable_type(session: AsyncSession, org_id: uuid.UUID, code: str) -> str:
+    """The activity's own task type when the company has it in use, else the general one."""
+    try:
+        _, profile = await tasks.task_type_by_code(session, org_id, code)
+    except TaskTypeNotFoundError:
+        return _GENERAL_TYPE
+    return _GENERAL_TYPE if profile.archived else code
+
+
 def _outcome(profile: Profile) -> Optional[str]:
-    """The outcome to record when the type asks for one: 'connected', else its first success, else its first."""
+    """The outcome to record when the type asks for one: 'it happened', else its first success, else its first."""
     if not profile.outcomes:
         return None
-    if profile.outcome(_PREFERRED_OUTCOME) is not None:
-        return _PREFERRED_OUTCOME
+    preferred = next((code for code in _PREFERRED_OUTCOMES if profile.outcome(code) is not None), None)
+    if preferred is not None:
+        return preferred
     success = next((o for o in profile.outcomes if o.kind == "success"), None)
     return (success or profile.outcomes[0]).code
 
