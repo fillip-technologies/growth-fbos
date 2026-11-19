@@ -93,7 +93,9 @@ async def complete_task(
     if task.subject_type != data.subject.type or task.subject_id != data.subject.id:
         raise TaskNotAboutRecordError()
     task_type = await session.get(TaskType, task.task_type_id)
-    if task_type is not None and task_type.requires_review:
+    # A task that goes for review is handed in from the task itself: its kind asks for it, or it
+    # is a personal task with a reviewer.
+    if (task_type is not None and task_type.requires_review) or (tasks.is_personal(task) and task.reviewer_user_id is not None):
         raise TaskNeedsReviewError()
     return await _finish(session, actor, task, data, people)
 

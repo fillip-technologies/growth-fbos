@@ -166,3 +166,67 @@ async def test_a_logged_email_records_that_it_was_sent(act_as):
     }), 201)
     task = await ok(await client.get(f"{BASE}/tasks/{result['task']['id']}"))
     assert (task["task_type"]["code"], task["attributes"]["outcome"]) == ("email", "sent")
+
+
+# --- A reviewer for a personal task ---------------------------------------------
+
+
+async def _started(client, **fields) -> dict:
+    task = await ok(await client.post(f"{BASE}/tasks", json={"title": "Fix the login page", "task_type_code": "bug", **fields}), 201)
+    return await ok(await client.post(f"{BASE}/tasks/{task['id']}/start", headers=if_match(task)))
+
+
+async def test_a_personal_task_that_goes_for_review_asks_who_reviews_it(act_as, people):
+    reviewer = people.add("Ravi")
+    client = act_as(member(permissions.TASK_PERSONAL))
+    task = await _started(client)
+
+    res = await client.post(f"{BASE}/tasks/{task['id']}/submit", json={}, headers=if_match(task))
+    assert (res.status_code, res.json()["detail"]["code"]) == (422, "REVIEWER_REQUIRED")
+
+    task = await ok(await client.post(
+        f"{BASE}/tasks/{task['id']}/submit", json={"reviewer_user_id": str(reviewer.id)}, headers=if_match(task),
+    ))
+    assert task["status"] == "submitted" and task["reviewer"]["id"] == str(reviewer.id)
+
+    # The reviewer, with only their own tasks to read, sees it and passes it.
+    as_reviewer = act_as(Actor(
+        user_id=reviewer.id, organization_id=TEST_ORG_ID, user_type="employee", name="Ravi",
+        permissions=frozenset({permissions.TASK_READ}), own_records_only=frozenset({permissions.TASK_READ}),
+    ))
+    await ok(await as_reviewer.post(f"{BASE}/tasks/{task['id']}/reviews", json={"result": "pass"}), 201)
+    done = await ok(await as_reviewer.get(f"{BASE}/tasks/{task['id']}"))
+    assert done["status"] == "done"
+
+
+async def test_a_reviewer_named_when_creating_reviews_even_a_kind_without_review(act_as, people):
+    reviewer = people.add("Ravi")
+    client = act_as(member(permissions.TASK_PERSONAL))
+    task = await _started(client, task_type_code="task", reviewer_user_id=str(reviewer.id))
+    task = await ok(await client.post(f"{BASE}/tasks/{task['id']}/submit", json={}, headers=if_match(task)))
+    assert task["status"] == "submitted"
+
+
+async def test_the_reviewer_is_someone_else_in_the_company(act_as, people):
+    client = act_as(member(permissions.TASK_PERSONAL))
+    body = {"title": "Fix the login page", "task_type_code": "bug"}
+    for reviewer_id in (ME, uuid.uuid4()):  # yourself, or nobody the company has
+        res = await client.post(f"{BASE}/tasks", json={**body, "reviewer_user_id": str(reviewer_id)})
+        assert (res.status_code, res.json()["detail"]["code"]) == (422, "REVIEWER_NOT_ALLOWED")
+
+
+async def test_a_teams_task_keeps_its_reviewer_from_assigning(act_as, people):
+    task = await create_task(act_as(ADMIN), assignee_user_id=str(TEST_USER_ID))
+    task = await ok(await act_as(ADMIN).post(f"{BASE}/tasks/{task['id']}/start", headers=if_match(task)))
+    res = await act_as(ADMIN).post(
+        f"{BASE}/tasks/{task['id']}/submit", json={"reviewer_user_id": str(uuid.uuid4())}, headers=if_match(task),
+    )
+    assert res.status_code == 422
+
+
+async def test_reviewer_choices_are_everyone_else(act_as, people):
+    people.add("Zara")
+    people.add("Me", person_id=ME)
+    people.add("Anil")
+    listed = await ok(await act_as(member()).get(f"{BASE}/task-reviewers"))
+    assert [p["name"] for p in listed["data"]] == ["Anil", "Zara"]

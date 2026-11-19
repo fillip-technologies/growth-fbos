@@ -131,6 +131,9 @@ class TaskSubmit(BaseModel):
         None, description="Schedule the next touch for then, instead of when the outcome says."
     )
     skip_follow_up: bool = Field(False, description="Don't schedule the follow-up the outcome would.")
+    reviewer_user_id: Optional[uuid.UUID] = Field(
+        None, description="A personal task only: who reviews it. Required when its kind goes for review and nobody is named yet."
+    )
 
 
 class TaskCancel(BaseModel):

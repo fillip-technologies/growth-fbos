@@ -55,6 +55,12 @@ async def list_assignable_people(
     return await assignees.assignable_people(session, people, org_id, unit_id)
 
 
+@router.get("/task-reviewers", response_model=AssignablePeopleResponse, dependencies=[CAN_READ_TASKS])
+async def list_task_reviewers(org_id: OrgId, user_id: UserId, people: People) -> AssignablePeopleResponse:
+    """Who may review your personal task: everyone active in the company but you, by name."""
+    return await assignees.reviewer_choices(people, org_id, user_id)
+
+
 @router.get("/assignment-policies", response_model=AssignmentPoliciesResponse, dependencies=[CAN_READ_TASKS])
 async def list_assignment_policies(session: DatabaseSession, org_id: OrgId) -> AssignmentPoliciesResponse:
     """How each team hands out new work; a team not listed leaves it in its queue."""

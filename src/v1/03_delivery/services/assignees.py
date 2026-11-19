@@ -88,3 +88,9 @@ async def assignable_people(
     return AssignablePeopleResponse(
         data=[AssignablePerson(id=p.id, name=p.name, in_unit=p.id in member_ids) for p in ranked], team_only=False
     )
+
+
+async def reviewer_choices(people: PeopleDirectory, org_id: uuid.UUID, user_id: uuid.UUID) -> AssignablePeopleResponse:
+    """Who may review someone's personal task: everyone else active in the company."""
+    everyone = sorted((p for p in await people.people(org_id) if p.id != user_id), key=lambda p: p.name.lower())
+    return AssignablePeopleResponse(data=[AssignablePerson(id=p.id, name=p.name, in_unit=False) for p in everyone], team_only=False)

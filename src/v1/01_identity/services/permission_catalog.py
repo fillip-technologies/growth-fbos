@@ -266,6 +266,13 @@ SENSITIVE_READ_CODES = {
 MEMBER_ACTION_CODES = {"delivery.task.request", "delivery.task.personal"}
 
 
+# What every signed-in person holds whatever they were granted, as (code, own records only):
+# keeping their own tasks that belong to no team, and reading their own tasks (assigned to them,
+# to review, or created by them) so they can work them. A grant of the same code given to the
+# person replaces it (services/access_control.py, load_grants).
+EVERYONE_HOLDS = (("delivery.task.personal", False), ("delivery.task.read", True))
+
+
 def member_permission_codes(catalog_codes: list[str]) -> list[str]:
     """The `member` preset is read access (minus other people's security data), plus sending requests."""
     return [

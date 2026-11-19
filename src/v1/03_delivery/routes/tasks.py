@@ -169,7 +169,7 @@ async def create_task(
     idempotency_key: Optional[str] = Header(None, alias="Idempotency-Key"),
 ) -> TaskResponse:
     """Create a task. With no `owning_unit_id` it is a personal task: the creator's own, assigned to them."""
-    payload = service.personal_task_rules(actor, payload)
+    payload = await service.personal_task_rules(actor, payload, people)
     task = await service.create_task(session, org_id, actor.user_id, payload, people)
     await session.commit()
     response.headers["ETag"] = f'"{task.version}"'
