@@ -413,6 +413,17 @@ class DocumentsServiceUnavailableError(RevenueServiceError):
         )
 
 
+class DeliveryServiceUnavailableError(RevenueServiceError):
+    """503: The delivery service (tasks) could not be reached."""
+
+    def __init__(self) -> None:
+        super().__init__(
+            status.HTTP_503_SERVICE_UNAVAILABLE,
+            "DELIVERY_SERVICE_UNAVAILABLE",
+            "Tasks could not be reached right now, so the call wasn't saved. Try again shortly, or log it without a task.",
+        )
+
+
 class SignedCopyRequiredError(RevenueServiceError):
     """409: A contract can't be activated before its signed copy is attached."""
 

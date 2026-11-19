@@ -14,6 +14,8 @@ TASK_READ = "delivery.task.read"
 TASK_WRITE = "delivery.task.write"
 TASK_REVIEW = "delivery.task.review"
 TASK_REQUEST = "delivery.task.request"
+# Your own tasks with no team (a personal to-do list): create, edit and cancel them.
+TASK_PERSONAL = "delivery.task.personal"
 TIME_ENTRY_READ = "delivery.time_entry.read"
 
 HANDOVER_READ = "delivery.handover.read"

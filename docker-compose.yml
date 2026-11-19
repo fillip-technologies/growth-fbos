@@ -85,6 +85,7 @@ services:
       # Service-to-service URLs inside the compose network (override the .env's localhost defaults)
       IDENTITY_SERVICE_URL: http://identity:8000
       DOCUMENTS_SERVICE_URL: http://documents:8000
+      DELIVERY_SERVICE_URL: http://delivery:8000
     depends_on:
       db:
         condition: service_healthy

@@ -3,6 +3,7 @@ from datetime import date, datetime
 from typing import Literal, Optional
 from pydantic import BaseModel, ConfigDict, Field
 
+from schemas.activity import ActivityTaskChoice, ActivityTaskRef
 from schemas.client import ClientCreate, ClientResponse
 from schemas.common import Consent, Money, PastDate
 from schemas.opportunity import OpportunityDetailResponse, UserRef, VerticalRef
@@ -42,6 +43,11 @@ class LeadTransfer(BaseModel):
     reason: str = Field(..., min_length=1, max_length=1000)
 
 
+# The call's task and the task it finished or made: the same as any activity's.
+LeadCallTask = ActivityTaskChoice
+LeadCallTaskRef = ActivityTaskRef
+
+
 class LeadCallCreate(BaseModel):
     """A call with the lead. The first one moves a new lead to contacted."""
 
@@ -51,6 +57,7 @@ class LeadCallCreate(BaseModel):
     expectations: Optional[str] = Field(None, max_length=10000, description="The customer's interests and expectations")
     next_action: Optional[str] = Field(None, max_length=2000)
     follow_up_on: Optional[date] = None
+    task: ActivityTaskChoice = Field(default_factory=ActivityTaskChoice)
 
 
 class LeadDisqualify(BaseModel):

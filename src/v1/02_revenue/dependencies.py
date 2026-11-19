@@ -7,6 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from config import settings
 from database.session import get_db_session
 from exceptions import AuthenticationRequiredError, IdempotencyKeyRequiredError, PermissionDeniedError
+from services.delivery_client import DeliveryClient
 from services.documents_client import DocumentsClient
 from services.identity_client import Actor, IdentityClient
 
@@ -17,6 +18,10 @@ def get_identity_client(request: Request) -> IdentityClient:
 
 def get_documents_client(request: Request) -> DocumentsClient:
     return request.app.state.documents_client
+
+
+def get_delivery_client(request: Request) -> DeliveryClient:
+    return request.app.state.delivery_client
 
 
 def get_authorization(authorization: Optional[str] = Header(None)) -> str:
@@ -42,6 +47,7 @@ async def get_actor(
 CurrentActor = Annotated[Actor, Depends(get_actor)]
 Authorization = Annotated[str, Depends(get_authorization)]
 Documents = Annotated[DocumentsClient, Depends(get_documents_client)]
+Delivery = Annotated[DeliveryClient, Depends(get_delivery_client)]
 Identity = Annotated[IdentityClient, Depends(get_identity_client)]
 
 
@@ -97,6 +103,7 @@ __all__ = [
     "CurrentActor",
     "Authorization",
     "Documents",
+    "Delivery",
     "Identity",
     "verify_internal_caller",
     "OrgId",

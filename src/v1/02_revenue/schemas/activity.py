@@ -1,7 +1,7 @@
 import uuid
 from datetime import date, datetime
 from typing import Literal, Optional
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from schemas.opportunity import UserRef
 
@@ -24,6 +24,33 @@ class FollowUpTaskInput(BaseModel):
     due_at: datetime
 
 
+class ActivityTaskChoice(BaseModel):
+    """
+    The task behind an activity, kept by delivery: `record` makes it a new task of yours, already
+    done; `complete` finishes one of your open tasks about the record (`task_id`); `none` keeps no
+    task. `follow_up` adds an open task for the follow-up, when the activity has one.
+    """
+
+    mode: Literal["record", "complete", "none"] = "record"
+    task_id: Optional[uuid.UUID] = None
+    follow_up: bool = True
+
+    @model_validator(mode="after")
+    def _task_to_complete(self) -> "ActivityTaskChoice":
+        if self.mode == "complete" and self.task_id is None:
+            raise ValueError("Choose the task this completes")
+        return self
+
+
+class ActivityTaskRef(BaseModel):
+    """A delivery task an activity finished or created."""
+
+    id: uuid.UUID
+    code: str
+    title: str
+    status: str
+
+
 class ActivityCreate(BaseModel):
     subject: SubjectRefInput
     activity_type: Literal["call", "meeting", "email", "whatsapp", "note", "site_visit"]
@@ -31,6 +58,8 @@ class ActivityCreate(BaseModel):
     summary: str = Field(..., min_length=1)
     outcome: Optional[str] = None
     follow_up: Optional[FollowUpTaskInput] = None
+    # What happens in tasks; by default the activity is recorded as a done task of yours.
+    task: ActivityTaskChoice = Field(default_factory=ActivityTaskChoice)
 
 
 class ActivitySource(BaseModel):
@@ -77,3 +106,11 @@ class ActivityResponse(BaseModel):
     expectations: Optional[str] = None
     next_action: Optional[str] = None
     follow_up_on: Optional[date] = None
+
+
+class ActivityLogged(ActivityResponse):
+    """A new activity, with the delivery task it finished or was recorded as, and its follow-up task."""
+
+    task: Optional[ActivityTaskRef] = None
+    follow_up_task: Optional[ActivityTaskRef] = None
+

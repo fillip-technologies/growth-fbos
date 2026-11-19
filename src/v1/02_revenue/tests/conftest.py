@@ -13,11 +13,12 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 from fastapi import Header
 
 from database.session import get_db_session
-from dependencies import get_actor, get_documents_client, get_identity_client
+from dependencies import get_actor, get_delivery_client, get_documents_client, get_identity_client
 from finance.tax.registrations import gstin_check_character
 from main import app
 from models import Base
 from models.tax_registration import OrgTaxRegistration
+from services.delivery_client import CallTasks, Completion, TaskRef
 from services.documents_client import SubjectRef
 from services.identity_client import Actor, Person
 
@@ -88,6 +89,41 @@ def fake_documents() -> FakeDocuments:
     return FakeDocuments()
 
 
+class FakeDelivery:
+    """
+    Stands in for delivery's /internal/tasks: records what it was asked and answers with a
+    task (done when finished), plus the follow-up when one was asked for. `refusal` makes it
+    raise that error instead, as delivery refusing (or being down) would.
+    """
+
+    def __init__(self) -> None:
+        self.recorded: list[dict] = []
+        self.completed: list[dict] = []
+        self.refusal: Optional[Exception] = None
+
+    def _answer(self, title: str, completion: Optional[Completion], task_id: Optional[uuid.UUID] = None) -> CallTasks:
+        if self.refusal is not None:
+            raise self.refusal
+        task = TaskRef(id=task_id or uuid.uuid4(), code="TSK-1", title=title, status="done" if completion else "assigned")
+        follow_up = None
+        if completion and completion.follow_up_at:
+            follow_up = TaskRef(id=uuid.uuid4(), code="TSK-2", title=completion.follow_up_title or "Follow up", status="assigned")
+        return CallTasks(task=task, follow_up_task=follow_up)
+
+    async def record_task(self, authorization, organization_id, subject, title, completion=None, due_at=None, task_type_code="call"):
+        self.recorded.append({"subject": subject, "title": title, "completion": completion, "due_at": due_at, "task_type_code": task_type_code})
+        return self._answer(title, completion)
+
+    async def complete_task(self, authorization, organization_id, task_id, subject, completion):
+        self.completed.append({"task_id": task_id, "subject": subject, "completion": completion})
+        return self._answer("Planned call", completion, task_id)
+
+
+@pytest.fixture
+def fake_delivery() -> FakeDelivery:
+    return FakeDelivery()
+
+
 class FakeIdentity:
     """
     Stands in for identity's people lookup: who may take leads. By default anyone asked about
@@ -142,7 +178,7 @@ async def db_session(test_engine) -> AsyncGenerator[AsyncSession, None]:
 
 @pytest_asyncio.fixture(scope="function")
 async def async_client(
-    db_session: AsyncSession, fake_documents: FakeDocuments, fake_identity: FakeIdentity
+    db_session: AsyncSession, fake_documents: FakeDocuments, fake_identity: FakeIdentity, fake_delivery: FakeDelivery
 ) -> AsyncGenerator[httpx.AsyncClient, None]:
     async def override_get_db():
         yield db_session
@@ -164,6 +200,7 @@ async def async_client(
     app.dependency_overrides[get_actor] = override_get_actor
     app.dependency_overrides[get_documents_client] = lambda: fake_documents
     app.dependency_overrides[get_identity_client] = lambda: fake_identity
+    app.dependency_overrides[get_delivery_client] = lambda: fake_delivery
 
     async with httpx.AsyncClient(
         transport=httpx.ASGITransport(app=app),

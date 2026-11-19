@@ -3,10 +3,11 @@ from typing import Optional
 
 from fastapi import APIRouter, Depends, Header, Query, status
 
-from dependencies import DatabaseSession, OrgId, UserId, require_permission
-from schemas.activity import ActivityCreate, ActivityResponse
+from dependencies import Authorization, DatabaseSession, Delivery, OrgId, UserId, require_permission
+from schemas.activity import ActivityCreate, ActivityLogged, ActivityResponse
 from schemas.common import PageResponse
 from services.activity_service import ActivityService
+from services.activity_tasks import DeliveryCaller
 
 router = APIRouter(prefix="/activities", tags=["activities"])
 
@@ -40,7 +41,7 @@ async def list_activities(
 
 
 @router.post(
-    "", response_model=ActivityResponse, status_code=status.HTTP_201_CREATED,
+    "", response_model=ActivityLogged, status_code=status.HTTP_201_CREATED,
     dependencies=[CAN_WRITE],
 )
 async def log_activity(
@@ -48,14 +49,21 @@ async def log_activity(
     session: DatabaseSession,
     org_id: OrgId,
     user_id: UserId,
+    authorization: Authorization,
+    delivery: Delivery,
     idempotency_key: Optional[str] = Header(None, alias="Idempotency-Key"),
-) -> ActivityResponse:
-    """Log an interaction or task activity across any CRM subject."""
+) -> ActivityLogged:
+    """
+    Log a call, meeting, email, WhatsApp, site visit or note on a lead, opportunity or contract.
+    `task` says what happens in tasks: recorded as a done task of yours (the default), completing
+    one of your open tasks about the record, or none; a `follow_up` adds a follow-up task.
+    """
     activity = await ActivityService.log_activity(
         session=session,
         org_id=org_id,
         user_id=user_id,
         payload=payload,
+        delivery=DeliveryCaller(delivery, authorization),
     )
     await session.commit()
     return activity

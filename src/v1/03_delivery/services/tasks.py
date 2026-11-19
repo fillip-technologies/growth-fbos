@@ -46,6 +46,7 @@ from exceptions import (
     InvalidStateTransitionError,
     NotAssigneeError,
     NotReviewerError,
+    PersonalTaskOwnOnlyError,
     PermissionDeniedError,
     PreconditionRequiredError,
     RRuleInvalidError,
@@ -178,6 +179,26 @@ def _works_on(actor: Actor, task: Task) -> bool:
     return task.assignee_user_id == actor.user_id or actor.has(permissions.TASK_WRITE)
 
 
+def is_own_personal(actor: Actor, task: Task) -> bool:
+    """The caller's own personal task: no team, created by and assigned to them."""
+    return task.owning_unit_id is None and task.created_by == actor.user_id and task.assignee_user_id == actor.user_id
+
+
+def personal_task_rules(actor: Actor, data: TaskCreate) -> TaskCreate:
+    """
+    A task with no team is its creator's own: assigned to them, with no reviewer. Without
+    TASK_WRITE (only TASK_PERSONAL) that is the only task someone may create, and not under
+    another task.
+    """
+    if data.owning_unit_id is None:
+        if data.assignee_user_id not in (None, actor.user_id) or data.reviewer_user_id is not None:
+            raise PersonalTaskOwnOnlyError()
+        data = data.model_copy(update={"assignee_user_id": actor.user_id})
+    if not actor.has(permissions.TASK_WRITE) and (data.owning_unit_id is not None or data.parent_task_id is not None):
+        raise PermissionDeniedError(permissions.TASK_WRITE)
+    return data
+
+
 def _may_review(actor: Actor, task: Task) -> bool:
     """The task's named reviewer, or anyone allowed to review tasks in general."""
     return task.reviewer_user_id == actor.user_id or actor.has(permissions.TASK_REVIEW)
@@ -192,6 +213,8 @@ class TaskFilters:
     # Only tasks these units own (`my_teams`: the units the caller belongs to; empty: none).
     owning_unit_ids: Optional[frozenset[uuid.UUID]] = None
     owning_unit_id: Optional[uuid.UUID] = None
+    # Only personal tasks: no team, and someone created them (a workflow's team-less tasks aren't).
+    personal: bool = False
     statuses: Optional[list[str]] = None
     priority: Optional[str] = None
     subject_type: Optional[str] = None
@@ -573,6 +596,8 @@ def _filtered_tasks(org_id: uuid.UUID, caller_user_id: uuid.UUID, filters: TaskF
         query = query.where(Task.owning_unit_id.in_(filters.owning_unit_ids))
     if filters.owning_unit_id is not None:
         query = query.where(Task.owning_unit_id == filters.owning_unit_id)
+    if filters.personal:
+        query = query.where(Task.owning_unit_id.is_(None), Task.created_by.is_not(None))
     if filters.statuses:
         query = query.where(Task.status.in_(filters.statuses))
     if filters.priority is not None:
@@ -971,7 +996,7 @@ async def update_task(
 ) -> TaskResponse:
     task = await _get_task(session, org_id, task_id)
     changes = data.model_dump(exclude_unset=True)
-    if not actor.has(permissions.TASK_WRITE):
+    if not actor.has(permissions.TASK_WRITE) and not (actor.has(permissions.TASK_PERSONAL) and is_own_personal(actor, task)):
         # The assignee fills in their own task (its fields, progress); the rest is a manager's.
         if task.assignee_user_id != actor.user_id or set(changes) - _ASSIGNEE_EDITABLE:
             raise PermissionDeniedError(permissions.TASK_WRITE)
@@ -1632,9 +1657,13 @@ async def review_task(session: AsyncSession, org_id: uuid.UUID, actor: Actor, ta
     return _to_review_response(review)
 
 
-async def cancel_task(session: AsyncSession, org_id: uuid.UUID, user_id: uuid.UUID, task_id: uuid.UUID, data: TaskCancel, if_match: Optional[str]) -> TaskResponse:
+async def cancel_task(session: AsyncSession, org_id: uuid.UUID, actor: Actor, task_id: uuid.UUID, data: TaskCancel, if_match: Optional[str]) -> TaskResponse:
     task = await _get_task(session, org_id, task_id)
+    # A task manager cancels any task; someone with only TASK_PERSONAL, their own personal ones.
+    if not actor.has(permissions.TASK_WRITE) and not is_own_personal(actor, task):
+        raise PermissionDeniedError(permissions.TASK_WRITE)
     _check_if_match(if_match, task.version)
+    user_id = actor.user_id
 
     if task.status in _TERMINAL_TASK_STATUSES:
         raise InvalidStateTransitionError(task.status, "cancelled")

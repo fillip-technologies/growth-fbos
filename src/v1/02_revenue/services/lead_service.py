@@ -29,6 +29,7 @@ from schemas.activity import ActivityResponse
 from schemas.common import PageMeta, PageResponse, decode_cursor, encode_cursor
 from schemas.lead import (
     LeadCallCreate,
+    LeadCallTaskRef,
     LeadCreate,
     LeadDisqualify,
     LeadEventResponse,
@@ -40,6 +41,7 @@ from schemas.lead import (
 )
 from schemas.opportunity import UserRef, VerticalRef
 from services.activity_service import format_activity_response
+from services.activity_tasks import ActivityForTask, DeliveryCaller, activity_row, due_at, tasks_for_activity
 from services.client_service import ClientService
 from services.identity_client import Actor, IdentityClient
 from services.opportunity_service import format_opportunity_detail
@@ -63,6 +65,8 @@ def _naive_utc(moment: datetime) -> datetime:
 class LeadCallResult:
     lead: LeadResponse
     activity: ActivityResponse
+    task: Optional[LeadCallTaskRef] = None
+    follow_up_task: Optional[LeadCallTaskRef] = None
 
 
 def merge_attributes(stored: Optional[dict], changes: dict) -> dict:
@@ -426,39 +430,54 @@ class LeadService:
         lead_id: uuid.UUID,
         payload: LeadCallCreate,
         actor: Actor,
+        delivery: DeliveryCaller,
     ) -> LeadCallResult:
         """
         A call with the lead, on its timeline as a new entry (nothing is overwritten). Its
         follow-up date becomes the lead's next follow-up; the first call moves a new lead to
-        contacted, in the same transaction.
+        contacted, in the same transaction. Delivery keeps its task first (services/activity_tasks.py):
+        a task of the caller's it finishes, or a new one already done, and the follow-up task;
+        the call names that task as its source.
         """
         lead = await _lead_in_org(session, org_id, lead_id)
         if lead.status not in OPEN_STATUSES:
             raise InvalidStateTransitionError(lead.status, "log a call")
         _ensure_claimed_and_workable(actor, lead)
 
-        occurred_at = _naive_utc(payload.occurred_at) if payload.occurred_at else now_utc()
-        activity = Activity(
-            organization_id=org_id,
+        # Who the call was with: the contact, else the company, else the lead's number.
+        who = lead.contact_name or lead.company_name or lead.name
+        call = ActivityForTask(
             subject_type=LEAD_SUBJECT,
             subject_id=lead.id,
             activity_type="call",
-            owner_user_id=actor.user_id,
-            occurred_at=occurred_at,
-            summary=payload.summary.strip(),
-            requirements=_clean(payload.requirements),
-            expectations=_clean(payload.expectations),
-            next_action=_clean(payload.next_action),
-            follow_up_on=payload.follow_up_on,
+            title=f"Call with {who}"[:255],
+            summary=payload.summary,
+            follow_up_at=due_at(payload.follow_up_on) if payload.follow_up_on else None,
+            follow_up_title=_clean(payload.next_action) or f"Follow up with {who}",
         )
-        session.add(activity)
+        tasks = await tasks_for_activity(delivery, org_id, call, payload.task)
+        occurred_at = _naive_utc(payload.occurred_at) if payload.occurred_at else now_utc()
+        activity = await activity_row(session, org_id, LEAD_SUBJECT, lead.id, tasks)
+        activity.activity_type = "call"
+        activity.owner_user_id = actor.user_id
+        activity.occurred_at = occurred_at
+        activity.summary = payload.summary.strip()
+        activity.requirements = _clean(payload.requirements)
+        activity.expectations = _clean(payload.expectations)
+        activity.next_action = _clean(payload.next_action)
+        activity.follow_up_on = payload.follow_up_on
         lead.next_follow_up_on = payload.follow_up_on
         if lead.status == "new":
             lead.status = "contacted"
             record_event(session, lead, "contacted", actor.user_id, from_status="new", to_status="contacted")
         lead.version += 1
         await session.flush()
-        return LeadCallResult(lead=format_lead_response(lead), activity=format_activity_response(activity))
+        return LeadCallResult(
+            lead=format_lead_response(lead),
+            activity=format_activity_response(activity),
+            task=tasks.task,
+            follow_up_task=tasks.follow_up_task,
+        )
 
     @staticmethod
     async def qualify_lead(
